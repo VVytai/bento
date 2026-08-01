@@ -61,6 +61,12 @@ jobs:
         # packed.ts would silently ship yesterday's translations.
         run: node scripts/build-i18n.mjs --check
 
+      - name: Language coverage
+        # Core catalogs ship inside every saved file and cannot be corrected
+        # without a release, so they must be complete. Packs are downloadable
+        # and re-publishable on their own, so they get a floor and a report.
+        run: node scripts/test-i18n-coverage.mjs
+
       - name: Language packs build and index cleanly
         # Emits every pack and builds the index payload WITHOUT signing (--dry
         # writes nothing and needs no key — signing stays local, see the header).

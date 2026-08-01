@@ -723,4 +723,7 @@ export const pt: Catalog = {
   "Opened {name} — ⌘S will save a copy": "{name} aberto — ⌘S guardará uma cópia",
   "⌘S asks where to save, then rewrites that file in place": "⌘S pergunta onde guardar e depois reescreve esse ficheiro no local",
   "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} é uma cópia vazia do Bento, não uma apresentação guardada. Abra-a sozinha para começar uma.",
+  "Slide number": "Número do slide",
+  "Progress bar": "Barra de progresso",
+  "Corner arrows": "Setas de canto",
 }
