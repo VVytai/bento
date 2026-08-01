@@ -11,6 +11,37 @@ pre-1.0.
 
 ## [Unreleased]
 
+## [1.0.12] — 2026-08-01
+
+- **A laser pointer while you present.** Press **L** in the slideshow and the
+  cursor becomes a red dot trailing a short comet tail, for pointing at the
+  thing you are talking about. Press L again to put it away. It is presenter
+  equipment, not deck content: nothing about it is written into the file, so a
+  deck you point at is byte-identical to one you did not.
+
+- **Decks thumbnail properly on iPhone and iPad.** 1.0.11 taught files to draw
+  a picture of page one in Finder, and it worked everywhere except the platform
+  most likely to need it — iOS renders neither a page's JavaScript nor its
+  `<noscript>`, so a deck in Files stayed the same dark box. The preview is now
+  ordinary markup followed by a script that removes it before the browser paints
+  a frame, which the thumbnailer keeps and every reader never sees. Existing
+  decks pick this up the next time you save.
+
+- **The tab tells you which file you are editing, and you can open a deck by
+  dropping it in.** A deck's title and its file name drift apart constantly —
+  rename the deck and the file on disk keeps its old name — and only one of
+  them answers *what does ⌘S overwrite?* The tab and a small chip beside the
+  title now show the file, whenever the two differ. Dropping a `.bento.html`
+  onto the editor opens it, and on Chrome and Edge it comes with permission to
+  write back, so ⌘S rewrites that file in place instead of asking you to find
+  it in a save dialog.
+
+- **Count-up numbers keep their thousands separators.** A number written
+  `1,234` counted up to `1.234` and stayed wrong once the animation finished;
+  `1,234,567` became `1.2340000`. Numbers now settle exactly as you typed them,
+  in your own convention — `1,234.5` and `1.234,5` both survive, and a sentence
+  ending in a number keeps its full stop.
+
 - **Release notes in the About dialog get room to be read.** An available
   update is now one card — version, what changed, and the two ways to take it —
   and the notes are a real list inside their own scroll region rather than a
@@ -18,6 +49,23 @@ pre-1.0.
   wide instead of 360 (capped to the viewport, so a 375px phone keeps its
   gutters), which is enough that the five bullets a release carries fit whole
   at any normal window height.
+
+- **Turkmen, taking the language packs to 22.** Contributed and reviewed by a
+  native speaker (Mekan Soltanov), and the only pack currently complete against
+  the whole interface. Install it from the globe menu → Manage languages.
+
+- **Save a copy, set a password or reach version history from a phone.** The
+  Save button's caret does not fit beside a 44px target, which left every file
+  operation behind it unreachable on a phone — save a copy, duplicate as a new
+  deck, the password actions, version history and the JSON round-trip. They now
+  sit at the bottom of the ⋯ menu.
+
+- **Fix: the current slide's thumbnail stays visible.** Walking a long deck with
+  the arrow keys scrolled the canvas but not the sidebar, so the highlighted
+  thumbnail wandered off-screen. Contributed by Yishen Tu.
+
+- **Fix: the auto-save tip pointed at the wrong menu.** It said version history
+  lived in About; it moved to the Save menu several releases ago.
 
 ## [1.0.11] — 2026-07-27
 
