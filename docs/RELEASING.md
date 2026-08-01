@@ -62,13 +62,34 @@ verify the manifest signature against the public key embedded in every shell.
    ```sh
    git worktree add /tmp/rel vX.Y.Z --detach
    ```
-3. `node scripts/release.mjs` — builds, signs, assembles `./site/`
+3. **Push the tag now, before publishing.** The GitHub release is created *for*
+   a tag, so the tag must exist on the remote before step 5 can run — publishing
+   first leaves the site live with no release, which is what happened cutting
+   v1.0.12:
+
+   ```sh
+   git push origin vX.Y.Z
+   ```
+
+   Do NOT use `git push origin main --tags`: it also pushes every local tag,
+   including scratch ones (a `backup/…` tag from a history rewrite escaped this
+   way and had to be deleted from the remote).
+
+4. `node scripts/release.mjs` — builds, signs, assembles `./site/`
    (CNAME, landing page, live demo, download, signed manifest, language packs
    + their signed index).
-4. Publish `./site/` to the public site repo — one step:
+5. Publish `./site/` to the public site repo — one step:
 
    ```sh
    node scripts/publish-site.mjs "release vX.Y.Z"
+   ```
+
+   **From a `/tmp` build worktree, set the destination explicitly.** The script
+   resolves `../bento-site` relative to the repo root, so from `/tmp/rel` it
+   looks for `/private/tmp/bento-site` and stops:
+
+   ```sh
+   BENTO_SITE_DIR=~/devel/bento-site node scripts/publish-site.mjs "release vX.Y.Z"
    ```
 
    This mirrors the assembled `site/` tree into `../bento-site` (or
@@ -91,7 +112,7 @@ verify the manifest signature against the public key embedded in every shell.
    live **guestbook daemon** onto the freshly-published shell as a best-effort
    final step (see below) — no separate command needed.
 
-5. **The GitHub release is created for you** by `publish-site.mjs` — it makes
+6. **The GitHub release is created for you** by `publish-site.mjs` — it makes
    the release for the tag, attaches
    `site/releases/slides/Bento_Slides.bento.html`, and takes the notes from
    this version's CHANGELOG section (so the two can't drift). It is idempotent:
@@ -103,17 +124,6 @@ verify the manifest signature against the public key embedded in every shell.
    command to run. This used to be a manual step, and it was silently missed
    for v1.0.10 — the site was live and self-updating while the repo showed no
    release at all. Documentation didn't prevent that, so the check now does.
-6. **Push the tag.** `main` itself is usually already on the remote — merging
-   PRs through `gh` pushes as it goes — so the tag is the only ref outstanding:
-
-   ```sh
-   git push origin vX.Y.Z
-   ```
-
-   Do NOT use `git push origin main --tags`: it also pushes every local tag,
-   including scratch ones (a `backup/…` tag from a history rewrite escaped this
-   way and had to be deleted from the remote).
-
 7. **Verify against the LIVE channel, not the local build.** These are the
    things no local gate can prove, and some are only exercisable once published:
 

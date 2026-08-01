@@ -120,10 +120,19 @@ if (dry) { console.log('\n(dry run — the itemized list above is the pending ch
 // ---- commit + push ---------------------------------------------------------
 run('git', ['-C', dest, 'add', '-A'])
 const status = capture('git', ['-C', dest, 'status', '--porcelain'])
-if (!status) { console.log('✓ nothing changed — bento-site already up to date'); process.exit(0) }
 
-run('git', ['-C', dest, 'commit', '-q', '-m', message])
-run('git', ['-C', dest, 'push', '-q', 'origin', 'HEAD'])
+// An unchanged mirror must NOT end the run. Publishing has two halves — mirror
+// the site, then create the GitHub release — and they can fail independently.
+// v1.0.12 mirrored and pushed, then `gh release create` failed because the tag
+// was not on the remote yet; re-running was supposed to repair that, and could
+// not, because this exited here first. The documented "idempotent, safe to
+// re-run" property was false in exactly the case anyone would rely on it.
+if (!status) {
+  console.log('✓ site unchanged — bento-site already up to date')
+} else {
+  run('git', ['-C', dest, 'commit', '-q', '-m', message])
+  run('git', ['-C', dest, 'push', '-q', 'origin', 'HEAD'])
+}
 const head = capture('git', ['-C', dest, 'rev-parse', '--short', 'HEAD'])
 const ver = (() => {
   try {
@@ -159,10 +168,20 @@ const ghAvailable = (() => {
   catch { return false }
 })()
 
+// The GitHub release is created FOR a tag, so the tag must already be on the
+// remote. `git push origin vX.Y.Z` comes BEFORE this, not after — the runbook
+// used to say otherwise and v1.0.12 hit it.
+const tagOnRemote = (() => {
+  try { return capture('git', ['ls-remote', '--tags', 'origin', tag]).trim().length > 0 }
+  catch { return false }
+})()
+
 if (ver === '?') {
   console.warn('⚠ could not read the published version — skipping the GitHub release step')
 } else if (!ghAvailable) {
   die(`site is published, but gh is unavailable or unauthenticated — the GitHub release for ${tag} was NOT created.\n  Fix: gh auth login, then:  gh release create ${tag} ${releaseShell} --title ${releaseTitle} --notes-file <notes>`)
+} else if (!tagOnRemote) {
+  die(`site is published, but ${tag} is not on the remote — the GitHub release cannot be created for a tag that does not exist there.\n  Fix:  git push origin ${tag}\n  then re-run this script; it is safe to re-run.`)
 } else {
   const exists = (() => {
     try { capture('gh', ['release', 'view', tag], { stdio: ['ignore', 'pipe', 'pipe'] }); return true }
