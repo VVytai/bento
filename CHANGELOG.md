@@ -27,20 +27,29 @@ pre-1.0.
   a frame, which the thumbnailer keeps and every reader never sees. Existing
   decks pick this up the next time you save.
 
-- **The tab tells you which file you are editing, and you can open a deck by
-  dropping it in.** A deck's title and its file name drift apart constantly —
-  rename the deck and the file on disk keeps its old name — and only one of
-  them answers *what does ⌘S overwrite?* The tab and a small chip beside the
-  title now show the file, whenever the two differ. Dropping a `.bento.html`
-  onto the editor opens it, and on Chrome and Edge it comes with permission to
-  write back, so ⌘S rewrites that file in place instead of asking you to find
-  it in a save dialog.
-
 - **Count-up numbers keep their thousands separators.** A number written
   `1,234` counted up to `1.234` and stayed wrong once the animation finished;
   `1,234,567` became `1.2340000`. Numbers now settle exactly as you typed them,
   in your own convention — `1,234.5` and `1.234,5` both survive, and a sentence
   ending in a number keeps its full stop.
+
+- **The tab tells you which file you are editing.** A deck's title and its file
+  name drift apart constantly — rename the deck and the file on disk keeps its
+  old name — and only one of them answers *what does ⌘S overwrite?* The tab and
+  a small chip beside the title now show the file, whenever the two differ.
+
+- **Save offers the file you are looking at.** Opening `Q3-board.bento.html`
+  and pressing ⌘S used to propose saving `Bento_Slides_Showcase.bento.html` —
+  the name was built from the deck's title, so an ordinary save quietly
+  suggested a *second* file beside the real one. It now offers the file you
+  actually opened. (Exports — share copies, templates — still name themselves;
+  those are deliberately new files.)
+
+- **Drop a deck onto an open editor to switch to it.** With a deck already open,
+  dragging another `.bento.html` in from Finder opens it in place of the current
+  one. On Chrome and Edge it arrives with permission to write back, so ⌘S saves
+  it without a dialog — which a deck opened by double-clicking cannot do, since
+  the browser gives such a page no way to write to its own file.
 
 - **Release notes in the About dialog get room to be read.** An available
   update is now one card — version, what changed, and the two ways to take it —
