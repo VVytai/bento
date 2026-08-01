@@ -173,6 +173,33 @@ node scripts/publish-site.mjs "packs: fix the Korean plural forms"
 signed hash, if an indexed pack is missing, or if packs are staged with no
 index at all — an unsigned pack must never reach the CDN.
 
+**Between releases, re-emit only the packs you mean to change.** Packs are keyed
+on the ENGLISH SOURCE STRING, so a pack rebuilt from `main` is keyed to `main` —
+not to the shell people are actually running. Rename a UI string after a release
+and every rebuilt pack silently swaps the old key for the new one, while the
+shipped shell still asks for the old. The pack verifies, installs, and drops
+that string to English in every language at once.
+
+This is not hypothetical: adding Turkmen on 2026-08-01 rebuilt all 22 packs, and
+the diff against the published set was exactly one key per pack — `#168` had
+renamed "restore earlier versions from **About** → Version history" to
+"**Save** → Version history". Publishing the rebuilt set would have regressed
+that string across 21 languages in exchange for adding one.
+
+So the safe republish is surgical: copy in only the pack(s) that changed, leave
+the rest byte-identical, and re-sign the index over all of them (the index pins
+each pack's own sha256, so a mixed set is fine). Confirm it before pushing:
+
+```sh
+node scripts/publish-site.mjs --dry "packs: …"   # change set must be ONLY what you intend
+```
+
+Check which key the LIVE shell actually uses before assuming a rename is safe —
+inflate the `bento-rt` payload of the published shell and grep for the string.
+A pack added this way carries the newer key and lacks the older one, so its own
+first release shows that one string in English until the shell catches up. That
+is the right trade for a NEW language and the wrong one for an existing pack.
+
 ### Testing the pack UI locally
 
 Point a shell at a local pack channel with the `bento-packs-url` localStorage
