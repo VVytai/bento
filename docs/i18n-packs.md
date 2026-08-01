@@ -434,7 +434,7 @@ but not yet on `main` — do not describe it as shipped.
 - [x] Removing a file's LAST pack now actually sticks — #96
 - [x] Hebrew (he) — the first RTL language — #100, completed and its four
       directional arrows flipped for RTL in #111
-- [x] **22 packs — 21 on `main`, `tk` on *branch* `turkmen-lang-translation`**
+- [x] **22 packs, all on `main`**
       — #102–#120 added nineteen in one batch (`id` and `ms` share #109),
       joining `he` and the original `ko`; Turkmen followed. With the 9 bundled
       catalogs that is 31 languages:
