@@ -77,28 +77,76 @@ const key = opt('key', null)
  * so the whole changelog section would be a needless payload. Bold lead-ins
  * only — the headline of each entry — with the full text a link away.
  */
-function releaseNotes() {
-  try {
-    const cl = readFileSync(join(root, 'CHANGELOG.md'), 'utf8')
-    const start = cl.indexOf(`## [${version}]`)
-    if (start < 0) return null
-    const next = cl.indexOf('\n## [', start + 1)
-    const body = cl.slice(cl.indexOf('\n', start) + 1, next > 0 ? next : undefined)
-    // the bold lead-in of each bullet: "- **Something changed.** detail…"
-    const heads = [...body.matchAll(/^- \*\*(.+?)\*\*/gms)].map((m) => m[1].replace(/\s+/g, ' ').trim())
-    if (!heads.length) return null
-    const MAX = 5
-    const shown = heads.slice(0, MAX).map((h) => `• ${h}`)
-    if (heads.length > MAX) shown.push(`…and ${heads.length - MAX} more`)
-    return shown.join('\n')
-  } catch {
-    return null // notes are a nicety; never fail a release over them
-  }
+function changelogSections() {
+  // Every released section, newest first: [{ version, heads }]
+  const cl = readFileSync(join(root, 'CHANGELOG.md'), 'utf8')
+  const out = []
+  const re = /^## \[(\d+\.\d+\.\d+)\][^\n]*$/gm
+  const marks = [...cl.matchAll(re)]
+  marks.forEach((m, i) => {
+    const body = cl.slice(m.index + m[0].length, i + 1 < marks.length ? marks[i + 1].index : undefined)
+    const heads = [...body.matchAll(/^- \*\*(.+?)\*\*/gms)].map((h) => h[1].replace(/\s+/g, ' ').trim())
+    if (heads.length) out.push({ version: m[1], heads })
+  })
+  return out
 }
 
-// Sign the manifest against the staged bytes.
-const notes = releaseNotes()
-if (notes) console.log(`  notes   ${notes.split('\n').length} line(s) from CHANGELOG`)
+const cmpVer = (a, b) => {
+  const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i]
+  return 0
+}
+
+/**
+ * Release notes for the manifest, in two forms — because shipped files are
+ * FROZEN CODE and can only read what they were written to read.
+ *
+ * `notes` (string) is what every existing file reads: `notes?: string`,
+ * rendered with textContent. It cannot be made reader-aware after the fact, so
+ * it SPANS the last few releases rather than only this one. Releases land days
+ * apart; someone on 1.0.11 who updates to 1.0.13 would otherwise never see
+ * what 1.0.12 contained, because the manifest only ever described the newest
+ * version. A reader who is merely one version behind sees a little they have
+ * seen before — the cheaper of the two errors.
+ *
+ * `notesFrom` (object, version → lead-ins) is for clients new enough to filter
+ * it against their own APP_VERSION and show exactly the versions they skipped.
+ * Purely additive: an older file ignores the field entirely.
+ */
+function releaseNotesString(sections) {
+  const SPAN = 3   // this release plus the two before it
+  const recent = sections.filter((s) => cmpVer(s.version, version) <= 0).slice(0, SPAN)
+  if (!recent.length) return null
+  const lines = []
+  let total = 0
+  const MAX = 6
+  for (const sec of recent) {
+    for (const h of sec.heads) {
+      if (total >= MAX) break
+      lines.push(`• ${h}${sec.version === version ? '' : `  (${sec.version})`}`)
+      total++
+    }
+    if (total >= MAX) break
+  }
+  const all = recent.reduce((n, s) => n + s.heads.length, 0)
+  if (all > total) lines.push(`…and ${all - total} more`)
+  return lines.join('\n')
+}
+
+function releaseNotesByVersion(sections) {
+  const SPAN = 6
+  const out = {}
+  for (const sec of sections.filter((s) => cmpVer(s.version, version) <= 0).slice(0, SPAN)) {
+    out[sec.version] = sec.heads.slice(0, 8)
+  }
+  return Object.keys(out).length ? out : null
+}
+
+let sections = []
+try { sections = changelogSections() } catch { /* notes are a nicety; never fail a release over them */ }
+const notes = sections.length ? releaseNotesString(sections) : null
+const notesFrom = sections.length ? releaseNotesByVersion(sections) : null
+if (notes) console.log(`  notes   ${notes.split('\n').length} line(s), spanning ${Object.keys(notesFrom ?? {}).slice(0, 3).join(', ')}`)
 else console.log('  notes   none — no CHANGELOG entry for this version')
 const signArgs = [
   join(root, 'scripts/sign-release.mjs'),
@@ -106,6 +154,7 @@ const signArgs = [
   '--out', join(site, 'releases/slides/manifest.json'),
 ]
 if (notes) signArgs.push('--notes', notes)
+if (notesFrom) signArgs.push('--notes-from', JSON.stringify(notesFrom))
 if (key) signArgs.push('--key', key)
 execFileSync('node', signArgs, { stdio: 'inherit' })
 

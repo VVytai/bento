@@ -11,7 +11,7 @@ import {
   instantiateLayout, isLightBg, layoutElementIds, newDocId, parseDoc, readableInk, syncLinkedChart, uid,
   type ChartElement, type ShapeKind, type Slide, type SlideElement, type TableElement,
 } from '../model'
-import { APP_VERSION, applyUpdate, applyUpdateInPlace, autoCheckEnabled, canUpdateInPlace, checkForUpdates, offlineEnabled, setAutoCheck, setOffline } from '../update'
+import { APP_VERSION, applyUpdate, applyUpdateInPlace, autoCheckEnabled, canUpdateInPlace, checkForUpdates, compareVersions, offlineEnabled, setAutoCheck, setOffline } from '../update'
 import { CHART_PRESETS } from '../charts'
 import { renderSlide, renderThumbnail } from '../render'
 import { SlideCanvas } from './canvas'
@@ -2670,7 +2670,22 @@ export class Editor {
         const line = div('ed-about-new')
         line.textContent = t('Version {v} is available.', { v: release.version })
         card.appendChild(line)
-        if (release.notes) card.appendChild(releaseNotes(release.notes))
+        // Prefer per-version notes filtered to what THIS file actually skipped:
+        // releases land days apart, so a reader two versions behind should see
+        // both, and a reader one version behind should not see the older one
+        // again. `notes` is the fallback for a manifest that predates the field.
+        const skipped = release.notesFrom
+          ? Object.keys(release.notesFrom)
+              .filter((v) => compareVersions(v, APP_VERSION) > 0)
+              .sort((a, b) => compareVersions(b, a))
+          : []
+        if (skipped.length) {
+          const lines = skipped.flatMap((v) =>
+            (release.notesFrom![v] ?? []).map((h) => (skipped.length > 1 ? `• ${h}  (${v})` : `• ${h}`)))
+          card.appendChild(releaseNotes(lines.join('\n')))
+        } else if (release.notes) {
+          card.appendChild(releaseNotes(release.notes))
+        }
         const actions = div('ed-about-actions')
         const fail = (err: any) => { status.textContent = t('Update failed: {m}', { m: String(err?.message ?? err) }) }
         const done = () => {

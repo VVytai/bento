@@ -83,6 +83,13 @@ export interface ReleaseInfo {
   /** absolute URL of the release shell */
   url: string
   notes?: string
+  /**
+   * Per-version lead-ins, newest first, e.g. { '1.0.13': ['…'], '1.0.12': ['…'] }.
+   * Lets a client show exactly the versions it skipped rather than only the
+   * newest. ADDITIVE — `notes` remains the string every already-shipped file
+   * reads, because their update code is frozen and cannot learn this field.
+   */
+  notesFrom?: Record<string, string[]>
   at?: string
 }
 

@@ -6,7 +6,7 @@
 //
 //   node scripts/sign-release.mjs slides/dist-single/Bento_Slides.bento.html \
 //     [--url https://bento.page/releases/slides/Bento_Slides.bento.html] \
-//     [--version 0.2.0] [--notes "What changed"] [--key ~/.bento/release-key.json] \
+//     [--version 0.2.0] [--notes "What changed"] [--notes-from '{"1.0.13":[…]}'] [--key ~/.bento/release-key.json] \
 //     [--out manifest.json]
 //
 // The manifest is { payload: "<json string>", sig: "<base64>" } — the
@@ -44,6 +44,15 @@ const opt = (name, fallback) => {
 const version = opt('version', JSON.parse(readFileSync(join(root, 'slides/package.json'), 'utf8')).version)
 const url = opt('url', 'https://bento.page/releases/slides/Bento_Slides.bento.html')
 const notes = opt('notes', '')
+// Per-version lead-ins, so a client can show exactly the versions it skipped.
+// ADDITIVE: `notes` stays a plain string for every already-shipped file, whose
+// update code is frozen and reads only that.
+const notesFromRaw = opt('notes-from', '')
+let notesFrom = null
+if (notesFromRaw) {
+  try { notesFrom = JSON.parse(notesFromRaw) }
+  catch { console.error('sign-release: --notes-from is not valid JSON'); process.exit(1) }
+}
 const keyPath = opt('key', defaultKeyPath())
 const outPath = opt('out', join(dirname(shellPath), 'manifest.json'))
 
@@ -56,6 +65,7 @@ const payload = JSON.stringify({
   sha256,
   url,
   ...(notes ? { notes } : {}),
+  ...(notesFrom ? { notesFrom } : {}),
   at: new Date().toISOString(),
 })
 
