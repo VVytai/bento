@@ -727,5 +727,5 @@ export const zhHant: Catalog = {
   "Opened {name}": "已開啟 {name}",
   "Opened {name} — ⌘S will save a copy": "已開啟 {name} — ⌘S 將儲存副本",
   "⌘S asks where to save, then rewrites that file in place": "⌘S 會先詢問儲存位置，然後直接覆寫該檔案",
-  "{name} has no saved document yet — open it directly to start one.": "{name} 中還沒有已儲存的文件 — 請直接開啟以建立。",
+  "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} 是一個空的 Bento 副本，不是已儲存的簡報。請單獨開啟它以建立。",
 }

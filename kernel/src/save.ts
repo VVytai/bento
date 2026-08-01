@@ -473,8 +473,16 @@ async function pickHandle(
   doc: KernelDoc, suffix = '', suggestedName?: string,
 ): Promise<FsFileHandle | null> {
   try {
+    // The name to offer is the file the user is ALREADY looking at, when we know
+    // it. suggestedFileName() derives from doc.title, and the two drift apart
+    // constantly — a deck called "Bento Slides Showcase" living in
+    // Q3-board.bento.html offered to save as Bento_Slides_Showcase.bento.html,
+    // so an ordinary ⌘S silently proposed a SECOND file beside the real one.
+    // A suffixed export (share copies) still names itself, hence the suffix
+    // check: those are deliberately new files.
+    const openedName = suffix ? null : openedFileName()
     return await (window as any).showSaveFilePicker({
-      suggestedName: suggestedName ?? suggestedFileName(doc, suffix),
+      suggestedName: suggestedName ?? openedName ?? suggestedFileName(doc, suffix),
       // startIn takes a HANDLE, never a path — the API gives no way to point a
       // picker at an arbitrary directory, by design. With a handle we land in
       // the open file's own folder; without one, `id` is the fallback: the

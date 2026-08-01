@@ -2224,7 +2224,7 @@ export class Editor {
     // generated at runtime, not stored. That file is a perfectly good Bento
     // document; it just has nothing in it yet, so say that rather than call it
     // a foreign file.
-    if (el && !block) { alert(t('{name} has no saved document yet — open it directly to start one.', { name: named })); return true }
+    if (el && !block) { alert(t('{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.', { name: named })); return true }
     let parsed: unknown
     try { parsed = JSON.parse(block) } catch { alert(t('{name} isn’t a Bento document.', { name: named })); return true }
     if ((parsed as { format?: string })?.format === 'bento/enc') {

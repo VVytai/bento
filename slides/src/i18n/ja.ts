@@ -727,5 +727,5 @@ export const ja: Catalog = {
   "Opened {name}": "{name} を開きました",
   "Opened {name} — ⌘S will save a copy": "{name} を開きました — ⌘S はコピーを保存します",
   "⌘S asks where to save, then rewrites that file in place": "⌘S は保存先を尋ねてから、そのファイルを上書き保存します",
-  "{name} has no saved document yet — open it directly to start one.": "{name} にはまだ保存された書類がありません。直接開いて作成してください。",
+  "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} は保存済みのデッキではなく、空の Bento です。単独で開いて作成してください。",
 }

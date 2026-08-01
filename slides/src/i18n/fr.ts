@@ -727,5 +727,5 @@ export const fr: Catalog = {
   "Opened {name}": "{name} ouvert",
   "Opened {name} — ⌘S will save a copy": "{name} ouvert — ⌘S enregistrera une copie",
   "⌘S asks where to save, then rewrites that file in place": "⌘S demande où enregistrer, puis réécrit ce fichier sur place",
-  "{name} has no saved document yet — open it directly to start one.": "{name} ne contient pas encore de document enregistré — ouvrez-le directement pour en commencer un.",
+  "{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.": "{name} est une copie vierge de Bento, pas une présentation enregistrée. Ouvrez-la seule pour en commencer une.",
 }
