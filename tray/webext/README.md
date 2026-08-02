@@ -4,16 +4,39 @@ A browser host for Bento documents. Grant your decks folder once; after that a
 deck you opened by **double-clicking** saves back to its own file with no
 destination prompt.
 
-Status: **the save path works.** Driven end to end on Chrome 150 / macOS,
-2026-08-02: extension loaded unpacked, folder granted, a double-clicked deck
-saved with **no dialog**. The file went 676,840 → 898,981 bytes with the
-`#bento-doc` block present and parsing (17 slides), script tags balanced 5/5,
-and no literal script-close in the block — so the splice contract survived the
-write.
+Status: **works end to end.** Chrome 150 / macOS, 2026-08-02, against a shell
+built from #213:
 
-Then two bugs were found and fixed — see "What is unverified". The override now
-keys on the picker `id` that #213 added to `save.ts` for this purpose, rather
-than guessing from the file name. **Needs re-testing** against all three paths.
+| action | result |
+|---|---|
+| ⌘S | **no dialog** — `[bento-tray] wrote Tray_Test.bento.html (898775 bytes) in place` |
+| Save a copy… | prompts, as it must |
+| Save read-only copy… | prompts, as it must |
+| the working file afterwards | 898,775 chars, 17 slides, script tags 5/5 balanced, `readonly` unset |
+
+The last row is the one that matters: the copy and the export went elsewhere
+rather than overwriting the document being edited. An earlier build got that
+wrong and silently destroyed it.
+
+## Operating it
+
+**The folder grant lapses when the extension reloads.** A reload resets the
+service worker and the directory permission commonly drops back to `prompt`.
+`background.js` will not request it from there — a service worker has no user
+gesture, so the request would be refused, and a save is the wrong moment to
+discover that. Open the options page and press **Check**; renewing is one click,
+which is what `home/probe/directory.html` measured.
+
+Every save says which path it took:
+
+```
+[bento-tray] wrote <file> (<n> bytes) in place
+[bento-tray] not saving in place: <reason> — falling back to the browser picker
+```
+
+Safe-by-default only helps if the safe path explains itself. Without that second
+line, a lapsed grant is indistinguishable from the extension not being installed
+— which cost a full diagnostic round trip.
 
 ## Why an extension and not a web page
 
