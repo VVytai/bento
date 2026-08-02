@@ -949,3 +949,74 @@ the only isolation left is an opaque-origin frame with home proxying saves; an
 opaque-origin frame is reachable once storage access is guarded; and what
 remains is deciding whether a document with no persistence is one we are willing
 to serve. Not settled here.
+
+## 2026-08-02 — bento/home is closed; the host is a WebExtension (`tray/webext/`)
+
+Home was a web page that would remember your decks and reopen them with write
+access. Three measurements in one session closed it, and the same three point at
+the successor.
+
+**What killed it.** A `FileSystemFileHandle` cannot be delegated across origins
+(entry above): `postMessage` serialises it and the receiving origin fires
+`messageerror`. So the origin that ACQUIRES a handle is the only origin that can
+use it — home cannot be a broker. Per-document origins are unreachable from the
+other side too, because the origin name depends on which document it is, which
+is unknowable before reading the file, and the handle cannot move after. What
+remained was: run every document on one shared origin, where `bento-autosave`
+(plaintext doc JSON, version history) and `bento-member-<docId>` (collab private
+keys) pool into a store any document can read. Rejected.
+
+A launcher that can list decks but not open them is not worth building.
+
+**MEASURED, and it is the unlock** (Chrome 150, macOS,
+`home/probe/directory.html`): a DIRECTORY grant is not per-file.
+
+```
+GRANTED  <folder>                       queryPermission: granted
+  ── reload ──
+RESTORED <folder>  kind=directory       queryPermission, no gesture: granted
+[file 1] getFileHandle('bento-probe.txt', {create:true})
+[file 1] the FILE's permission, unprompted: granted   ← never picked
+[file 2] the FILE's permission, unprompted: granted
+```
+
+One folder grant survived a reload — still `granted` with no gesture, and
+re-grantable with one click when it does lapse — and covered files inside it
+that were never picked. So a host holding a directory handle can write ANY deck
+in that folder, including one the user opened by double-clicking, which no web
+page can do for itself.
+
+**The shape.** The document stays on `file://`, which the browser treats as a
+unique origin per file — per-document isolation for free, the thing three probes
+failed to construct. A content script is the bridge transport; the extension
+holds the directory handle and performs the write.
+
+That is `tray`, in a browser. `tray/README.md`'s contract —
+`showSaveFilePicker({suggestedName}) → { name, createWritable() }` — is
+explicitly "platform-neutral; only the transport lookup and the native file
+layer are not". `save.ts` needs no host-specific code and the app never learns
+it is hosted.
+
+**`tray/webext/`, not `tray/chrome/`.** Chrome, Edge, Firefox and Safari
+extensions are one format with different manifests, so a browser name would be
+wrong at the second target. Same reasoning as the `tray/android` entry: sharing
+the name makes sharing the bridge contract the default rather than a convention
+someone must remember. Note it is a PARTIAL tray — it supplies the file layer
+and the transport, not the document browser or thumbnails `tray/ios` provides.
+
+**Firefox gets nothing from this.** It implements no File System Access API at
+all, and its extensions cannot write arbitrary files either; that needs native
+messaging with a native helper. Firefox stays download-a-copy. Safari likewise
+has no FSA, and a Safari Web Extension ships inside a native macOS app anyway —
+so Safari's answer is `tray/macos`, not an extension.
+
+**Still unverified, and the next thing to measure:** whether an MV3 service
+worker can use a stored directory handle to `createWritable()` at all, or
+whether the write must happen in an offscreen document or extension page. Keep
+the write behind one function so the answer can move without touching the
+contract.
+
+**Kept from home:** `home/probe/` (four probes, all reusable) and
+`home/src/deckmeta.ts`, which reads a deck's title without executing it — the
+extension needs exactly that to label what it is about to save. The launcher UI
+and the recents store are superseded by the directory grant.
