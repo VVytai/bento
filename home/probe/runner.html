@@ -37,7 +37,19 @@
 const logEl = document.getElementById('log')
 const lines = []
 logEl.textContent = ''
-const log = (...a) => { const s = a.join(' '); lines.push(s); logEl.textContent += s + '\n' }
+
+/** Whoever launched us — an opener, or an embedding frame's parent. */
+const launcher = window.opener || (window.parent !== window ? window.parent : null)
+
+// Everything logged here is echoed to the launcher, so the whole run can be
+// read in one window. The two pages are on different origins by construction,
+// so this is the only way either can see the other's side of the story.
+const log = (...a) => {
+  const s = a.join(' ')
+  lines.push(s)
+  logEl.textContent += s + '\n'
+  try { launcher?.postMessage({ type: 'log', line: s }, '*') } catch { /* gone */ }
+}
 
 document.getElementById('origin').textContent = location.origin
 
@@ -52,10 +64,30 @@ function verdict(ok, text) {
   lines.push('')
   lines.push((ok ? 'VERDICT (pass): ' : 'VERDICT (fail): ') + text)
   document.getElementById('copy').style.display = 'inline-block'
+  try { launcher?.postMessage({ type: 'verdict', ok, text }, '*') } catch { /* gone */ }
 }
 
+// A message whose payload cannot be DESERIALISED here does not arrive as a
+// `message` at all — the target fires `messageerror` instead, with no data.
+// That is the difference between "the plumbing is broken" and "this browser
+// refuses to hand a file handle to another origin", and it is the whole reason
+// this probe can give a decisive answer instead of a shrug.
+window.addEventListener('messageerror', (ev) => {
+  log('\nMESSAGEERROR from ' + ev.origin)
+  log('  A message arrived but could not be deserialised in this origin.')
+  verdict(false,
+    'This browser refuses to deserialise the payload cross-origin. A FileSystemFileHandle cannot be delegated to another origin by postMessage — per-document runner origins cannot work this way.')
+})
+
 window.addEventListener('message', async (ev) => {
-  if (ev.data?.type !== 'handle') return
+  // Log EVERYTHING, so a control message proves the plumbing independently of
+  // whether the handle survives.
+  if (ev.data?.type === 'ping') {
+    log('CONTROL  plain object arrived from ' + ev.origin + ' — the channel works.')
+    log('         (so if no handle follows, it is the HANDLE that was refused)')
+    return
+  }
+  if (ev.data?.type !== 'handle') { log('(message: ' + JSON.stringify(ev.data).slice(0, 80) + ')'); return }
   handle = ev.data.handle
   log('RECEIVED from ' + ev.origin)
   log('  arrived as        : ' + Object.prototype.toString.call(handle))
@@ -139,7 +171,11 @@ document.getElementById('copy').onclick = async () => {
   catch { log('\n(clipboard blocked — select the log above and copy it manually)') }
 }
 
-// Tell the opener we exist. It holds the handle until it hears this.
-if (window.opener) window.opener.postMessage({ type: 'ready' }, '*')
+// Tell whoever launched us that we exist — they hold the handle until they
+// hear it. Announcing to an embedding parent as well as an opener is what makes
+// the channel testable from a frame: without it a sender has to guess when this
+// document is listening, and a message posted too early is simply lost, which
+// looks exactly like a refusal.
+if (launcher) launcher.postMessage({ type: 'ready' }, '*')
 else log('Opened directly. Start from the parent page on port 5301 instead.')
 </script>

@@ -79,19 +79,30 @@ document.getElementById('send').onclick = () => {
   window.addEventListener('message', (ev) => {
     if (ev.origin !== target) return
     if (ev.data?.type === 'ready') {
+      // CONTROL FIRST. A plain object proves the channel itself works, so if
+      // the handle then fails to arrive we know it is the handle that was
+      // refused and not the plumbing. Without this the two are
+      // indistinguishable from here, and they mean opposite things.
+      win.postMessage({ type: 'ping' }, target)
+      log('SENT     control ping → ' + target)
       try {
         win.postMessage({ type: 'handle', handle }, target)
         log('SENT     handle → ' + target)
+        log('\nNote: postMessage succeeding here only means the handle was')
+        log('SERIALISED. Whether it can be DESERIALISED on the other origin is')
+        log('the actual question — read the runner window, not this one.')
       } catch (e) {
-        // A structured-clone failure lands here: the handle is not
-        // transferable to another origin at all.
+        // A structured-clone failure lands here: the handle could not even be
+        // serialised for another origin.
         log('SEND FAILED  ' + e.name + ': ' + e.message)
         log('\nVERDICT: handles cannot cross origins. Per-document origins are out.')
       }
     }
-    if (ev.data?.type === 'result') {
-      log('\n———— reported back by ' + target + ' ————')
-      for (const line of ev.data.lines) log(line)
+    // The runner echoes its log here, so the whole run reads in one window.
+    if (ev.data?.type === 'log') log('  [runner] ' + ev.data.line)
+    if (ev.data?.type === 'verdict') {
+      log('\n———— VERDICT (' + (ev.data.ok ? 'PASS' : 'FAIL') + ') ————')
+      log(ev.data.text)
     }
   })
 }
