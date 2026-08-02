@@ -69,12 +69,38 @@
    *   bento-copy   "Save a copy…"                             → the author chooses
    *   bento-share  view-only, package, invite, template       → the author chooses
    *
-   * Default to declining. An unknown or absent id means an older shell, or a
-   * caller we have not seen; the native picker is the correct answer for both.
-   * The failure directions are not symmetric — declining costs a prompt,
-   * taking over wrongly costs the file.
+   * Default to declining. An unknown or absent id means a caller we have not
+   * seen; the native picker is the correct answer.
+   *
+   * And the id alone is not enough: a deck whose runtime PREDATES #213 sends
+   * `bento-doc` for every save, "Save a copy…" included, so acting on it there
+   * reproduces exactly the bug this replaced. Hence the runtime-version gate —
+   * old decks keep the behaviour they have today, which is correct and safe.
+   * The failure directions are not symmetric: declining costs a prompt, taking
+   * over wrongly costs the file.
    */
-  const wantsOpenFile = (opts) => opts?.id === 'bento-doc'
+  /**
+   * The release that first sent a distinct picker `id` per purpose (#213).
+   * A deck whose embedded runtime predates it sends `bento-doc` for EVERY save
+   * — including "Save a copy…" — so the id carries no information there and
+   * this bridge must not act on it. If #213 ships under a different number,
+   * this constant is the one thing to change.
+   */
+  const ID_SINCE = [1, 0, 15]
+
+  const runtimeAtLeast = (min) => {
+    const v = window.bento?.updates?.version
+    if (typeof v !== 'string') return false // no runtime yet, or too old to say
+    const parts = v.split('.').map((n) => parseInt(n, 10))
+    if (parts.some(Number.isNaN)) return false
+    for (let i = 0; i < min.length; i++) {
+      if ((parts[i] ?? 0) > min[i]) return true
+      if ((parts[i] ?? 0) < min[i]) return false
+    }
+    return true
+  }
+
+  const wantsOpenFile = (opts) => opts?.id === 'bento-doc' && runtimeAtLeast(ID_SINCE)
 
   window.showSaveFilePicker = async (opts = {}) => {
     if (!wantsOpenFile(opts)) {
