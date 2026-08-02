@@ -23,13 +23,20 @@
 //
 // THE CANDIDATE MECHANISMS, none of which can be settled from here:
 //
-//   A. Separate runner origin (e.g. `deck.bento.page`). Home postMessages the
-//      handle to a window there. Decks cannot read home's store. UNKNOWN:
+//   A. Separate runner origin (e.g. `run.bento.page`). Home postMessages the
+//      handle to a window there. Documents cannot read home's store. UNKNOWN:
 //      whether a handle survives a cross-origin postMessage usefully, and
 //      whether the receiving origin can `requestPermission` on it (permissions
 //      are per-origin, so it likely re-prompts once — acceptable).
-//   B. Per-deck origin (`<hash>.deck.bento.page`), matching tray exactly.
+//   B. Per-document origin (`<hash>.run.bento.page`), matching tray exactly.
 //      Strongest isolation; needs wildcard DNS and a certificate.
+//
+// `run`, not an app name: this code never parses the format, so the origin
+// serves slides, spaces and sheets alike. An app-named origin would isolate
+// nothing extra either — every deck would still share one origin with every
+// other deck, which is the actual exposure — and app names should stay free for
+// the apps' own pages. The precedent is `sync.bento.page`: a subdomain here
+// marks a trust boundary, not a product.
 //   C. `file_handlers` + `launchQueue`, installed-PWA only. The only route that
 //      fixes double-click, and a different grant path from the one measured in
 //      working/home-design.md §3.1 — so it needs its own test.

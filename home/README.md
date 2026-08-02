@@ -87,9 +87,25 @@ The candidates, none settled:
 
 | | isolation | cost | unknown |
 |---|---|---|---|
-| **A** one runner origin (`deck.bento.page`) | decks cannot read home's store; decks share an origin with each other | one subdomain | does a handle survive a cross-origin `postMessage` usefully? |
-| **B** per-deck origin (`<hash>.deck.bento.page`) | matches tray exactly | wildcard DNS + cert | same, plus operational |
+| **A** one runner origin (`run.bento.page`) | documents cannot read home's store; they share an origin with each other | one subdomain | does a handle survive a cross-origin `postMessage` usefully? |
+| **B** per-document origin (`<hash>.run.bento.page`) | matches tray exactly | wildcard DNS + cert | same, plus operational |
 | **C** `file_handlers` + `launchQueue` | installed PWA only | install required | different grant path; needs its own test |
+
+**On the name.** `run`, not `slides` or `deck`. The runner never parses the
+format — it takes a handle, reads bytes and executes a self-contained file,
+which may be `bento/slides`, `bento/spaces` or `bento/sheets`. An app-named
+origin would mean either several identical runners or a name that lies as soon
+as the second app ships.
+
+It would also isolate nothing useful. The exposure is one document reading
+another's stored data and handles, and a per-*app* origin still leaves every
+deck sharing one origin with every other deck. The axis that matters is
+per-document (B), which is what tray already does.
+
+And app-named subdomains should stay free for the apps' own pages. The existing
+precedent is `sync.bento.page` — the relay — so a subdomain here marks a **trust
+boundary**, not a product. An origin that executes files strangers sent your
+users is the last one that should share a name with anything you want trusted.
 
 C is the only mechanism that fixes double-click, and it composes with A or B
 rather than replacing them.
