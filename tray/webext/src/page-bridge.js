@@ -131,6 +131,13 @@
     }
     const claim = await ask('claim', { path: decodeURIComponent(window.location.pathname) })
     if (!claim?.ok) {
+      // Say WHY. Falling through to the native picker is the safe outcome, but
+      // an unexplained dialog is indistinguishable from the extension not being
+      // installed — which cost a full diagnostic round trip. The common cause
+      // is the folder grant lapsing after an extension reload, which the
+      // options page can renew in one click.
+      console.info('[bento-tray] not saving in place:', claim?.reason ?? 'no answer from the extension',
+        '— falling back to the browser picker. Open the extension options to check the folder grant.')
       // The extension cannot reach this file — no folder granted, or the deck
       // lives outside it. The native picker is not a worse outcome, it is
       // exactly what happens without the extension installed.
@@ -151,6 +158,7 @@
             const text = await blob.text()
             const res = await ask('write', { token: claim.token, text })
             if (!res?.ok) throw new DOMException(res?.reason || 'write failed', 'NotAllowedError')
+            console.info('[bento-tray] wrote', claim.name, `(${res.bytes} bytes) in place`)
           },
         }
       },
