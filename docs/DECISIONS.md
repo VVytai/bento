@@ -839,3 +839,63 @@ origin with every other deck) and app names should stay free for the apps' own
 pages. The precedent is `sync.bento.page`: a subdomain marks a TRUST BOUNDARY,
 not a product. An origin that executes files strangers sent your users is the
 last one that should share a name with anything you want trusted.
+
+## 2026-08-02 — MEASURED: a file handle cannot be delegated across origins
+
+Follow-up to the entry above, which ruled that bento/home must run documents in
+a per-document origin. **That is not reachable, and the measurement says so
+unambiguously.**
+
+`home/probe/` (run it with `node scripts/probe-origins.mjs`) picks a file on one
+origin, grants write access there, and `postMessage`s the handle to another
+origin. Chrome 150, macOS, 2026-08-02:
+
+```
+SENT     control ping → http://localhost:5302
+SENT     handle       → http://localhost:5302
+  [runner] CONTROL  plain object arrived — the channel works.
+  [runner] MESSAGEERROR — a message arrived but could not be deserialised
+```
+
+The control object lands; the handle does not. `postMessage` **succeeds on the
+sending side** — the handle serialises fine — and the receiving origin fires
+`messageerror` instead of `message`, meaning deserialisation was refused. This
+is why the first run of the probe looked like silence: nothing was listening for
+`messageerror`, and a refusal is indistinguishable from a lost message without
+it.
+
+**The consequence is larger than "option B needs a different transport".** The
+origin that acquires a handle is the only origin that can ever use it. So:
+
+- Home cannot be a broker. It cannot hold handles for an isolated runner.
+- Per-document origins cannot be reached the other way either, by having the
+  document's own origin do the picking: the origin name depends on which
+  document it is, and you cannot know that before reading the file, and you
+  cannot move the handle after. The circularity is not incidental.
+
+**What that leaves**, none free:
+
+1. **Home and documents share one origin.** Rejected in the entry above and the
+   reasons are unchanged: `bento-autosave` (plaintext doc JSON, version
+   history) and `bento-member-<docId>` (collab private keys) pool into one
+   store any document can read.
+2. **Home never opens documents** — a drop target and a list, with opening left
+   to the OS. Safe, and much less useful.
+3. **Sandboxed iframe + save proxy.** Run the document in
+   `<iframe sandbox="allow-scripts">` WITHOUT `allow-same-origin`, so it gets an
+   opaque origin and can reach no storage at all — not home's, not another
+   document's. Home keeps the handle and performs the write itself, with the
+   document asking through a postMessage protocol.
+
+Option 3 is the tray shape, and tray already proves the protocol half:
+`tray/bridge.js` polyfills `showSaveFilePicker`, so `save.ts` needs no
+host-specific code and the app does not know it is hosted. Reusing that contract
+rather than inventing a second one is the point of the 2026-08-01 entry on
+`tray/android/`.
+
+**To measure before committing to option 3** (again: not testable in an
+automated browser): an opaque-origin document has NO localStorage and NO
+IndexedDB, so `bento-autosave`, version history, `bento-member-<docId>`,
+language choice and reduce-motion all fail or degrade. Whether the runtime
+survives that gracefully, and whether the degradation is acceptable, decides
+whether home can open documents at all.

@@ -101,58 +101,61 @@ One runner origin therefore creates a pooled store — which does not exist toda
 it, plus the keys that authorise writing to their collaboration rooms. Any
 document on that origin can read all of it.
 
-### Ruled: per-document origin, or home does not open documents
+### Measured: a handle cannot be delegated across origins
 
-`docs/DECISIONS.md` (2026-08-02). Home may **acquire** a handle any way it can,
-and must **hand off** to an origin derived from the document's identity:
+Chrome 150, macOS, 2026-08-02, via `home/probe/` — pick a file on one origin,
+grant write access, `postMessage` the handle to another:
 
-| mechanism | what it is | role |
+```
+SENT     control ping → :5302
+SENT     handle       → :5302
+  [runner] CONTROL  plain object arrived — the channel works.
+  [runner] MESSAGEERROR — a message arrived but could not be deserialised
+```
+
+The control lands; the handle does not. `postMessage` **succeeds on the sending
+side** and the receiving origin fires `messageerror` rather than `message`.
+
+**The origin that acquires a handle is the only origin that can use it.** So
+home cannot be a broker — and per-document origins cannot be reached the other
+way round either, because the origin name depends on which document it is, which
+you cannot know before reading the file, and you cannot move the handle after.
+
+That leaves three shapes, none free:
+
+| | isolation | cost |
 |---|---|---|
-| picker / drop | shipped, working | acquisition |
-| `file_handlers` + `launchQueue` | installed PWA only; the sole route that fixes double-click | acquisition — it delivers to *home's* origin, so it is not isolation |
-| **per-document origin** (`<hash>-run.bento.page`) | matches what tray already does | **the isolation** |
+| home and documents share one origin | none — `bento-autosave` and collab keys pool | rejected above |
+| home never opens documents | total | a list and a drop target, nothing more |
+| **sandboxed iframe + save proxy** | opaque origin: the document reaches *no* storage | the document loses autosave, version history, collab identity |
 
-Also considered and not adopted: a shared runner with storage neutered (no
-autosave, no member keys, `Clear-Site-Data` per load). It removes the pool by
-breaking recovery, version history and collab identity, and stays safe only as
-long as every future feature remembers not to persist anything. Per-document
-origins get the same property structurally.
+The third is the tray shape, and tray already proves the protocol half:
+`tray/bridge.js` polyfills `showSaveFilePicker`, so `save.ts` needs no
+host-specific code and the app never knows it is hosted. Home would keep the
+handle and do the writing, with the document asking through that same contract.
 
-**Hosting.** `bento.page` is GitHub Pages behind Cloudflare; `sync.bento.page`
-is Cloudflare-only. Pages serves one custom domain per repo and no wildcards, so
-the runner belongs on Cloudflare beside the relay — with its own deploy cadence,
-and the deploy-order care that implies.
+### Next to measure
 
-**On the name.** `run`, not `slides` or `deck`: the runner never parses the
-format, and executes a file that may be slides, spaces or sheets. An app-named
-origin would isolate nothing extra and app names should stay free for the apps'
-own pages. The precedent is `sync.bento.page` — a subdomain marks a **trust
-boundary**, not a product.
+Whether the runtime survives an **opaque origin**. A sandboxed document has no
+`localStorage` and no `IndexedDB`, so `bento-autosave`, version history,
+`bento-member-<docId>`, language choice and reduce-motion all fail or degrade.
+Whether that is graceful, and whether the degradation is acceptable, decides
+whether home can open documents at all.
 
-### Before building the runner
+Not testable in an automated browser: permission-gated APIs report `denied`
+there without ever prompting, which is the trap that produced two wrong
+conclusions earlier in this design (`working/home-design.md` §3.2). Run
+`node scripts/probe-origins.mjs` and open it yourself.
 
-Neither is testable in an automated browser (see above):
+`file_handlers` + `launchQueue` is unaffected by the finding above and still
+worth having — it is the only route that fixes double-click, and it delivers the
+handle straight to home's own origin, which is now the only origin that can use
+one. It answers acquisition, not isolation.
 
-1. Does a `FileSystemFileHandle` survive a cross-origin `postMessage` and stay
-   usable? A re-prompt on the receiving origin is expected and fine; being
-   unusable would sink this shape entirely.
-2. Cloudflare Universal SSL covers one label (`x.bento.page`) but not two
-   (`x.run.bento.page`). If that holds, a single hyphenated label —
-   `<hash>-run.bento.page` — avoids Advanced Certificate Manager. Worth settling
-   first: it is baked into every stored origin.
-
-C is the only mechanism that fixes double-click, and it composes with A or B
-rather than replacing them.
-
-**All three are permission-gated, and permission-gated APIs report `denied` in
-an automated browser without ever prompting** — that trap already produced two
-wrong conclusions during the design (`working/home-design.md` §3.2). They must
-be measured by hand, in a real browser.
-
-Until one is chosen and measured, `launch.ts` **refuses** rather than quietly
-taking the unsafe route, and says so in the UI. A launcher that silently widened
-the blast radius of every deck you open would be worse than one that does not
-open them yet.
+Until the isolation question is settled, `launch.ts` **refuses** rather than
+quietly taking the unsafe route, and says so in the UI. A launcher that silently
+widened the blast radius of every deck you open would be worse than one that
+does not open them yet.
 
 ## Running it
 
