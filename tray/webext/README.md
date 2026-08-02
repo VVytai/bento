@@ -126,7 +126,26 @@ the override was in place before `save.ts` read it.
 ~~3. Does file-URL access work?~~ **YES**, with the per-extension toggle enabled
 by hand.
 
-4. **THE EXPORT PATHS — untested, and the failure mode is destructive.** The
+4. ~~THE EXPORT PATHS~~ **BOTH BUGS FOUND, 2026-08-02.**
+
+   **(a) "Save a copy…" overwrote the open deck.** Not a bad threshold — the
+   discriminator does not exist. `saveFile(doc, forcePicker)` reaches the same
+   call with the same arguments for both intents. Override disabled until
+   `save.ts` makes intent explicit.
+
+   **(b) View-only and present-only copies stopped saving.** Once a save
+   returned one of our handles, `save.ts` kept it and later passed it back as
+   `startIn`, where the native picker requires a real `FileSystemHandle` — it
+   threw `TypeError`, and `pickHandle` rethrows anything that is not
+   `AbortError`. Fixed: `forNative()` strips any `startIn` that is not a genuine
+   handle before calling through. **A polyfilled handle must never escape into
+   an API that needs the real thing** — the general lesson, and the reason to
+   audit every other value this bridge hands back.
+
+   The original text follows, because the reasoning it records was wrong in an
+   instructive way:
+
+   **THE EXPORT PATHS — untested, and the failure mode is destructive.** The
    override fires only when `suggestedName` is the file on screen. If that
    comparison is wrong in the other direction, "Save a copy…", presentation
    packages, read-only copies, templates and invites would **silently overwrite

@@ -79,10 +79,32 @@
     return false
   }
 
+  /**
+   * Options safe to hand to the NATIVE picker.
+   *
+   * MEASURED 2026-08-02, and it broke every export: once a save returns one of
+   * our handles, `save.ts` keeps it (`fileHandle = handle`) and later passes it
+   * back as `startIn` — `...(fileHandle ? { startIn: fileHandle } : {})`. The
+   * native picker requires a REAL FileSystemHandle there, so it threw
+   * TypeError, and `pickHandle` rethrows anything that is not AbortError. View-
+   * only and present-only copies simply stopped working, with no clue pointing
+   * here.
+   *
+   * A polyfilled handle must never escape into an API that needs the genuine
+   * article. Anything not actually a FileSystemHandle is dropped; `startIn` is
+   * only ever a convenience about which folder opens first.
+   */
+  const forNative = (opts) => {
+    const out = { ...opts }
+    const real = typeof FileSystemHandle !== 'undefined' && out.startIn instanceof FileSystemHandle
+    if (out.startIn && !real) delete out.startIn
+    return out
+  }
+
   window.showSaveFilePicker = async (opts = {}) => {
     const suggestedName = opts.suggestedName
     if (!wantsOpenFile(suggestedName)) {
-      if (native) return native(opts)
+      if (native) return native(forNative(opts))
       throw new DOMException('No file picker available', 'AbortError')
     }
     const claim = await ask('claim', { path: decodeURIComponent(location.pathname) })
@@ -90,7 +112,7 @@
       // The extension cannot reach this file — no folder granted, or the deck
       // lives outside it. The native picker is not a worse outcome, it is
       // exactly what happens without the extension installed.
-      if (native) return native(opts)
+      if (native) return native(forNative(opts))
       throw new DOMException('No writable location', 'AbortError')
     }
     return {
