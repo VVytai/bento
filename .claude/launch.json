@@ -5,13 +5,26 @@
       "name": "spaces-dev",
       "cwd": "spaces",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "--port", "5196", "--strictPort"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5196",
+        "--strictPort"
+      ],
       "port": 5196
     },
     {
       "name": "serve-spaces-built",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "5195", "--directory", "spaces/dist-single"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5195",
+        "--directory",
+        "spaces/dist-single"
+      ],
       "port": 5195
     },
     {
@@ -100,6 +113,20 @@
         "working"
       ],
       "port": 5193
+    },
+    {
+      "name": "home-dev",
+      "cwd": "home",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5194",
+        "--strictPort"
+      ],
+      "port": 5194
     }
   ]
 }
