@@ -61,6 +61,28 @@ Both content-script halves are required: an isolated world can talk to the
 extension but not touch page globals; a MAIN world can define
 `showSaveFilePicker` but has no extension APIs.
 
+## It depends on `openedFileName()`
+
+The override only fires when `suggestedName` is the file on screen, so it rests
+on what `save.ts` passes. For a double-clicked deck there is no handle, and
+`openedFileName()` falls back to the URL:
+
+```js
+if (fileHandle?.name) return fileHandle.name
+const base = decodeURIComponent(new URL(location.href).pathname.split('/').pop() ?? '')
+return /\.bento\.html$/i.test(base) ? base : null
+```
+
+So `Q3.bento.html` on disk arrives as `suggestedName: "Q3.bento.html"` and the
+comparison holds. That fallback shipped in 1.0.12 for an unrelated reason —
+"Save offers the file you are looking at" — and this depends on it. If it ever
+goes back to naming saves after the deck's TITLE, this extension silently stops
+taking over and every save returns to a destination prompt.
+
+Note the `.bento.html` test in that fallback: a deck saved as plain `.html`
+returns null, the suggested name comes from the title instead, and the override
+declines. Correct, but it means the extension only covers `.bento.html` files.
+
 ## The matching problem
 
 A page gives us `/Users/…/Decks/Q3.bento.html`. A `FileSystemDirectoryHandle`
