@@ -57,53 +57,27 @@
    * — they mean a NEW file somewhere they choose, and taking that over silently
    * would write to a place nobody asked for. Those go to the native picker.
    */
-  const wantsOpenFile = (suggestedName) => {
-    // DISABLED — this cannot be decided from here, and getting it wrong
-    // destroys a file. MEASURED 2026-08-02: "Save a copy…" overwrote the open
-    // deck, because `saveFile(doc, forcePicker)` reaches the SAME call for both
-    // intents:
-    //
-    //     plain ⌘S       → this.save(false) → saveFile(doc, false) → pickHandle(doc)
-    //     Save a copy…   → this.save(true)  → saveFile(doc, true)  → pickHandle(doc)
-    //
-    // Same suggestedName, same id, same options. The arguments carry no signal,
-    // so no heuristic here can tell "save my work" from "save me a second
-    // copy" — and the failure is silent and unrecoverable: no dialog, no
-    // warning, the original gone.
-    //
-    // Re-enable only once save.ts makes the intent explicit (a distinct picker
-    // `id`, or an equivalent hint). Until then every save falls through to the
-    // native picker, which is exactly what happens with the extension
-    // uninstalled — no worse, and nothing lost.
-    void suggestedName
-    return false
-  }
-
   /**
-   * Options safe to hand to the NATIVE picker.
+   * Is this save meant to overwrite the document on screen?
    *
-   * MEASURED 2026-08-02, and it broke every export: once a save returns one of
-   * our handles, `save.ts` keeps it (`fileHandle = handle`) and later passes it
-   * back as `startIn` — `...(fileHandle ? { startIn: fileHandle } : {})`. The
-   * native picker requires a REAL FileSystemHandle there, so it threw
-   * TypeError, and `pickHandle` rethrows anything that is not AbortError. View-
-   * only and present-only copies simply stopped working, with no clue pointing
-   * here.
+   * `id` is the answer, and it is the ONLY reliable one. It was added to
+   * `save.ts` for exactly this (#213, `pickerIdFor`): before it, ⌘S and "Save a
+   * copy…" reached the picker with byte-identical arguments, this code guessed
+   * in-place, and it overwrote the open deck — no dialog, no new file.
    *
-   * A polyfilled handle must never escape into an API that needs the genuine
-   * article. Anything not actually a FileSystemHandle is dropped; `startIn` is
-   * only ever a convenience about which folder opens first.
+   *   bento-doc    ⌘S, or a first save of an unsaved document → write in place
+   *   bento-copy   "Save a copy…"                             → the author chooses
+   *   bento-share  view-only, package, invite, template       → the author chooses
+   *
+   * Default to declining. An unknown or absent id means an older shell, or a
+   * caller we have not seen; the native picker is the correct answer for both.
+   * The failure directions are not symmetric — declining costs a prompt,
+   * taking over wrongly costs the file.
    */
-  const forNative = (opts) => {
-    const out = { ...opts }
-    const real = typeof FileSystemHandle !== 'undefined' && out.startIn instanceof FileSystemHandle
-    if (out.startIn && !real) delete out.startIn
-    return out
-  }
+  const wantsOpenFile = (opts) => opts?.id === 'bento-doc'
 
   window.showSaveFilePicker = async (opts = {}) => {
-    const suggestedName = opts.suggestedName
-    if (!wantsOpenFile(suggestedName)) {
+    if (!wantsOpenFile(opts)) {
       if (native) return native(forNative(opts))
       throw new DOMException('No file picker available', 'AbortError')
     }

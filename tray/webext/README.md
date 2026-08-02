@@ -11,8 +11,9 @@ saved with **no dialog**. The file went 676,840 → 898,981 bytes with the
 and no literal script-close in the block — so the splice contract survived the
 write.
 
-**Still unverified, and it is the dangerous one:** whether the export paths
-still prompt. See "What is unverified".
+Then two bugs were found and fixed — see "What is unverified". The override now
+keys on the picker `id` that #213 added to `save.ts` for this purpose, rather
+than guessing from the file name. **Needs re-testing** against all three paths.
 
 ## Why an extension and not a web page
 
