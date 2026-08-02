@@ -932,7 +932,15 @@ else. There are 39 `localStorage` call sites across `kernel/src` and
 
 **That is bounded and mechanical, not architectural.** A guarded accessor
 (returns null / no-ops when storage throws) would let a document boot in an
-opaque origin. Worth doing on its own merits regardless of home: the same
+opaque origin.
+
+> **RESOLVED, same day (#205, `c1e8902`).** `kernel/src/storage.ts` now guards
+> every one of those call sites, and the table above is out of date in its last
+> row: the built shell boots in an opaque origin with **17 slides and 19
+> surfaces, identical to the unsandboxed control, zero errors**. Do not re-run
+> the sandbox probe expecting a failure — it passes now. What the table still
+> reports correctly is the *storage* rows: `localStorage`, `indexedDB.open` and
+> `caches` all throw there, and always will. Worth doing on its own merits regardless of home: the same
 unguarded reads mean a deck opened with cookies-and-site-data blocked, or in
 some embedded webviews, shows "this file could not start" rather than working
 with default preferences.
