@@ -4,8 +4,15 @@ A browser host for Bento documents. Grant your decks folder once; after that a
 deck you opened by **double-clicking** saves back to its own file with no
 destination prompt.
 
-Status: **scaffold — loadable, not yet driven end to end.** See "What is
-unverified" before trusting any of it.
+Status: **the save path works.** Driven end to end on Chrome 150 / macOS,
+2026-08-02: extension loaded unpacked, folder granted, a double-clicked deck
+saved with **no dialog**. The file went 676,840 → 898,981 bytes with the
+`#bento-doc` block present and parsing (17 slides), script tags balanced 5/5,
+and no literal script-close in the block — so the splice contract survived the
+write.
+
+**Still unverified, and it is the dangerous one:** whether the export paths
+still prompt. See "What is unverified".
 
 ## Why an extension and not a web page
 
@@ -110,18 +117,25 @@ from a page, and permission-gated behaviour reports `denied` under automation
 (`working/home-design.md` §3.2, a trap that already produced two wrong
 conclusions).
 
-1. **Can an MV3 service worker `createWritable()` on a stored directory handle?**
-   If not, the write moves to an offscreen document. Kept as one call in
-   `background.js` `write()` so the answer changes that function and nothing
-   else.
-2. **Do MAIN-world content scripts run before the deck's runtime** on a
-   `file://` page at `document_start`? The override must be installed before
-   `save.ts` reads `window.showSaveFilePicker`.
-3. **Does the user actually have file-URL access?** Chrome requires "Allow
-   access to file URLs" to be enabled by hand, per extension. Without it the
-   content scripts never run and the deck behaves exactly as it does today.
-4. The `suggestedName === current file` heuristic against every real save path —
-   ⌘S, autosave write-back, self-update, and each export.
+~~1. Can an MV3 service worker `createWritable()` on a stored directory
+handle?~~ **YES** — measured 2026-08-02. No offscreen document needed.
+
+~~2. Do MAIN-world content scripts run before the deck's runtime?~~ **YES** —
+the override was in place before `save.ts` read it.
+
+~~3. Does file-URL access work?~~ **YES**, with the per-extension toggle enabled
+by hand.
+
+4. **THE EXPORT PATHS — untested, and the failure mode is destructive.** The
+   override fires only when `suggestedName` is the file on screen. If that
+   comparison is wrong in the other direction, "Save a copy…", presentation
+   packages, read-only copies, templates and invites would **silently overwrite
+   the open deck** instead of creating a new file: no dialog, no warning,
+   original gone. `save.ts` passes `suffix` for those and `openedName` is
+   nulled when a suffix is present, so it *should* decline — but "should" is
+   what the first three probes in this arc each disproved.
+
+5. Autosave write-back and self-update, which route through the same function.
 
 ## Not this
 
