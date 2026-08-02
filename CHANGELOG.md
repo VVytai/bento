@@ -11,14 +11,25 @@ pre-1.0.
 
 ## [Unreleased]
 
-- **Fix: Fade, slide, and zoom transitions animate again.** Present mode now keeps
-  the adjacent slides mounted while moving between them; morph transitions
-  were unaffected.
+## [1.0.13] — 2026-08-02
 
-- **Copy and paste keeps embedded typefaces intact.** Pasting elements or
-  slides into another deck now carries the fonts they actually use — and only
-  those — remapping a colliding font asset without replacing the recipient's
-  bytes, so the pasted text keeps its face immediately.
+- **Fix: fade, slide and zoom transitions animate again.** They had been
+  instant cuts. Reveal only mounts slides within `viewDistance`, which was set
+  to 1 — so the slide being moved *to* was not in the page, and a CSS
+  transition had nothing to animate into. Morph was unaffected, because that
+  is Bento's own animation rather than Reveal's. Found and fixed by James
+  London.
+
+- **Copy and paste keeps embedded typefaces intact.** Pasting elements into
+  another deck used to lose their embedded font entirely, and pasting slides
+  carried every face in the source deck while omitting the bytes they pointed
+  at. Both now carry exactly the faces in use, and a name collision keeps the
+  recipient's own bytes. Fixed by Kushida.
+
+- **Update notes now cover every version you skipped.** The About dialog
+  described only the newest release, so upgrading across two versions told you
+  nothing about the one in between — and 1.0.12 was barely a day old when this
+  release became necessary. It now spans the releases you missed.
 
 ## [1.0.12] — 2026-08-01
 
