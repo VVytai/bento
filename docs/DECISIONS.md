@@ -1258,3 +1258,37 @@ The library tier — many spaces, searched together — attaches at a named seam
 and is `bento/vault`'s job, which is optional by its own invariants 2 and 3.
 One space needs nothing installed, ever; a library is software you run, on a
 laptop or a 24/7 box or a cluster, the same artifact either way.
+
+## 2026-08-03 — tray/webext ships through the stores; unpacked stays available
+
+Settled with the maintainer. The **app stores are the main distribution
+channel** for `tray/webext` — Chrome Web Store, Edge Add-ons, and the others as
+they come — with the unpacked folder in this repo remaining a supported option
+for people who want it.
+
+Two corrections to earlier reasoning in this thread, both of which had made the
+extension look less viable than it is:
+
+**Developer mode is not required.** It is needed only for "Load unpacked". A
+store-installed extension needs no Developer mode, no unpacked folder and no
+warning banner. An earlier note in this session treated that as an inherent
+cost of the whole approach; it is a cost of one distribution method.
+
+**Store distribution does not conflict with the signed-release model.**
+`docs/RELEASING.md`'s "signed locally, the signed bytes are the served bytes"
+governs the DOCUMENT SHELL and its self-update channel. The extension is not a
+document, carries none, and never touches that path, so a store-distributed
+extension and a locally-signed shell coexist. What a store actually costs is
+review latency and a second release cadence — ordinary, not philosophical.
+
+**What does survive a store listing** is `Allow access to file URLs`: a
+per-extension user toggle, off by default, required for content scripts on
+`file://`. No manifest permission grants it. It is, however, DETECTABLE via
+`chrome.extension.isAllowedFileSchemeAccess()`, so the extension can turn silent
+failure into a guided one-time setup step rather than a mystery. That API's MV3
+behaviour is unverified — measure before building on it.
+
+Consequences already implemented: `permissions` trimmed to `storage` (an unused
+`offscreen` would draw review questions it cannot answer), and content scripts
+narrowed from every `file:///*.html` to `file:///*.bento.html`, which is both
+correct and far easier to justify to a reviewer.

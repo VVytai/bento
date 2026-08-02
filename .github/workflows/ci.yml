@@ -122,6 +122,14 @@ jobs:
         # file carrying a script tag.
         run: node scripts/test-preview.ts
 
+      - name: WebExtension background rig
+        # The half that WRITES, and previously the untested half. Two properties
+        # it must hold: the target file comes from sender.url (browser-stamped)
+        # and never from the page, and nothing is carried between messages,
+        # because an MV3 service worker is evicted mid-save and state across that
+        # gap fails intermittently on nobody's machine but the user's.
+        run: node scripts/test-webext-background.ts
+
       - name: WebExtension bridge rig
         # tray/webext decides, per save, whether to write in place or hand back
         # to the browser's own picker. Wrong in the permissive direction it
