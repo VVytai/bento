@@ -111,7 +111,22 @@ if (existsSync(packIndex)) {
 }
 
 // ---- mirror site/ → dest (authoritative; never touches dest/.git) ----------
+// NEVER DELETE WHAT THIS BUILD DID NOT PRODUCE.
+//
+// The mirror is authoritative, which is right for generated output — but the
+// guestbook DECK is generated only when the gitignored epoch file exists
+// (working/guestbook-live/), and releases are built from a clean checkout of
+// the tag where it never does. Without this exclusion, every such release
+// silently deletes the published deck. That is how the v1.0.12 publish removed
+// the live guestbook from bento-site.
+//
+// The landing page is now written unconditionally (release.mjs), so only the
+// deck needs protecting, and only when this build has none to offer.
 const rsyncFlags = ['-a', '--delete', '--exclude', '.git']
+if (!existsSync(join(site, 'guestbook.bento.html'))) {
+  rsyncFlags.push('--exclude', 'guestbook.bento.html')
+  console.log('• no guestbook deck in this build (no local epoch) — leaving the published one untouched')
+}
 if (dry) rsyncFlags.push('-n', '-v', '--itemize-changes')
 console.log(`• ${dry ? 'DRY-RUN ' : ''}mirroring ${site}/ → ${dest}/`)
 run('rsync', [...rsyncFlags, `${site}/`, `${dest}/`])

@@ -224,7 +224,18 @@ execFileSync('node', [join(root, 'scripts/build-qr-page.mjs'), join(site, 'q/ind
 // loaded as a live, editable template deck.
 execFileSync('node', [join(root, 'scripts/build-announcement-deck.mjs'), join(site, 'hello.bento.html')], { stdio: 'inherit' })
 
-// The Guestbook (U2) — ships only once an epoch has been minted into
+// The guestbook LANDING page is an authored source (site-src/guestbook.html),
+// tracked in this repo, so it ships on every release. It used to be written
+// only inside the `existsSync(guestbook)` branch below, which depends on a
+// GITIGNORED epoch file — so a release built from a clean checkout of the tag
+// (which is what RELEASING.md now tells you to do) produced a site/ with no
+// guestbook/index.html, and publish-site.mjs mirrors with `rsync --delete`.
+// That deleted the live landing page during the v1.0.12 publish. The deck below
+// genuinely needs the epoch; this page never did.
+mkdirSync(join(site, 'guestbook'), { recursive: true })
+cpSync(join(root, 'site-src/guestbook.html'), join(site, 'guestbook/index.html'))
+
+// The Guestbook DECK (U2) — ships only once an epoch has been minted into
 // working/guestbook-live/ (scripts/build-guestbook.mjs). Kill switch:
 // delete that file and re-release.
 const guestbook = join(root, 'working/guestbook-live/guestbook.bento.html')
@@ -243,8 +254,6 @@ if (existsSync(guestbook)) {
   const reshelled = spliceDoc(freshShell, gbDoc)
   writeFileSync(guestbook, reshelled) // keep the working epoch file on the fresh shell too
   cpSync(guestbook, join(site, 'guestbook.bento.html'))
-  mkdirSync(join(site, 'guestbook'), { recursive: true })
-  cpSync(join(root, 'site-src/guestbook.html'), join(site, 'guestbook/index.html'))
   console.log(`guestbook: re-shelled current epoch onto the fresh shell (room ${gbDoc.collab?.room?.split('/').pop() ?? '?'})`)
 } else {
   console.log('guestbook: not armed (working/guestbook-live/ empty) — skipped')
