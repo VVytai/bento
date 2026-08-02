@@ -899,3 +899,53 @@ IndexedDB, so `bento-autosave`, version history, `bento-member-<docId>`,
 language choice and reduce-motion all fail or degrade. Whether the runtime
 survives that gracefully, and whether the degradation is acceptable, decides
 whether home can open documents at all.
+
+## 2026-08-02 — MEASURED: an opaque origin is blocked by unguarded storage, not by incapability
+
+Third measurement in the bento/home sequence (`home/probe/sandbox.html`, Chrome
+150, macOS). Same deck loaded twice from a blob: once in a plain iframe, once in
+`<iframe sandbox="allow-scripts">` with no `allow-same-origin`, so the second
+gets an opaque origin. The control is what makes the result readable — it
+separates what the sandbox breaks from what breaks anyway.
+
+| capability | control | sandboxed (opaque) |
+|---|---|---|
+| `localStorage` read/write | ok | **SecurityError** — sandboxed, lacks `allow-same-origin` |
+| `indexedDB` present | object | object |
+| `indexedDB.open` | ok | **SecurityError** — access denied in this context |
+| `caches` | object | **SecurityError** |
+| `crypto.randomUUID` / `subtle` | ok | **ok** — secure context survives |
+| app boot | ✓ 17 slides | ✗ nothing |
+
+**The interesting part is the failure mode.** Nothing reached `window.onerror`
+and no promise rejected, so from outside it looked like a silent death. The
+shell's own loader had caught it and printed to the page:
+
+> This file could not start: Failed to read the 'localStorage' property from
+> 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag.
+
+So the runtime does not fail because it NEEDS storage. It fails on the first
+unguarded `localStorage` touch during boot — `kernel/src/i18n.ts` `resolve()`
+reading `bento-lang`, which runs at module scope and therefore before anything
+else. There are 39 `localStorage` call sites across `kernel/src` and
+`slides/src` and no safe accessor.
+
+**That is bounded and mechanical, not architectural.** A guarded accessor
+(returns null / no-ops when storage throws) would let a document boot in an
+opaque origin. Worth doing on its own merits regardless of home: the same
+unguarded reads mean a deck opened with cookies-and-site-data blocked, or in
+some embedded webviews, shows "this file could not start" rather than working
+with default preferences.
+
+**What it does NOT fix**, and this is the actual product decision: an opaque
+origin has no persistent storage at all, so a document hosted this way loses
+auto-save and crash recovery, local version history, and its collab member
+identity (`bento-member-<docId>` is re-minted per session). Whether a launcher
+may open documents that quietly cannot autosave is a question about what Bento
+promises, not about what the browser permits.
+
+Sequence so far: handles cannot be delegated across origins (entry above), so
+the only isolation left is an opaque-origin frame with home proxying saves; an
+opaque-origin frame is reachable once storage access is guarded; and what
+remains is deciding whether a document with no persistence is one we are willing
+to serve. Not settled here.

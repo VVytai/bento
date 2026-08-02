@@ -35,3 +35,6 @@ scripts/.cache/
 # rename must not be able to unignore them again.
 **/*.xcodeproj/
 **/Resources/starter.bento.html
+
+# probe fixture, fetched not committed
+home/probe/sample.bento.html
