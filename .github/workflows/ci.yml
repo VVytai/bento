@@ -122,6 +122,14 @@ jobs:
         # file carrying a script tag.
         run: node scripts/test-preview.ts
 
+      - name: WebExtension bridge rig
+        # tray/webext decides, per save, whether to write in place or hand back
+        # to the browser's own picker. Wrong in the permissive direction it
+        # overwrites the open document with no dialog — which it did once. The
+        # decision is pure logic over an options bag, so it is checkable here
+        # rather than by reloading an extension and pressing Cmd-S.
+        run: node scripts/test-webext-bridge.ts
+
       - name: Save-intent rig
         # A host polyfilling showSaveFilePicker sees only the options bag, and
         # must tell "overwrite the open document" from "make a second file" from

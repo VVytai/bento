@@ -190,7 +190,7 @@ brew install xcodegen
 cd tray/ios && xcodegen && open BentoTray.xcodeproj
 ```
 
-Source lives under `tray/<platform>/` — `tray/ios/` today. The design below
+Source lives under `tray/<platform>/` — `tray/ios/` and `tray/webext/` today. The design below
 (the polyfill and its protocol) is platform-neutral; only the transport lookup
 and the native file layer are not.
 

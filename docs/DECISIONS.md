@@ -931,7 +931,7 @@ Follow-up to the entry above, which ruled that bento/home must run documents in
 a per-document origin. **That is not reachable, and the measurement says so
 unambiguously.**
 
-`home/probe/` (run it with `node scripts/probe-origins.mjs`) picks a file on one
+`tray/webext/probe/` (run it with `node scripts/probe-origins.mjs`) picks a file on one
 origin, grants write access there, and `postMessage`s the handle to another
 origin. Chrome 150, macOS, 2026-08-02:
 
@@ -987,7 +987,7 @@ whether home can open documents at all.
 
 ## 2026-08-02 — MEASURED: an opaque origin is blocked by unguarded storage, not by incapability
 
-Third measurement in the bento/home sequence (`home/probe/sandbox.html`, Chrome
+Third measurement in the bento/home sequence (`tray/webext/probe/sandbox.html`, Chrome
 150, macOS). Same deck loaded twice from a blob: once in a plain iframe, once in
 `<iframe sandbox="allow-scripts">` with no `allow-same-origin`, so the second
 gets an opaque origin. The control is what makes the result readable — it
@@ -1062,7 +1062,7 @@ keys) pool into a store any document can read. Rejected.
 A launcher that can list decks but not open them is not worth building.
 
 **MEASURED, and it is the unlock** (Chrome 150, macOS,
-`home/probe/directory.html`): a DIRECTORY grant is not per-file.
+`tray/webext/probe/directory.html`): a DIRECTORY grant is not per-file.
 
 ```
 GRANTED  <folder>                       queryPermission: granted
@@ -1109,7 +1109,7 @@ whether the write must happen in an offscreen document or extension page. Keep
 the write behind one function so the answer can move without touching the
 contract.
 
-**Kept from home:** `home/probe/` (four probes, all reusable) and
+**Kept from home:** `tray/webext/probe/` (four probes, all reusable) and
 `home/src/deckmeta.ts`, which reads a deck's title without executing it — the
 extension needs exactly that to label what it is about to save. The launcher UI
 and the recents store are superseded by the directory grant.
