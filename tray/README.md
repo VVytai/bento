@@ -41,9 +41,27 @@ as any page a browser renders.
 window.showSaveFilePicker === 'function'`, and needs only
 
 ```
-showSaveFilePicker({suggestedName}) -> { name, createWritable() }
+showSaveFilePicker({suggestedName, id}) -> { name, createWritable() }
 createWritable() -> { write(Blob|string), close() }
 ```
+
+`id` tells a host WHAT IT IS BEING ASKED TO DO, and a host that ignores it can
+destroy a file:
+
+| `id` | meaning | a host may |
+|---|---|---|
+| `bento-doc` | ⌘S — overwrite the document being edited | write in place, silently |
+| `bento-copy` | "Save a copy…" — a second file the author chooses | **must** let the author choose |
+| `bento-share` | a suffixed export: view-only, presentation package, invite, template | **must** let the author choose |
+
+Before this existed, ⌘S and "Save a copy…" reached the picker with
+byte-identical arguments, so a host could not distinguish them. One that guessed
+"in-place" overwrote the open deck with no dialog and no warning — measured in a
+browser extension, 2026-08-02. The two failure directions are not symmetric:
+guessing `copy` costs a prompt, guessing `in-place` costs the file. **When in
+doubt, prompt.**
+
+Pinned by `scripts/test-savepurpose.ts`.
 
 So `Resources/bridge.js` polyfills that over a `UIDocument` bridge — three
 methods. Two consequences:

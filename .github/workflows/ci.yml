@@ -122,6 +122,14 @@ jobs:
         # file carrying a script tag.
         run: node scripts/test-preview.ts
 
+      - name: Save-intent rig
+        # A host polyfilling showSaveFilePicker sees only the options bag, and
+        # must tell "overwrite the open document" from "make a second file" from
+        # that alone. It could not, and a browser extension overwrote a deck.
+        # `id` is the signal; if the three purposes ever collapse to one value
+        # every host silently loses the distinction.
+        run: node scripts/test-savepurpose.ts
+
       - name: Guarded storage rig
         # localStorage's absence is hostile: reading the PROPERTY throws, so
         # `if (localStorage)` is itself the crash and one bare read at module

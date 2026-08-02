@@ -11,6 +11,16 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **"Save a copy…" and share exports remember their own folder.** The save
+  picker used one identity for every kind of save, so it opened wherever you
+  last put a view-only copy even when you were saving your working file.
+  In-place saves, copies and share exports now each remember their own last
+  location.
+
+  Underneath, this makes the *intent* of a save visible to anything hosting
+  Bento — `tray/ios`, and browser hosts — which previously could not tell ⌘S
+  from "Save a copy…" at all, because both arrived with identical arguments.
+
 - **Fix: the topbar came back in the wrong order after the window narrowed and
   widened again.** Below 700px the bar folds its buttons into two menus, and
   unfolding put them back by a rule rather than by memory — everything except
