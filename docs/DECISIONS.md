@@ -807,3 +807,270 @@ This is the first half of the multi-app release work
 (`working/spaces-design.md` §6.1); per-app assembly — build one app, restore
 the others byte-identically from the published tree — is the second, and
 spaces cannot be released until both exist.
+
+## 2026-08-02 — bento/home runs documents in a per-document origin, or not at all
+
+`bento/home` is a launcher (`home/`, `working/home-design.md`): it holds no
+document content, only `FileSystemFileHandle`s in IndexedDB, so a deck you were
+working on reopens with write access after one permission click. That part is
+measured and built. **How a document is actually OPENED is the hard part, and
+this entry records why the obvious answers are wrong.**
+
+**The constraint.** Opening a deck with silent save means running that file's
+own code somewhere AND getting the handle to it. A blob URL inherits the
+creating page's origin, so `window.open(URL.createObjectURL(file))` runs the
+document on *home's* origin — with full access to home's store of writable
+handles to every other deck. A file someone emailed you could rewrite all of
+them. That is a real escalation over double-clicking it, where the file gets an
+opaque origin and reaches nothing.
+
+**A shared runner origin (`run.bento.page`) was considered and REJECTED.** It
+fixes the wrong half. Documents could no longer read home's handles, but they
+would all share one origin with each other, and a Bento document persists:
+
+- `bento-autosave` IndexedDB — `recovery` (PLAINTEXT doc JSON, keyed by docId)
+  and `versions` (a timeline of the same)
+- `localStorage` `bento-member-<docId>` — the device's collab member PRIVATE KEY
+
+So one runner origin creates a pooled store, which does not exist today, holding
+the full plaintext content and version history of every document opened through
+it plus the keys that authorise writing to their collab rooms. Any document on
+that origin can read all of it. This is the same conclusion the 2026-07-24 tray
+entry reached from the other direction ("a shared origin would let one document
+read another's localStorage and IndexedDB"), and it is not a coincidence: it is
+the same threat with a different host.
+
+**`file_handlers` + `launchQueue` is NOT an isolation approach.** It delivers a
+double-clicked file to the *installed PWA* — home's own origin. It answers "how
+does the OS reach us", not "where does the document execute". It composes with
+per-document isolation; it does not substitute for it.
+
+**Ruled: per-document origin, or home does not open documents.** Home may
+acquire a handle any way it can (picker, drop, `launchQueue` when installed) and
+must hand off to an origin derived from the document's identity. Until that
+exists, `home/src/launch.ts` REFUSES and says so in the UI, rather than quietly
+taking the blob route. A launcher that silently widened the blast radius of
+every deck you open would be worse than one that does not open them yet.
+
+Also considered: a shared runner with storage deliberately neutered (no
+autosave, no member keys, `Clear-Site-Data` per load). It removes the pool by
+breaking recovery, version history and collab identity, and stays safe only for
+as long as every future feature remembers not to persist anything. Per-document
+origins get the same property structurally. Not adopted.
+
+**Hosting consequence, measured 2026-08-02.** `bento.page` is GitHub Pages
+behind Cloudflare (`x-github-request-id` on the apex); `sync.bento.page` is
+Cloudflare-only. GitHub Pages serves one custom domain per repo and no
+wildcards, so per-document origins cannot be hosted the way the rest of the site
+is — the runner belongs on Cloudflare beside the relay, with its own deploy
+cadence and the deploy-order care that implies (`docs/PLATFORM.md` §5).
+
+**To confirm before building** (none of it testable in an automated browser —
+permission-gated APIs report `denied` there without prompting,
+`working/home-design.md` §3.2, a trap that already produced two wrong
+conclusions):
+
+1. Does a `FileSystemFileHandle` survive a cross-origin `postMessage` and stay
+   usable? Permissions are per-origin, so the receiving origin re-prompting once
+   is expected and acceptable; being unusable is not, and would sink this shape.
+2. Cloudflare Universal SSL covers one label (`x.bento.page`), not two
+   (`x.run.bento.page`). If so, a single hyphenated label — `<hash>-run.bento.page`
+   — avoids paying for Advanced Certificate Manager. Worth checking before
+   committing to a naming scheme, because it is baked into every stored origin.
+
+**Naming.** `run`, not `slides` or `deck`. The runner never parses the format —
+it executes a self-contained file that may be slides, spaces or sheets. An
+app-named origin would isolate nothing extra (every deck would still share an
+origin with every other deck) and app names should stay free for the apps' own
+pages. The precedent is `sync.bento.page`: a subdomain marks a TRUST BOUNDARY,
+not a product. An origin that executes files strangers sent your users is the
+last one that should share a name with anything you want trusted.
+
+## 2026-08-02 — MEASURED: a file handle cannot be delegated across origins
+
+Follow-up to the entry above, which ruled that bento/home must run documents in
+a per-document origin. **That is not reachable, and the measurement says so
+unambiguously.**
+
+`home/probe/` (run it with `node scripts/probe-origins.mjs`) picks a file on one
+origin, grants write access there, and `postMessage`s the handle to another
+origin. Chrome 150, macOS, 2026-08-02:
+
+```
+SENT     control ping → http://localhost:5302
+SENT     handle       → http://localhost:5302
+  [runner] CONTROL  plain object arrived — the channel works.
+  [runner] MESSAGEERROR — a message arrived but could not be deserialised
+```
+
+The control object lands; the handle does not. `postMessage` **succeeds on the
+sending side** — the handle serialises fine — and the receiving origin fires
+`messageerror` instead of `message`, meaning deserialisation was refused. This
+is why the first run of the probe looked like silence: nothing was listening for
+`messageerror`, and a refusal is indistinguishable from a lost message without
+it.
+
+**The consequence is larger than "option B needs a different transport".** The
+origin that acquires a handle is the only origin that can ever use it. So:
+
+- Home cannot be a broker. It cannot hold handles for an isolated runner.
+- Per-document origins cannot be reached the other way either, by having the
+  document's own origin do the picking: the origin name depends on which
+  document it is, and you cannot know that before reading the file, and you
+  cannot move the handle after. The circularity is not incidental.
+
+**What that leaves**, none free:
+
+1. **Home and documents share one origin.** Rejected in the entry above and the
+   reasons are unchanged: `bento-autosave` (plaintext doc JSON, version
+   history) and `bento-member-<docId>` (collab private keys) pool into one
+   store any document can read.
+2. **Home never opens documents** — a drop target and a list, with opening left
+   to the OS. Safe, and much less useful.
+3. **Sandboxed iframe + save proxy.** Run the document in
+   `<iframe sandbox="allow-scripts">` WITHOUT `allow-same-origin`, so it gets an
+   opaque origin and can reach no storage at all — not home's, not another
+   document's. Home keeps the handle and performs the write itself, with the
+   document asking through a postMessage protocol.
+
+Option 3 is the tray shape, and tray already proves the protocol half:
+`tray/bridge.js` polyfills `showSaveFilePicker`, so `save.ts` needs no
+host-specific code and the app does not know it is hosted. Reusing that contract
+rather than inventing a second one is the point of the 2026-08-01 entry on
+`tray/android/`.
+
+**To measure before committing to option 3** (again: not testable in an
+automated browser): an opaque-origin document has NO localStorage and NO
+IndexedDB, so `bento-autosave`, version history, `bento-member-<docId>`,
+language choice and reduce-motion all fail or degrade. Whether the runtime
+survives that gracefully, and whether the degradation is acceptable, decides
+whether home can open documents at all.
+
+## 2026-08-02 — MEASURED: an opaque origin is blocked by unguarded storage, not by incapability
+
+Third measurement in the bento/home sequence (`home/probe/sandbox.html`, Chrome
+150, macOS). Same deck loaded twice from a blob: once in a plain iframe, once in
+`<iframe sandbox="allow-scripts">` with no `allow-same-origin`, so the second
+gets an opaque origin. The control is what makes the result readable — it
+separates what the sandbox breaks from what breaks anyway.
+
+| capability | control | sandboxed (opaque) |
+|---|---|---|
+| `localStorage` read/write | ok | **SecurityError** — sandboxed, lacks `allow-same-origin` |
+| `indexedDB` present | object | object |
+| `indexedDB.open` | ok | **SecurityError** — access denied in this context |
+| `caches` | object | **SecurityError** |
+| `crypto.randomUUID` / `subtle` | ok | **ok** — secure context survives |
+| app boot | ✓ 17 slides | ✗ nothing |
+
+**The interesting part is the failure mode.** Nothing reached `window.onerror`
+and no promise rejected, so from outside it looked like a silent death. The
+shell's own loader had caught it and printed to the page:
+
+> This file could not start: Failed to read the 'localStorage' property from
+> 'Window': The document is sandboxed and lacks the 'allow-same-origin' flag.
+
+So the runtime does not fail because it NEEDS storage. It fails on the first
+unguarded `localStorage` touch during boot — `kernel/src/i18n.ts` `resolve()`
+reading `bento-lang`, which runs at module scope and therefore before anything
+else. There are 39 `localStorage` call sites across `kernel/src` and
+`slides/src` and no safe accessor.
+
+**That is bounded and mechanical, not architectural.** A guarded accessor
+(returns null / no-ops when storage throws) would let a document boot in an
+opaque origin.
+
+> **RESOLVED, same day (#205, `c1e8902`).** `kernel/src/storage.ts` now guards
+> every one of those call sites, and the table above is out of date in its last
+> row: the built shell boots in an opaque origin with **17 slides and 19
+> surfaces, identical to the unsandboxed control, zero errors**. Do not re-run
+> the sandbox probe expecting a failure — it passes now. What the table still
+> reports correctly is the *storage* rows: `localStorage`, `indexedDB.open` and
+> `caches` all throw there, and always will. Worth doing on its own merits regardless of home: the same
+unguarded reads mean a deck opened with cookies-and-site-data blocked, or in
+some embedded webviews, shows "this file could not start" rather than working
+with default preferences.
+
+**What it does NOT fix**, and this is the actual product decision: an opaque
+origin has no persistent storage at all, so a document hosted this way loses
+auto-save and crash recovery, local version history, and its collab member
+identity (`bento-member-<docId>` is re-minted per session). Whether a launcher
+may open documents that quietly cannot autosave is a question about what Bento
+promises, not about what the browser permits.
+
+Sequence so far: handles cannot be delegated across origins (entry above), so
+the only isolation left is an opaque-origin frame with home proxying saves; an
+opaque-origin frame is reachable once storage access is guarded; and what
+remains is deciding whether a document with no persistence is one we are willing
+to serve. Not settled here.
+
+## 2026-08-02 — bento/home is closed; the host is a WebExtension (`tray/webext/`)
+
+Home was a web page that would remember your decks and reopen them with write
+access. Three measurements in one session closed it, and the same three point at
+the successor.
+
+**What killed it.** A `FileSystemFileHandle` cannot be delegated across origins
+(entry above): `postMessage` serialises it and the receiving origin fires
+`messageerror`. So the origin that ACQUIRES a handle is the only origin that can
+use it — home cannot be a broker. Per-document origins are unreachable from the
+other side too, because the origin name depends on which document it is, which
+is unknowable before reading the file, and the handle cannot move after. What
+remained was: run every document on one shared origin, where `bento-autosave`
+(plaintext doc JSON, version history) and `bento-member-<docId>` (collab private
+keys) pool into a store any document can read. Rejected.
+
+A launcher that can list decks but not open them is not worth building.
+
+**MEASURED, and it is the unlock** (Chrome 150, macOS,
+`home/probe/directory.html`): a DIRECTORY grant is not per-file.
+
+```
+GRANTED  <folder>                       queryPermission: granted
+  ── reload ──
+RESTORED <folder>  kind=directory       queryPermission, no gesture: granted
+[file 1] getFileHandle('bento-probe.txt', {create:true})
+[file 1] the FILE's permission, unprompted: granted   ← never picked
+[file 2] the FILE's permission, unprompted: granted
+```
+
+One folder grant survived a reload — still `granted` with no gesture, and
+re-grantable with one click when it does lapse — and covered files inside it
+that were never picked. So a host holding a directory handle can write ANY deck
+in that folder, including one the user opened by double-clicking, which no web
+page can do for itself.
+
+**The shape.** The document stays on `file://`, which the browser treats as a
+unique origin per file — per-document isolation for free, the thing three probes
+failed to construct. A content script is the bridge transport; the extension
+holds the directory handle and performs the write.
+
+That is `tray`, in a browser. `tray/README.md`'s contract —
+`showSaveFilePicker({suggestedName}) → { name, createWritable() }` — is
+explicitly "platform-neutral; only the transport lookup and the native file
+layer are not". `save.ts` needs no host-specific code and the app never learns
+it is hosted.
+
+**`tray/webext/`, not `tray/chrome/`.** Chrome, Edge, Firefox and Safari
+extensions are one format with different manifests, so a browser name would be
+wrong at the second target. Same reasoning as the `tray/android` entry: sharing
+the name makes sharing the bridge contract the default rather than a convention
+someone must remember. Note it is a PARTIAL tray — it supplies the file layer
+and the transport, not the document browser or thumbnails `tray/ios` provides.
+
+**Firefox gets nothing from this.** It implements no File System Access API at
+all, and its extensions cannot write arbitrary files either; that needs native
+messaging with a native helper. Firefox stays download-a-copy. Safari likewise
+has no FSA, and a Safari Web Extension ships inside a native macOS app anyway —
+so Safari's answer is `tray/macos`, not an extension.
+
+**Still unverified, and the next thing to measure:** whether an MV3 service
+worker can use a stored directory handle to `createWritable()` at all, or
+whether the write must happen in an offscreen document or extension page. Keep
+the write behind one function so the answer can move without touching the
+contract.
+
+**Kept from home:** `home/probe/` (four probes, all reusable) and
+`home/src/deckmeta.ts`, which reads a deck's title without executing it — the
+extension needs exactly that to label what it is about to save. The launcher UI
+and the recents store are superseded by the directory grant.
