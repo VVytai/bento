@@ -58,8 +58,25 @@
    * would write to a place nobody asked for. Those go to the native picker.
    */
   const wantsOpenFile = (suggestedName) => {
-    const here = decodeURIComponent(location.pathname.split('/').pop() || '')
-    return !!suggestedName && !!here && suggestedName === here
+    // DISABLED — this cannot be decided from here, and getting it wrong
+    // destroys a file. MEASURED 2026-08-02: "Save a copy…" overwrote the open
+    // deck, because `saveFile(doc, forcePicker)` reaches the SAME call for both
+    // intents:
+    //
+    //     plain ⌘S       → this.save(false) → saveFile(doc, false) → pickHandle(doc)
+    //     Save a copy…   → this.save(true)  → saveFile(doc, true)  → pickHandle(doc)
+    //
+    // Same suggestedName, same id, same options. The arguments carry no signal,
+    // so no heuristic here can tell "save my work" from "save me a second
+    // copy" — and the failure is silent and unrecoverable: no dialog, no
+    // warning, the original gone.
+    //
+    // Re-enable only once save.ts makes the intent explicit (a distinct picker
+    // `id`, or an equivalent hint). Until then every save falls through to the
+    // native picker, which is exactly what happens with the extension
+    // uninstalled — no worse, and nothing lost.
+    void suggestedName
+    return false
   }
 
   window.showSaveFilePicker = async (opts = {}) => {
