@@ -83,29 +83,63 @@ document gets its own origin `bento-tray://<sha256 of path>`, *"because a
 shared origin would let one document read another's localStorage and
 IndexedDB"*. Home must not undo that ruling in a browser.
 
-The candidates, none settled:
+### Why one shared runner origin is not enough
 
-| | isolation | cost | unknown |
-|---|---|---|---|
-| **A** one runner origin (`run.bento.page`) | documents cannot read home's store; they share an origin with each other | one subdomain | does a handle survive a cross-origin `postMessage` usefully? |
-| **B** per-document origin (`<hash>.run.bento.page`) | matches tray exactly | wildcard DNS + cert | same, plus operational |
-| **C** `file_handlers` + `launchQueue` | installed PWA only | install required | different grant path; needs its own test |
+The tempting fix is a single `run.bento.page` that executes every document.
+It solves the wrong half. Documents could no longer read home's handles, but
+they would all share an origin **with each other** — and a Bento document
+persists real things:
 
-**On the name.** `run`, not `slides` or `deck`. The runner never parses the
-format — it takes a handle, reads bytes and executes a self-contained file,
-which may be `bento/slides`, `bento/spaces` or `bento/sheets`. An app-named
-origin would mean either several identical runners or a name that lies as soon
-as the second app ships.
+| store | contents |
+|---|---|
+| `bento-autosave` IndexedDB → `recovery` | **plaintext doc JSON**, keyed by `docId` |
+| `bento-autosave` IndexedDB → `versions` | a timeline of the same |
+| `localStorage` `bento-member-<docId>` | the device's **collab member private key** |
 
-It would also isolate nothing useful. The exposure is one document reading
-another's stored data and handles, and a per-*app* origin still leaves every
-deck sharing one origin with every other deck. The axis that matters is
-per-document (B), which is what tray already does.
+One runner origin therefore creates a pooled store — which does not exist today
+— holding the full content and version history of every document opened through
+it, plus the keys that authorise writing to their collaboration rooms. Any
+document on that origin can read all of it.
 
-And app-named subdomains should stay free for the apps' own pages. The existing
-precedent is `sync.bento.page` — the relay — so a subdomain here marks a **trust
-boundary**, not a product. An origin that executes files strangers sent your
-users is the last one that should share a name with anything you want trusted.
+### Ruled: per-document origin, or home does not open documents
+
+`docs/DECISIONS.md` (2026-08-02). Home may **acquire** a handle any way it can,
+and must **hand off** to an origin derived from the document's identity:
+
+| mechanism | what it is | role |
+|---|---|---|
+| picker / drop | shipped, working | acquisition |
+| `file_handlers` + `launchQueue` | installed PWA only; the sole route that fixes double-click | acquisition — it delivers to *home's* origin, so it is not isolation |
+| **per-document origin** (`<hash>-run.bento.page`) | matches what tray already does | **the isolation** |
+
+Also considered and not adopted: a shared runner with storage neutered (no
+autosave, no member keys, `Clear-Site-Data` per load). It removes the pool by
+breaking recovery, version history and collab identity, and stays safe only as
+long as every future feature remembers not to persist anything. Per-document
+origins get the same property structurally.
+
+**Hosting.** `bento.page` is GitHub Pages behind Cloudflare; `sync.bento.page`
+is Cloudflare-only. Pages serves one custom domain per repo and no wildcards, so
+the runner belongs on Cloudflare beside the relay — with its own deploy cadence,
+and the deploy-order care that implies.
+
+**On the name.** `run`, not `slides` or `deck`: the runner never parses the
+format, and executes a file that may be slides, spaces or sheets. An app-named
+origin would isolate nothing extra and app names should stay free for the apps'
+own pages. The precedent is `sync.bento.page` — a subdomain marks a **trust
+boundary**, not a product.
+
+### Before building the runner
+
+Neither is testable in an automated browser (see above):
+
+1. Does a `FileSystemFileHandle` survive a cross-origin `postMessage` and stay
+   usable? A re-prompt on the receiving origin is expected and fine; being
+   unusable would sink this shape entirely.
+2. Cloudflare Universal SSL covers one label (`x.bento.page`) but not two
+   (`x.run.bento.page`). If that holds, a single hyphenated label —
+   `<hash>-run.bento.page` — avoids Advanced Certificate Manager. Worth settling
+   first: it is baked into every stored origin.
 
 C is the only mechanism that fixes double-click, and it composes with A or B
 rather than replacing them.

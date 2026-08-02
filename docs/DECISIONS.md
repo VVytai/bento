@@ -761,3 +761,81 @@ motion, so `fx.enter` and `fx.countUp` are both skipped. With no partner it is
 new to the slide, has no tween to fight, and both run. Do not "simplify" this
 back into a blanket morph-vs-entrance branch; that blanket rule is what made
 count-ups silently dead and `slide-left` silently mean "rise 14px".
+
+## 2026-08-02 — bento/home runs documents in a per-document origin, or not at all
+
+`bento/home` is a launcher (`home/`, `working/home-design.md`): it holds no
+document content, only `FileSystemFileHandle`s in IndexedDB, so a deck you were
+working on reopens with write access after one permission click. That part is
+measured and built. **How a document is actually OPENED is the hard part, and
+this entry records why the obvious answers are wrong.**
+
+**The constraint.** Opening a deck with silent save means running that file's
+own code somewhere AND getting the handle to it. A blob URL inherits the
+creating page's origin, so `window.open(URL.createObjectURL(file))` runs the
+document on *home's* origin — with full access to home's store of writable
+handles to every other deck. A file someone emailed you could rewrite all of
+them. That is a real escalation over double-clicking it, where the file gets an
+opaque origin and reaches nothing.
+
+**A shared runner origin (`run.bento.page`) was considered and REJECTED.** It
+fixes the wrong half. Documents could no longer read home's handles, but they
+would all share one origin with each other, and a Bento document persists:
+
+- `bento-autosave` IndexedDB — `recovery` (PLAINTEXT doc JSON, keyed by docId)
+  and `versions` (a timeline of the same)
+- `localStorage` `bento-member-<docId>` — the device's collab member PRIVATE KEY
+
+So one runner origin creates a pooled store, which does not exist today, holding
+the full plaintext content and version history of every document opened through
+it plus the keys that authorise writing to their collab rooms. Any document on
+that origin can read all of it. This is the same conclusion the 2026-07-24 tray
+entry reached from the other direction ("a shared origin would let one document
+read another's localStorage and IndexedDB"), and it is not a coincidence: it is
+the same threat with a different host.
+
+**`file_handlers` + `launchQueue` is NOT an isolation approach.** It delivers a
+double-clicked file to the *installed PWA* — home's own origin. It answers "how
+does the OS reach us", not "where does the document execute". It composes with
+per-document isolation; it does not substitute for it.
+
+**Ruled: per-document origin, or home does not open documents.** Home may
+acquire a handle any way it can (picker, drop, `launchQueue` when installed) and
+must hand off to an origin derived from the document's identity. Until that
+exists, `home/src/launch.ts` REFUSES and says so in the UI, rather than quietly
+taking the blob route. A launcher that silently widened the blast radius of
+every deck you open would be worse than one that does not open them yet.
+
+Also considered: a shared runner with storage deliberately neutered (no
+autosave, no member keys, `Clear-Site-Data` per load). It removes the pool by
+breaking recovery, version history and collab identity, and stays safe only for
+as long as every future feature remembers not to persist anything. Per-document
+origins get the same property structurally. Not adopted.
+
+**Hosting consequence, measured 2026-08-02.** `bento.page` is GitHub Pages
+behind Cloudflare (`x-github-request-id` on the apex); `sync.bento.page` is
+Cloudflare-only. GitHub Pages serves one custom domain per repo and no
+wildcards, so per-document origins cannot be hosted the way the rest of the site
+is — the runner belongs on Cloudflare beside the relay, with its own deploy
+cadence and the deploy-order care that implies (`docs/PLATFORM.md` §5).
+
+**To confirm before building** (none of it testable in an automated browser —
+permission-gated APIs report `denied` there without prompting,
+`working/home-design.md` §3.2, a trap that already produced two wrong
+conclusions):
+
+1. Does a `FileSystemFileHandle` survive a cross-origin `postMessage` and stay
+   usable? Permissions are per-origin, so the receiving origin re-prompting once
+   is expected and acceptable; being unusable is not, and would sink this shape.
+2. Cloudflare Universal SSL covers one label (`x.bento.page`), not two
+   (`x.run.bento.page`). If so, a single hyphenated label — `<hash>-run.bento.page`
+   — avoids paying for Advanced Certificate Manager. Worth checking before
+   committing to a naming scheme, because it is baked into every stored origin.
+
+**Naming.** `run`, not `slides` or `deck`. The runner never parses the format —
+it executes a self-contained file that may be slides, spaces or sheets. An
+app-named origin would isolate nothing extra (every deck would still share an
+origin with every other deck) and app names should stay free for the apps' own
+pages. The precedent is `sync.bento.page`: a subdomain marks a TRUST BOUNDARY,
+not a product. An origin that executes files strangers sent your users is the
+last one that should share a name with anything you want trusted.

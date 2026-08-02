@@ -21,34 +21,38 @@
 // document read another's localStorage and IndexedDB". Home must not undo that
 // ruling in a browser.
 //
-// THE CANDIDATE MECHANISMS, none of which can be settled from here:
+// A SINGLE SHARED RUNNER ORIGIN DOES NOT FIX IT (considered, rejected —
+// docs/DECISIONS.md 2026-08-02). It stops documents reading home's handles, but
+// they would then share an origin with EACH OTHER, and a Bento document
+// persists `bento-autosave` (recovery = plaintext doc JSON keyed by docId, plus
+// a versions timeline) and `localStorage` `bento-member-<docId>` (the device's
+// collab member private key). One runner origin pools all of that — content,
+// history and collab keys for every document ever opened through it — into a
+// store any one of them can read. That pool does not exist today.
 //
-//   A. Separate runner origin (e.g. `run.bento.page`). Home postMessages the
-//      handle to a window there. Documents cannot read home's store. UNKNOWN:
-//      whether a handle survives a cross-origin postMessage usefully, and
-//      whether the receiving origin can `requestPermission` on it (permissions
-//      are per-origin, so it likely re-prompts once — acceptable).
-//   B. Per-document origin (`<hash>.run.bento.page`), matching tray exactly.
-//      Strongest isolation; needs wildcard DNS and a certificate.
+// `file_handlers` + `launchQueue` is not the answer either: it delivers a
+// double-clicked file to the INSTALLED PWA, i.e. home's own origin. It answers
+// "how does the OS reach us", not "where does the document execute" — an
+// acquisition route, not isolation. It composes with per-document origins.
+//
+// RULED: per-document origin (`<hash>-run.bento.page`), derived from the
+// document's identity — the same shape tray reached independently. Home may
+// acquire a handle any way it can and must hand off to that origin.
 //
 // `run`, not an app name: this code never parses the format, so the origin
-// serves slides, spaces and sheets alike. An app-named origin would isolate
-// nothing extra either — every deck would still share one origin with every
-// other deck, which is the actual exposure — and app names should stay free for
-// the apps' own pages. The precedent is `sync.bento.page`: a subdomain here
-// marks a trust boundary, not a product.
-//   C. `file_handlers` + `launchQueue`, installed-PWA only. The only route that
-//      fixes double-click, and a different grant path from the one measured in
-//      working/home-design.md §3.1 — so it needs its own test.
+// serves slides, spaces and sheets alike. The precedent is `sync.bento.page` —
+// a subdomain marks a trust boundary, not a product.
 //
-// ALL THREE ARE PERMISSION-GATED, and permission-gated APIs report `denied` in
-// an automated browser without ever prompting (home-design.md §3.2 — that trap
-// cost two wrong conclusions already). They must be measured by hand in a real
-// browser. `home/probe/` exists for exactly that.
+// STILL TO MEASURE, and not measurable from here: whether a handle survives a
+// cross-origin postMessage and stays usable (a re-prompt on the receiving
+// origin is expected and fine; being unusable would sink this shape).
+// Permission-gated APIs report `denied` in an automated browser without ever
+// prompting (working/home-design.md §3.2 — that trap cost two wrong conclusions
+// already), so it has to be done by hand in a real browser.
 //
-// Until one is chosen and measured, this module REFUSES rather than quietly
-// taking the unsafe route. A launcher that silently widened the blast radius of
-// every deck you open would be worse than one that does not launch yet.
+// Until the runner exists and that is measured, this module REFUSES rather than
+// quietly taking the unsafe route. A launcher that silently widened the blast
+// radius of every deck you open is worse than one that does not launch yet.
 
 import type { RecentEntry } from './recents.ts'
 
