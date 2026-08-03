@@ -1253,6 +1253,36 @@ CI-testable, but the registry drifting from the tree is. It pins `appId`
 against each app's own `configureApp()` call and the manifest URL against the
 path the release publishes to.
 
+## 2026-08-03 — An encrypted space is never written to disk in the clear
+
+**Decision.** bento/spaces skips the autosave recovery snapshot while a space
+is encrypted, and setting a password clears both the version timeline and the
+recovery snapshot already written.
+
+**The bug.** `main.ts` called `putRecovery(store.doc)` on a 2.5s debounce,
+unconditionally. The snapshot is the document as plain JSON, so an encrypted
+space wrote its full plaintext into IndexedDB every few seconds — defeating the
+password completely, for the one author who has demonstrably asked for secrecy.
+`about.ts` already cleared the version timeline when a password was set, which
+made the gap easy to miss: half of it was handled, and the half that ran
+continuously was not.
+
+**`putRecovery` does not guard this, by design** — it is a kernel primitive and
+the encryption state is app-side. That makes it a CALLER contract, and a caller
+contract with no gate is a bug waiting for the next app. Slides holds the same
+contract in its own autosave layer.
+
+**Measured, on the built shell:** typing into a plaintext space put the marker
+text in the `recovery` store within three seconds (correct — it is the only
+backstop on iOS, where no browser can write back to a file). Setting a password
+removed that row; every later edit wrote nothing; and the saved file was still
+a `bento/enc` envelope with no plaintext anywhere in it.
+
+**Guarded** by two source assertions in `scripts/test-spaces-model.ts`, both
+negative-controlled. Same reasoning as the inert-parse guard above: the
+behaviour needs IndexedDB and a real clock, the mistake is made at the call
+site.
+
 ## 2026-08-03 — A space does not phone home when it is opened
 
 **Decision.** bento/spaces renders a remote image `src` as a placeholder naming

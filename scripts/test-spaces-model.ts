@@ -280,5 +280,28 @@ for (const [label, input, err] of [
     'consent is NOT a document field — it belongs to the reader, not the file')
 }
 
+// ---- an encrypted space is never written to disk in the clear ---------------
+// The recovery snapshot is the document as plain JSON. `putRecovery` does NOT
+// guard on encryption — the CALLER must — so an unguarded call site puts in
+// IndexedDB precisely what the password exists to keep off the disk, every few
+// seconds, for the one author who has demonstrably asked for secrecy.
+//
+// Measured before the guard: the marker text appeared in the `recovery` store
+// within 3 seconds of typing. After: setting a password clears the snapshot
+// already written, and later edits write none.
+{
+  const fs = await import('node:fs')
+  const main = fs.readFileSync(new URL('../spaces/src/main.ts', import.meta.url), 'utf8')
+  const about = fs.readFileSync(new URL('../spaces/src/about.ts', import.meta.url), 'utf8')
+
+  // the debounce body must stand down when encryption is on
+  const guarded = /if \(isEncryptionActive\(\)\) return[\s\S]{0,200}?putRecovery/.test(main)
+  ok(guarded, 'main.ts skips the recovery snapshot while a space is encrypted')
+
+  // and turning encryption ON must remove what was written before it
+  ok(/clearVersions\(/.test(about) && /clearRecovery\(/.test(about),
+    'setting a password clears BOTH the version timeline and the recovery snapshot')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

@@ -12,7 +12,7 @@ import {
   setEncryptionPassword, isEncryptionActive, saveFile,
   canWriteInPlace, openedFileName,
 } from '../../kernel/src/save.ts'
-import { clearVersions } from '../../kernel/src/autosave.ts'
+import { clearVersions, clearRecovery } from '../../kernel/src/autosave.ts'
 import { t, localeChoices, locale, setLocale } from './i18n'
 import { inertBody } from './sanitize'
 import type { Store } from './store'
@@ -142,9 +142,11 @@ export function openAbout({ store, onRepaint }: AboutHooks): void {
     const pw = prompt(t('Choose a password. There is no way to recover it.'))
     if (!pw) return
     setEncryptionPassword(pw)
-    // plaintext snapshots written before encryption was turned on would defeat
-    // the encryption the author just enabled
+    // Plaintext snapshots written BEFORE encryption was turned on would defeat
+    // the encryption the author just enabled. Both stores: the version timeline
+    // and the single recovery snapshot. From here on main.ts writes neither.
     await clearVersions(store.doc.docId)
+    await clearRecovery(store.doc.docId)
     pwNote.textContent = t('Password set. Save to write the space encrypted.')
   }))
 

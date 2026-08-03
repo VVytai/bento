@@ -9,6 +9,7 @@ import { configureApp, appConfig } from '../../kernel/src/app.ts'
 import {
   capturePristine, readEmbeddedDoc, serializeFile, serializeAuto,
   saveFile, parseEnvelope, canWriteInPlace, decryptEnvelope, setEncryptionPassword,
+  isEncryptionActive,
 } from '../../kernel/src/save.ts'
 import { putRecovery, getRecovery, clearRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
@@ -201,9 +202,16 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
 
   // A recovery snapshot is the ONLY backstop on browsers with no file-system
   // access — which is every browser on iOS.
+  //
+  // NEVER for an encrypted space. The snapshot is the document as plain JSON,
+  // so writing one puts in IndexedDB exactly what the password exists to keep
+  // off the disk — and it would do it every few seconds, for the one author who
+  // demonstrably cares. The kernel's putRecovery does not guard this; the
+  // caller must (slides has the same contract).
   let timer: ReturnType<typeof setTimeout> | undefined
   store.on('doc', () => {
     clearTimeout(timer)
+    if (isEncryptionActive()) return
     timer = setTimeout(() => { void putRecovery(store.doc) }, 2500)
   })
   void pruneOld()
