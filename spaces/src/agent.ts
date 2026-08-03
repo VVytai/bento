@@ -32,7 +32,7 @@
 
 import { type SpacesDoc, type Page, type Block, buildIndex, isRemote, newBlock, uid } from './model.ts'
 import { SPECS } from './blocks.ts'
-import { sanitizeInline, textOf, inertBody, esc } from './sanitize.ts'
+import { sanitizeInline, textOf, inertBody, esc, UNWRAP } from './sanitize.ts'
 import { orphanAssets, humanBytes } from './assets.ts'
 
 // ---------------------------------------------------------------------------
@@ -156,7 +156,9 @@ export interface ValidateResult {
 /** Inline tags a block may keep (sanitize.ts ALLOWED, lowercased). */
 const INLINE_OK = new Set(['b', 'i', 'u', 's', 'em', 'strong', 'code', 'br', 'span', 'mark', 'sub', 'sup', 'a'])
 /** Tags the sanitizer unwraps: the tag goes, the words stay (sanitize.ts UNWRAP). */
-const UNWRAPPED = new Set(['p', 'div', 'section', 'article', 'li', 'ul', 'ol', 'h1', 'h2', 'h3', 'h4', 'blockquote', 'pre', 'font'])
+// Derived from the sanitizer, never restated: this list IS what sanitizeInline
+// unwraps, and a copy would drift the moment that policy changes.
+const UNWRAPPED = new Set([...UNWRAP].map((t) => t.toLowerCase()))
 
 const TAG_RE = /<\/?([a-z][a-z0-9]*)\b/gi
 const LINK_RE = /href\s*=\s*["']([^"']*)["']/gi

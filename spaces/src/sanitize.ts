@@ -35,8 +35,15 @@ const ALLOWED = new Set([
  */
 const HREF_OK = /^(https?:|mailto:|#p\/)/i
 
-/** Tags whose CONTENT should survive when the tag itself is dropped. */
-const UNWRAP = new Set(['P', 'DIV', 'SECTION', 'ARTICLE', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'BLOCKQUOTE', 'PRE', 'FONT'])
+/**
+ * Tags whose CONTENT should survive when the tag itself is dropped.
+ *
+ * Exported because validate() tells an agent which block-level tags get
+ * unwrapped out of inline html. A second copy of this list would go stale the
+ * first time this one changes, and validate() would then advise an agent to
+ * "fix" markup that is actually fine — or stay silent about markup that is not.
+ */
+export const UNWRAP = new Set(['P', 'DIV', 'SECTION', 'ARTICLE', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'BLOCKQUOTE', 'PRE', 'FONT'])
 
 /**
  * Parse untrusted html into an INERT document, and never into a live element.

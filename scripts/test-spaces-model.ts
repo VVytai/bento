@@ -896,5 +896,27 @@ for (const [label, input, err] of [
   ok(!/\u00a0/.test(ed), 'and editor.ts carries no LITERAL invisible NBSP, which would not survive retyping')
 }
 
+// ---- one list, everywhere -------------------------------------------------
+// Four features merged in a day, built by agents who could not see each other's
+// work, and every one of them needed to know something the codebase already
+// knew. Each duplicate is a slow bug: the copy is right until the original
+// changes, and then it is wrong in a way nothing reports.
+{
+  const fs3 = await import('node:fs')
+  const rd3 = (f: string) => fs3.readFileSync(new URL(`../spaces/src/${f}`, import.meta.url), 'utf8')
+  const strip = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  // the known block types come from the registry, not a second const
+  ok(!/KNOWN_BLOCK_TYPES = \[/.test(strip(rd3('model.ts'))),
+    'model.ts does not keep a second list of block types')
+  ok(/SPECS\.map\(\(s\) => s\.type\)/.test(rd3('agent.ts')),
+    'validate() derives known block types from the block registry')
+
+  // the unwrap policy comes from the sanitizer, not a lowercased copy
+  ok(/export const UNWRAP/.test(rd3('sanitize.ts')), 'the sanitizer exports its unwrap set')
+  ok(/\[\.\.\.UNWRAP\]/.test(rd3('agent.ts')),
+    'validate() derives the unwrap set from the sanitizer rather than restating it')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
