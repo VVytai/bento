@@ -31,6 +31,7 @@ import {
   type SpacesDoc,
 } from '../spaces/src/model.ts'
 import { countOutsideTags, replaceOutsideTags } from '../spaces/src/findreplace.ts'
+import { SPECS, SPEC, MENU_SPECS, MD_SPECS, TAG_OF, LIST_OF } from '../spaces/src/blocks.ts'
 
 let failures = 0
 let checks = 0
@@ -377,6 +378,71 @@ for (const [label, input, err] of [
   ok(/more\.classList\.add\('sp-more', 'sp-dd-end'\)/.test(ed) &&
      /saveMore\.classList\.add\('sp-caret', 'sp-dd-end'\)/.test(ed),
     '…and both right-end menus say so')
+}
+
+// ---- one declaration per block type ---------------------------------------
+// Adding a type used to mean five edits across four files — the renderer's tag
+// map and list map, the / menu, the markdown-autoformat table, and the markdown
+// exporter. Four out of five looked finished and exported as a bare paragraph.
+//
+// It is also the merge-conflict surface: several people adding block types in
+// parallel all edited the same four hot files. One registry, and each type is
+// an independent entry.
+{
+  ok(SPECS.length >= 13, `the registry holds every block type (${SPECS.length})`)
+  ok(new Set(SPECS.map((s) => s.type)).size === SPECS.length, 'block types are unique')
+  for (const sp of SPECS) {
+    ok(!!sp.label && !!sp.hint && !!sp.icon, `${sp.type}: has a label, hint and icon`)
+    ok(!!sp.tag, `${sp.type}: declares its semantic element`)
+  }
+
+  // a list item must actually be an <li>, or it renders outside its <ul>
+  for (const sp of SPECS.filter((s) => s.list)) {
+    ok(sp.tag === 'li', `${sp.type}: a list block is an <li> (got <${sp.tag}>)`)
+  }
+  // …and the derived map must keep CUSTOM list types, which is the mistake that
+  // would silently lift every to-do out of its list
+  ok(TAG_OF.todo === 'li', 'todo keeps its <li> despite rendering custom')
+  ok(LIST_OF.todo === 'ul' && LIST_OF.bullet === 'ul' && LIST_OF.number === 'ol',
+    'the list map is derived correctly')
+
+  // the autoformat triggers, ALIASES INCLUDED — "- " and "* " both start a
+  // bullet, "[] " and "[ ] " both start a to-do. A registry that allowed one
+  // pattern per type would have dropped half of these silently.
+  const triggers = MD_SPECS.map(([re, type]) => `${re.source}=>${type}`).sort()
+  const expected = [
+    '^# $=>h1', '^## $=>h2', '^### $=>h3',
+    '^- $=>bullet', '^\\* $=>bullet',
+    '^1\\. $=>number', '^> $=>quote',
+    '^\\[\\] $=>todo', '^\\[ \\] $=>todo',
+    '^```$=>code', '^--- $=>divider',
+  ].sort()
+  ok(JSON.stringify(triggers) === JSON.stringify(expected),
+    `every markdown trigger survives the registry (${triggers.length} of ${expected.length})`)
+
+  // the to-do trigger must still initialise `done`, or the checkbox renders
+  // from an absent field
+  const todoInit = MD_SPECS.find(([, type]) => type === 'todo')?.[2]
+  const probe: Record<string, unknown> = {}
+  todoInit?.(probe as never)
+  ok(probe.done === false, 'the to-do trigger initialises done:false')
+
+  ok(MENU_SPECS.length === SPECS.length, 'every type is offered in the / menu')
+  ok(SPEC.get('futuretype') === undefined, 'an unknown type has no spec — and must still render as text')
+  ok(SPECS.filter((s) => s.type !== 'p').every((s) => !!s.toMd),
+    'every type but plain text says how it exports to markdown')
+
+  // and the consumers must actually derive, rather than keeping a second copy
+  const fs = await import('node:fs')
+  const read = (f: string) => fs.readFileSync(new URL(`../spaces/src/${f}`, import.meta.url), 'utf8')
+  const ren = read('render.ts'), ed = read('editor.ts'), ab = read('about.ts')
+  ok(/import \{ TAG_OF, LIST_OF \} from '\.\/blocks'/.test(ren) &&
+     !/const TAG_OF: Record/.test(ren) && !/const LIST_OF: Record/.test(ren),
+    'render.ts derives its tag and list maps rather than repeating them')
+  ok(/const SLASH_ITEMS = MENU_SPECS/.test(ed), 'the / menu is the registry')
+  ok(/const AUTOFORMAT = MD_SPECS/.test(ed), 'autoformat is the registry')
+  ok(/SPEC\.get\(b\.type\)/.test(ab) && !/case 'bullet': out\.push/.test(ab),
+    'markdown export is the registry, not a parallel switch')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

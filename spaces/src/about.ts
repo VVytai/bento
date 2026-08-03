@@ -15,6 +15,7 @@ import {
 import { clearVersions, clearRecovery } from '../../kernel/src/autosave.ts'
 import { t, localeChoices, locale, setLocale } from './i18n'
 import { inertBody } from './sanitize'
+import { SPEC } from './blocks'
 import type { Store } from './store'
 
 export interface AboutHooks {
@@ -197,21 +198,13 @@ export function toMarkdown(store: Store): string {
       for (const b of page.blocks) {
         const indent = b.parent ? '  ' : ''
         const text = htmlToMd(b.html ?? '')
-        switch (b.type) {
-          case 'h1': out.push(`# ${text}`); break
-          case 'h2': out.push(`## ${text}`); break
-          case 'h3': out.push(`### ${text}`); break
-          case 'bullet': out.push(`${indent}- ${text}`); break
-          case 'number': out.push(`${indent}1. ${text}`); break
-          case 'todo': out.push(`${indent}- [${b.done ? 'x' : ' '}] ${text}`); break
-          case 'quote': out.push(`> ${text}`); break
-          case 'code': out.push('```' + String(b.lang ?? ''), text, '```'); break
-          case 'divider': out.push('---'); break
-          case 'toggle': out.push(`${indent}- ${text}`); break
-          case 'image': out.push(`![${String(b.alt ?? '')}](${String(b.src ?? '')})`); break
-          case 'pagelink': out.push(`→ [[${store.index.page.get(String(b.page))?.title ?? '?'}]]`); break
-          default: out.push(text)
-        }
+        // From the block registry, so a new type exports correctly the moment
+        // it is declared. An UNKNOWN type — a file written by a newer build —
+        // falls through to its text, which is the honest default.
+        const spec = SPEC.get(b.type)
+        out.push(...(spec?.toMd
+          ? spec.toMd(b, text, indent, (id) => store.index.page.get(id)?.title)
+          : [text]))
         out.push('')
       }
       walk(page.id, depth + 1)

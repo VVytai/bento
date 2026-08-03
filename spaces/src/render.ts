@@ -12,6 +12,7 @@
 import { type SpacesDoc, type Page, type Block, isRemote } from './model'
 import { sanitizeInline, inertBody, esc } from './sanitize'
 import { t } from './i18n'
+import { TAG_OF, LIST_OF } from './blocks'
 
 export interface RenderOpts {
   /** editable per-block hosts (the editor); false for reader/print */
@@ -31,13 +32,10 @@ export interface RenderOpts {
   allowRemote?: (src: string) => boolean
 }
 
-/** Blocks that group into one list element when adjacent. */
-const LIST_OF: Record<string, 'ul' | 'ol'> = { bullet: 'ul', number: 'ol', todo: 'ul' }
+// The tag and list maps come from the block registry (blocks.ts), so a new
+// block type declares its element once instead of being added here, to the /
+// menu, to the autoformat table and to the markdown exporter separately.
 
-const TAG_OF: Record<string, string> = {
-  p: 'p', h1: 'h1', h2: 'h2', h3: 'h3', quote: 'blockquote',
-  bullet: 'li', number: 'li', todo: 'li',
-}
 
 /**
  * Render one page's blocks.

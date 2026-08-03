@@ -12,6 +12,7 @@ import { type Block, newBlock, newPage } from './model'
 import { Store } from './store'
 import { renderPage } from './render'
 import { canonicalize, sanitizeInline, textOf } from './sanitize'
+import { MENU_SPECS, MD_SPECS } from './blocks'
 import { countOutsideTags, replaceOutsideTags } from './findreplace'
 import { t } from './i18n'
 import { openAbout } from './about'
@@ -20,36 +21,12 @@ import { internAsset, prepareImage, humanBytes, IMAGE_EMBED_BUDGET, blobToDataUr
 
 const CTRL = navigator.platform.toLowerCase().includes('mac') ? 'metaKey' : 'ctrlKey'
 
-/** Markdown prefixes that convert a block as you type them. */
-const AUTOFORMAT: Array<[RegExp, string, (b: Block) => void]> = [
-  [/^# $/, 'h1', () => {}],
-  [/^## $/, 'h2', () => {}],
-  [/^### $/, 'h3', () => {}],
-  [/^- $/, 'bullet', () => {}],
-  [/^\* $/, 'bullet', () => {}],
-  [/^1\. $/, 'number', () => {}],
-  [/^> $/, 'quote', () => {}],
-  [/^\[\] $/, 'todo', (b) => { b.done = false }],
-  [/^\[ \] $/, 'todo', (b) => { b.done = false }],
-  [/^```$/, 'code', () => {}],
-  [/^--- $/, 'divider', () => {}],
-]
+// Markdown autoformat and the / menu both come from the block registry
+// (blocks.ts), so a type cannot end up with a menu entry and no trigger, or a
+// trigger that no menu mentions.
+const AUTOFORMAT = MD_SPECS
 
-const SLASH_ITEMS: Array<{ type: string; label: string; hint: string; icon: IconName }> = [
-  { type: 'p', label: 'Text', hint: 'Plain paragraph', icon: 'text' },
-  { type: 'h1', label: 'Heading 1', hint: '#', icon: 'h1' },
-  { type: 'h2', label: 'Heading 2', hint: '##', icon: 'h2' },
-  { type: 'h3', label: 'Heading 3', hint: '###', icon: 'h3' },
-  { type: 'bullet', label: 'Bulleted list', hint: '-', icon: 'bullet' },
-  { type: 'number', label: 'Numbered list', hint: '1.', icon: 'number' },
-  { type: 'todo', label: 'To-do', hint: '[]', icon: 'todo' },
-  { type: 'toggle', label: 'Toggle', hint: 'Collapsible section', icon: 'toggle' },
-  { type: 'quote', label: 'Quote', hint: '>', icon: 'quote' },
-  { type: 'code', label: 'Code', hint: '```', icon: 'code' },
-  { type: 'divider', label: 'Divider', hint: '---', icon: 'divider' },
-  { type: 'pagelink', label: 'Link to page', hint: 'A card that opens a page', icon: 'link' },
-  { type: 'image', label: 'Image', hint: 'Embedded in the file', icon: 'image' },
-]
+const SLASH_ITEMS = MENU_SPECS
 
 export class Editor {
   readonly store: Store
