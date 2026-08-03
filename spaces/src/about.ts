@@ -15,7 +15,7 @@ import {
 import { clearVersions, clearRecovery } from '../../kernel/src/autosave.ts'
 import { t, localeChoices, locale, setLocale } from './i18n'
 import { inertBody } from './sanitize'
-import { SPEC } from './blocks'
+import { SPEC, mdLayout } from './blocks'
 import type { Store } from './store'
 
 export interface AboutHooks {
@@ -195,18 +195,23 @@ export function toMarkdown(store: Store): string {
   const walk = (parent: string, depth: number) => {
     for (const page of store.index.children.get(parent) ?? []) {
       out.push(`${'#'.repeat(Math.min(depth + 1, 6))} ${page.title}`, '')
-      for (const b of page.blocks) {
-        const indent = b.parent ? '  ' : ''
+      // Indent, blockquote markers and what separates one block from the next
+      // are properties of the TREE, not of a block, so they come from the
+      // registry in one pass (blocks.ts mdLayout).
+      const layout = mdLayout(page.blocks)
+      page.blocks.forEach((b, i) => {
+        const { quote, indent, sep } = layout[i]
         const text = htmlToMd(b.html ?? '')
         // From the block registry, so a new type exports correctly the moment
         // it is declared. An UNKNOWN type — a file written by a newer build —
         // falls through to its text, which is the honest default.
         const spec = SPEC.get(b.type)
-        out.push(...(spec?.toMd
+        const lines = spec?.toMd
           ? spec.toMd(b, text, indent, (id) => store.index.page.get(id)?.title)
-          : [text]))
-        out.push('')
-      }
+          : [text]
+        out.push(...lines.map((l) => quote + l))
+        out.push(sep)
+      })
       walk(page.id, depth + 1)
     }
   }

@@ -12,7 +12,8 @@
 import { type SpacesDoc, type Page, type Block, isRemote } from './model'
 import { sanitizeInline, inertBody, esc } from './sanitize'
 import { t } from './i18n'
-import { TAG_OF, LIST_OF } from './blocks'
+import { TAG_OF, LIST_OF, SPEC, TONE } from './blocks'
+import { ICONS, type IconName } from './icons'
 
 export interface RenderOpts {
   /** editable per-block hosts (the editor); false for reader/print */
@@ -74,11 +75,15 @@ export function renderBlocks(page: Page, doc: SpacesDoc, opts: RenderOpts = {}):
     const node = renderBlock(b, doc, opts)
     ;(kind && list ? list.el : host).appendChild(node)
 
-    // a toggle owns the blocks whose parent is its id
-    if (b.type === 'toggle') {
+    // A CONTAINER owns the blocks whose parent is its id. Which types those are
+    // is registry data (blocks.ts `container`), not a name test here — the
+    // second container type is what turned `b.type === 'toggle'` from a fact
+    // into a bug waiting for the third one.
+    const container = SPEC.get(b.type)?.container
+    if (container) {
       const body = document.createElement('div')
-      body.className = 'sp-toggle-body'
-      if (!(opts.forceOpen || b.open)) body.hidden = true
+      body.className = `sp-${b.type}-body`
+      if (container === 'fold' && !(opts.forceOpen || b.open)) body.hidden = true
       node.appendChild(body)
       stack.push([b.id, body])
       list = null
@@ -181,6 +186,38 @@ export function renderBlock(b: Block, doc: SpacesDoc, opts: RenderOpts = {}): HT
       return el
     }
 
+    case 'callout': {
+      const raw = String(b.tone ?? 'note')
+      const known = TONE.has(raw) ? raw : 'note'
+      // Only a KNOWN tone reaches the class name. An unrecognised one keeps the
+      // neutral treatment (and its own word as the label) — and a class built
+      // from an arbitrary string out of a mailed file is a thing not to have.
+      el.className = `sp-b sp-b-callout sp-tone-${known}`
+
+      // The chip is the tone control when there is an editor to change it in,
+      // and a plain label otherwise — reading view, print and a locked space
+      // must not paint a button that does nothing.
+      const chip = document.createElement(opts.editable ? 'button' : 'span')
+      chip.className = 'sp-callout-chip'
+      if (chip instanceof HTMLButtonElement) {
+        chip.type = 'button'
+        chip.title = t('Change the kind of callout')
+      }
+      const mark = document.createElement('span')
+      mark.className = 'sp-callout-mark'
+      calloutMark(mark, b, known)
+      const label = document.createElement('span')
+      label.className = 'sp-callout-label'
+      // NOT aria-hidden and never a ::before: the tone is content the way a
+      // "Warning:" printed on a page is content. A screen reader reading this
+      // page linearly must hear it, and a printout must carry it.
+      label.textContent = toneLabel(raw)
+      chip.append(mark, label)
+      el.appendChild(chip)
+      el.appendChild(inlineHost(b, opts))
+      return el
+    }
+
     case 'toggle': {
       const twist = document.createElement('button')
       twist.className = 'sp-twist'
@@ -197,6 +234,54 @@ export function renderBlock(b: Block, doc: SpacesDoc, opts: RenderOpts = {}): HT
       el.appendChild(inlineHost(b, opts))
       return el
   }
+}
+
+/**
+ * A callout tone's name, in the reader's language.
+ *
+ * Written out as t() calls rather than read from a table in blocks.ts: the i18n
+ * sweep (scripts/build-spaces-i18n.mjs) collects t() calls with a LITERAL
+ * STRING out of the source, so a name held as data would ship English to all
+ * eight locales. A tone with no case here fails scripts/test-spaces-model.ts.
+ *
+ * (The sweep reads comments too, so do not write an example call in one.)
+ *
+ * An UNRECOGNISED tone returns its own word. A file from a future build that
+ * says `success` should say "success", not "Note" — the label is the one place
+ * that can tell the reader the truth about a tone we cannot draw.
+ */
+export function toneLabel(tone: string): string {
+  switch (tone) {
+    case 'note': return t('Note')
+    case 'tip': return t('Tip')
+    case 'important': return t('Important')
+    case 'warning': return t('Warning')
+    case 'caution': return t('Caution')
+    default: return tone
+  }
+}
+
+/**
+ * Fill a callout's mark: the author's override if there is one, else the tone's
+ * own shape.
+ *
+ * The override follows the same rule as a page icon (editor.ts pageIcon) — a
+ * name from the icon set, or any other string as literal TEXT, which is how an
+ * emoji works. textContent, never innerHTML: this string came out of a file
+ * someone sent you.
+ *
+ * `Object.hasOwn`, not `in`: ICONS is an object literal, so `'toString' in
+ * ICONS` is TRUE and the lookup hands back a function, which would then be
+ * stringified into the page as markup.
+ */
+function calloutMark(host: HTMLElement, b: Block, known: string): void {
+  const custom = typeof b.icon === 'string' ? b.icon : ''
+  if (custom) {
+    if (Object.hasOwn(ICONS, custom)) host.innerHTML = ICONS[custom as IconName]
+    else host.textContent = custom
+    return
+  }
+  host.innerHTML = ICONS[(TONE.get(known) ?? TONE.get('note')!).icon]
 }
 
 /** The editable text host. Per-block, never one big editable container — that

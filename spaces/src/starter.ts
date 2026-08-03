@@ -29,6 +29,7 @@ export function starterDoc(): SpacesDoc {
   // the toggle is built first so its child can name its REAL id — a parent
   // pointing at an id that does not exist would render the child at top level
   const toggle = b('toggle', 'A toggle — click the triangle', { open: true })
+  const callout = b('callout', 'A callout. Click the mark to make it a note, a tip, a warning.', { tone: 'tip' })
 
   return {
     format: FORMAT,
@@ -90,6 +91,8 @@ export function starterDoc(): SpacesDoc {
           b('h2', 'Blocks that are not text'),
           b('quote', 'A quote — type <code>&gt; </code>.'),
           b('code', 'const space = oneFile\n// ```  makes a code block', { lang: 'js' }),
+          callout,
+          b('p', 'Press <code>⏎</code> in a callout and the next line goes inside it. Empty line, <code>⌫</code>, and you are out.', { parent: callout.id }),
           toggle,
           b('p', 'Anything indented under a toggle folds away with it.', { parent: toggle.id }),
           b('divider'),

@@ -71,6 +71,7 @@ unique ids the first time.
 | `bullet` `number` | `html` | `<li>` inside a `<ul>`/`<ol>` — adjacent siblings group automatically |
 | `todo` | `html`, `done` | `<li>` with a checkbox |
 | `toggle` | `html`, `open` | a fold; blocks whose `parent` is its id are its body |
+| `callout` | `html`, `tone`, `icon` | a boxed note; blocks whose `parent` is its id are inside it |
 | `quote` | `html` | `<blockquote>` |
 | `code` | `html` (plain text), `lang` | `<pre><code>` |
 | `divider` | — | `<hr>` |
@@ -80,6 +81,24 @@ unique ids the first time.
 `type` is a **string**, not a closed set: an unknown type survives a round trip
 and renders its `html` as a fallback. Properties are **flat on the block** —
 there is no `props` object.
+
+### Callouts
+
+`tone` is one of `note` `tip` `important` `warning` `caution` — GitHub's alert
+names, so a callout exports as `> [!WARNING]` and reads back as the same tone.
+Absent means `note`. Like `type`, it is an open string: a tone this build does
+not know is kept, styled neutrally and labelled with its own word, so writing
+one is lossy in appearance only.
+
+`icon` is optional and is an **override**. Leave it out and the mark is derived
+from the tone, which is what keeps every warning in a document looking alike;
+set it to an emoji when the callout is not really about severity.
+
+```jsonc
+{ "id": "b7", "type": "callout", "tone": "warning",
+  "html": "The key is not recoverable." },
+{ "id": "b8", "type": "bullet", "parent": "b7", "html": "inside the box" }
+```
 
 ## Images: embed them, don't link them
 
@@ -142,6 +161,7 @@ Links are same-document fragments:
 | a list of sub-pages | one `pagelink` block each | a visible card beats a bare link for a hub page |
 | steps someone will tick off | `todo` | state lives in the document, so it survives sharing |
 | an aside, or detail most readers skip | `toggle` with its body as `parent` children | folds away, and always PRINTS expanded |
+| a warning the reader must not miss | `callout` with the `tone` that fits | it is boxed, named and legible in print and without colour vision — but three per page and none of them registers |
 | anything you would print | remember toggles print open and archived pages are excluded | |
 
 **The most-missed feature is backlinks.** They are derived — link to a page and

@@ -14,6 +14,14 @@ Versions follow `0.MINOR.PATCH` while pre-1.0.
 
 ## [Unreleased]
 
+- **Callouts.** A boxed note, tip, important, warning or caution — `/callout`,
+  the Insert menu, or type `[!warning] ` on an empty line. Press ⏎ inside one
+  and the next line goes in with it; an empty line and ⌫ takes you back out.
+  Click the mark to change which kind it is, or to give it an emoji of your own.
+  The kind is named in words as well as coloured, so it survives a
+  black-and-white printout and reads correctly without colour vision, and it
+  exports as a GitHub alert (`> [!WARNING]`) with its nested blocks intact.
+
 ## [0.1.0] — 2026-08-03
 
 First release.

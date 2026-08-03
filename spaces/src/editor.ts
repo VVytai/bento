@@ -10,9 +10,9 @@
 
 import { type Block, newBlock, newPage } from './model'
 import { Store } from './store'
-import { renderPage } from './render'
+import { renderPage, toneLabel } from './render'
 import { canonicalize, sanitizeInline, textOf } from './sanitize'
-import { MENU_SPECS, MD_SPECS } from './blocks'
+import { MENU_SPECS, MD_SPECS, SPEC, CALLOUT_TONES } from './blocks'
 import { countOutsideTags, replaceOutsideTags } from './findreplace'
 import { t } from './i18n'
 import { openAbout } from './about'
@@ -98,6 +98,7 @@ export class Editor {
           const page = this.store.page
           if (!page) return
           const fresh = newBlock(item.type === 'pagelink' ? 'p' : item.type)
+          SPEC.get(fresh.type)?.init?.(fresh)
           this.store.commit(() => { page.blocks.push(fresh) })
           this.paintPage()
           if (item.type === 'pagelink') this.insertPageCard(fresh.id)
@@ -595,6 +596,16 @@ export class Editor {
       })
     }
 
+    // the callout's own mark and name ARE the control that changes them — a
+    // tone buried in a menu is a tone nobody ever changes
+    for (const chip of view.querySelectorAll<HTMLElement>('.sp-callout-chip')) {
+      chip.addEventListener('click', (e) => {
+        e.preventDefault()
+        const id = (chip.closest('[data-block-id]') as HTMLElement).dataset.blockId!
+        this.openTonePicker(id, chip)
+      })
+    }
+
     for (const tw of view.querySelectorAll<HTMLElement>('.sp-twist')) {
       tw.addEventListener('click', () => {
         const id = (tw.closest('[data-block-id]') as HTMLElement).dataset.blockId!
@@ -722,11 +733,17 @@ export class Editor {
   private autoformat(id: string, host: HTMLElement): void {
     const text = host.textContent ?? ''
     for (const [re, type, extra] of AUTOFORMAT) {
-      if (!re.test(text)) continue
+      // the MATCH, not just a test: a trigger may name a value, as
+      // `[!warning] ` names the tone the callout is about to have
+      const m = re.exec(text)
+      if (!m) continue
       const s = this.store
       const b = s.block(id)
-      if (!b || b.type === type) return
-      s.commit(() => { b.type = type; b.html = ''; extra(b) })
+      // `b.type === type` alone would stop `[!caution] ` from re-toning a
+      // callout that is already a callout
+      if (!b) return
+      if (b.type === type && m.length < 2) return
+      s.commit(() => { b.type = type; b.html = ''; extra(b, m) })
       this.paintPage()
       this.focusBlock(id)
       return
@@ -776,6 +793,15 @@ export class Editor {
     if (e.key === 'Backspace' && atStart(cur.host)) {
       const empty = !(cur.host.textContent ?? '').trim()
       if (b.type !== 'p' && empty) { e.preventDefault(); this.setType(cur.id, 'p'); return }
+      // …and the way OUT of a container is the same key that got you in.
+      // Without this, ⏎ puts a line inside a callout and backspace merges it
+      // into the callout's own text, so the only exit is Shift-Tab — which
+      // nobody finds. Empty line + backspace = out, as in every outliner.
+      if (empty && b.parent && SPEC.get(s.block(b.parent)?.type ?? '')?.container === 'always') {
+        e.preventDefault()
+        this.indent(cur.id, false)
+        return
+      }
       e.preventDefault()
       this.mergeBack(cur.id)
       return
@@ -807,9 +833,19 @@ export class Editor {
     const b = s.block(id)
     if (!b) return
     const [before, after] = splitAtCaret(host)
-    const fresh = newBlock(b.type === 'h1' || b.type === 'h2' || b.type === 'h3' ? 'p' : b.type, { html: after })
-    if (b.type === 'todo') fresh.done = false
-    if (b.parent) fresh.parent = b.parent
+    const heading = b.type === 'h1' || b.type === 'h2' || b.type === 'h3'
+    // ⏎ INSIDE AN ALWAYS-OPEN CONTAINER GOES IN, not after.
+    //
+    // A callout's second line belongs in the callout; making a second empty
+    // callout instead is what everyone who has used one expects not to happen,
+    // and it is also the only thing that makes nesting discoverable without
+    // knowing that Tab does it. Deliberately NOT extended to `toggle`: a fold
+    // can be shut, and putting the caret inside a shut fold loses the line.
+    const into = SPEC.get(b.type)?.container === 'always'
+    const fresh = newBlock(heading || into ? 'p' : b.type, { html: after })
+    SPEC.get(fresh.type)?.init?.(fresh)
+    if (into) fresh.parent = b.id
+    else if (b.parent) fresh.parent = b.parent
     s.commit(() => {
       b.html = before
       const page = s.page!
@@ -872,8 +908,10 @@ export class Editor {
       const b = this.store.block(id)
       if (!b) return
       b.type = type
-      if (type === 'todo' && b.done === undefined) b.done = false
-      if (type === 'toggle' && b.open === undefined) b.open = true
+      // the registry seeds the type's own fields (blocks.ts `init`), so a new
+      // block type does not need a line here as well — this was the fifth place
+      // a type had to be added, and the one that was easiest to forget
+      SPEC.get(type)?.init?.(b)
     })
     this.paintPage()
     this.focusBlock(id)
@@ -1113,6 +1151,76 @@ export class Editor {
       })
       pop.append(b)
     }
+    document.body.append(pop)
+    this.overlay = pop
+    place(pop, anchor)
+    setTimeout(() => {
+      const away = (ev: MouseEvent) => {
+        if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
+      }
+      document.addEventListener('mousedown', away)
+    }, 0)
+  }
+
+  /**
+   * Which kind of callout this is, and (optionally) a glyph of your own.
+   *
+   * Five tones and one field, anchored on the chip you clicked. The icon is a
+   * plain text box rather than an emoji grid: the system emoji picker is one
+   * keystroke away on every platform this runs on, and a grid of our own would
+   * be a few KB to ship a worse one.
+   */
+  private openTonePicker(blockId: string, anchor: HTMLElement): void {
+    const s = this.store
+    const b = s.block(blockId)
+    if (!b || s.readOnly) return
+    this.closeOverlay()
+    const pop = el('div', 'sp-pop sp-tonepop')
+    pop.setAttribute('role', 'menu')
+
+    const current = String(b.tone ?? 'note')
+    for (const tone of CALLOUT_TONES) {
+      const btn = document.createElement('button')
+      btn.className = 'sp-dditem sp-toneopt' + (tone.tone === current ? ' sp-sel' : '')
+      btn.type = 'button'
+      btn.setAttribute('role', 'menuitemradio')
+      btn.setAttribute('aria-checked', String(tone.tone === current))
+      btn.innerHTML =
+        `<span class="sp-result-ico sp-tone-${tone.tone}">${ICONS[tone.icon]}</span>` +
+        `<span class="sp-result-txt"><strong>${escapeHtml(toneLabel(tone.tone))}</strong></span>`
+      btn.addEventListener('click', () => {
+        this.closeOverlay()
+        s.commit(() => { const bb = s.block(blockId); if (bb) bb.tone = tone.tone })
+        this.paintPage()
+      })
+      pop.append(btn)
+    }
+
+    const row = el('label', 'sp-tonerow')
+    const icon = document.createElement('input')
+    icon.className = 'sp-find sp-toneicon'
+    icon.value = typeof b.icon === 'string' ? b.icon : ''
+    icon.maxLength = 16
+    icon.placeholder = t('Leave it empty to use the tone mark')
+    icon.setAttribute('aria-label', t('Callout icon'))
+    // `change`, not `input`: one commit when the field is done with, rather
+    // than one undo entry per keystroke of a pasted emoji
+    icon.addEventListener('change', () => {
+      const v = icon.value.trim()
+      s.commit(() => {
+        const bb = s.block(blockId)
+        if (!bb) return
+        if (v) bb.icon = v
+        else delete bb.icon
+      })
+      this.paintPage()
+    })
+    icon.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); icon.blur(); this.closeOverlay() }
+    })
+    row.append(el('span', 'sp-tonelabel', t('Icon')), icon)
+    pop.append(row)
+
     document.body.append(pop)
     this.overlay = pop
     place(pop, anchor)
@@ -1702,7 +1810,10 @@ function place(pop: HTMLElement, anchor: HTMLElement | DOMRect): void {
  */
 export function pageIcon(icon: string | undefined): string {
   if (!icon) return ICONS.page
-  if (icon in ICONS) return ICONS[icon as IconName]
+  // hasOwn, not `in`: ICONS is an object literal, so `'toString' in ICONS` is
+  // TRUE and a page whose icon is "constructor" would render a stringified
+  // function into the sidebar
+  if (Object.hasOwn(ICONS, icon)) return ICONS[icon as IconName]
   return escapeHtml(icon)   // an emoji, or anything else the file carried
 }
 
