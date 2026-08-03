@@ -17,6 +17,7 @@ import { parseDoc, docContentKey, uid, type SpacesDoc, type ParseResult } from '
 import { starterDoc } from './starter'
 import { Store } from './store'
 import { Editor } from './editor'
+import { downloadMarkdown } from './about'
 
 configureApp({
   appId: 'bento-spaces',
@@ -173,6 +174,16 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
   }
 
   editor.onSave = () => { void doSave() }
+  editor.onSaveAs = (suffix: string) => {
+    if (suffix === '__markdown') { downloadMarkdown(store); return }
+    store.endRun()
+    // forcePicker = "Save a copy…": it always asks where, and the kernel keeps
+    // the in-place handle pointed at the working file, so a later ⌘S does not
+    // start overwriting the copy
+    void saveFile(store.doc, true).then((res) => {
+      if (res === 'saved') editor.status(t('Copy saved'))
+    })
+  }
   async function doSave(): Promise<void> {
     store.endRun()
     editor.status(t('Saving…'))

@@ -41,7 +41,7 @@ export function starterDoc(): SpacesDoc {
       {
         id: P.home,
         title: 'Welcome',
-        icon: '👋',
+        icon: 'compass',
         blocks: [
           b('p', 'This whole space — every page, the editor, the search — is <b>one HTML file</b>. No account, no server, nothing installed.'),
           b('h2', 'Try it'),
@@ -61,7 +61,7 @@ export function starterDoc(): SpacesDoc {
       {
         id: P.links,
         title: 'Pages and links',
-        icon: '🔗',
+        icon: 'link',
         blocks: [
           b('p', 'A space is a <b>tree of pages</b>, not a single scroll. New page: the ＋ in the sidebar, or <code>⌘⌥N</code>.'),
           b('h2', 'Linking'),
@@ -77,7 +77,7 @@ export function starterDoc(): SpacesDoc {
       {
         id: P.writing,
         title: 'Writing',
-        icon: '✍️',
+        icon: 'pen',
         blocks: [
           b('p', 'Markdown shortcuts convert as you type them.'),
           b('h2', 'Headings'),
@@ -99,7 +99,7 @@ export function starterDoc(): SpacesDoc {
       {
         id: P.limits,
         title: 'Sharing & limits',
-        icon: '⚖️',
+        icon: 'scale',
         blocks: [
           b('p', 'Worth knowing before you rely on this.'),
           b('h2', 'Sharing is per file'),
@@ -115,7 +115,7 @@ export function starterDoc(): SpacesDoc {
       {
         id: P.inbox,
         title: 'Inbox',
-        icon: '📥',
+        icon: 'inbox',
         blocks: [
           b('p', 'A page to throw things into before they are worth filing.'),
           b('p', ''),

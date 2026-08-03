@@ -57,7 +57,11 @@ export class Editor {
   private overlay: HTMLElement | null = null
   /** set while the editor is writing the DOM, so input handlers stand down */
   private painting = false
+  private undoB: HTMLButtonElement | null = null
+  private redoB: HTMLButtonElement | null = null
   onSave: (() => void) | null = null
+  onSaveAs: ((suffix: string) => void) | null = null
+  onPrint: (() => void) | null = null
 
   constructor(root: HTMLElement, store: Store) {
     this.root = root
@@ -65,7 +69,7 @@ export class Editor {
     this.build()
     this.store.on('tree', () => this.paintTree())
     this.store.on('page', () => { this.paintPage(); this.paintTree() })
-    this.store.on('doc', () => this.status(t('Edited')))
+    this.store.on('doc', () => { this.status(t('Edited')); this.syncHistoryButtons() })
     window.addEventListener('popstate', () => this.fromHash())
     this.fromHash()
   }
@@ -78,6 +82,12 @@ export class Editor {
     const bar = el('header', 'sp-bar')
     const mark = el('span', 'sp-mark')
     mark.innerHTML = 'bento<span>/</span>spaces'
+
+    // Pages panel toggle — on every width, like slides' Slides/Format toggles.
+    // A sidebar you cannot put away is a sidebar you resent on a laptop.
+    const pagesB = iconBtn('panelLeft', t('Pages — show or hide the page list'), () => this.toggleSidebar())
+    pagesB.classList.add('sp-panel-toggle')
+
     const title = document.createElement('input')
     title.className = 'sp-doctitle'
     title.value = this.store.doc.title
@@ -86,21 +96,57 @@ export class Editor {
       this.store.runEdit('__title', () => { this.store.doc.title = title.value })
       document.title = `${title.value} — bento/spaces`
     })
-
-    // On a phone the sidebar is off-canvas, so it needs a way in. Without
-    // this the page tree — the whole point of a space holding many pages — is
-    // simply unreachable below 720px.
-    const menu = iconBtn('menu', t('Pages'), () => this.toggleSidebar())
-    menu.classList.add('sp-menu')
-    const search = iconBtn('search', t('Search all pages (⌘K)'), () => this.openSearch())
-    const about = iconBtn('info', t('About this space'), () =>
-      openAbout({ store: this.store, onRepaint: () => this.build() }))
-    const save = iconBtn('save', t('Save (⌘S)'), () => this.onSave?.())
-    save.classList.add('sp-primary')
-    save.append(document.createTextNode(t('Save')))
     this.statusEl = el('span', 'sp-status')
 
-    bar.append(menu, mark, title, this.statusEl, search, about, save)
+    // insert — the block menu, reachable without knowing "/" exists
+    const insert = this.dropdown('plus', t('Insert'), t('Insert a block — text, headings, lists, code, images'), (menu, close) => {
+      for (const item of SLASH_ITEMS) {
+        menu.append(this.menuItem(item.icon, t(item.label), t(item.hint), () => {
+          close()
+          const page = this.store.page
+          if (!page) return
+          const fresh = newBlock(item.type === 'pagelink' ? 'p' : item.type)
+          this.store.commit(() => { page.blocks.push(fresh) })
+          this.paintPage()
+          if (item.type === 'pagelink') this.insertPageCard(fresh.id)
+          else this.focusBlock(fresh.id)
+        }))
+      }
+    })
+
+    const newPageB = iconBtn('page', t('New page (⌘⌥N)'), () => this.newPage())
+
+    this.undoB = iconBtn('undo', t('Undo (⌘Z)'), () => { this.store.undo(); this.repaint() })
+    this.redoB = iconBtn('redo', t('Redo (⇧⌘Z)'), () => { this.store.redo(); this.repaint() })
+
+    const search = iconBtn('search', t('Search all pages (⌘K)'), () => this.openSearch())
+    const printB = iconBtn('print', t('Print or save as PDF (⌘P)'), () => this.openPrint())
+    const about = iconBtn('info', t('About this space'), () =>
+      openAbout({ store: this.store, onRepaint: () => this.build() }))
+
+    // save is a split control, as in slides: the common action, and the
+    // less-common ways of writing this document somewhere else
+    const saveB = iconBtn('save', t('Save (⌘S)'), () => this.onSave?.())
+    saveB.classList.add('sp-primary')
+    saveB.append(document.createTextNode(t('Save')))
+    const saveMore = this.dropdown('chevronDown', '', t('Other ways to save'), (menu, close) => {
+      menu.append(this.menuItem('copy', t('Save a copy…'), t('A second file — the original is left alone'), () => {
+        close(); void this.saveAs('copy')
+      }))
+      menu.append(this.menuItem('markdown', t('Export as Markdown…'), t('Every page, as one .md file'), () => {
+        close(); this.exportMarkdown()
+      }))
+      menu.append(this.menuItem('print', t('Print / PDF…'), t('The whole space, or just this page'), () => {
+        close(); this.openPrint()
+      }))
+      menu.append(this.menuItem('lock', t('Password…'), t('Encrypt the document inside this file'), () => {
+        close(); openAbout({ store: this.store, onRepaint: () => this.build() })
+      }))
+    })
+    saveMore.classList.add('sp-caret')
+
+    bar.append(pagesB, mark, title, this.statusEl, insert, newPageB,
+      this.undoB, this.redoB, search, printB, about, saveB, saveMore)
 
     this.sidebar = el('nav', 'sp-side')
     this.sidebar.setAttribute('aria-label', t('Pages'))
@@ -112,7 +158,57 @@ export class Editor {
 
     this.paintTree()
     this.paintPage()
+    this.syncHistoryButtons()
     document.addEventListener('keydown', (e) => this.onKey(e), true)
+  }
+
+  /** Undo/redo must LOOK unavailable when they are, or they read as broken. */
+  private syncHistoryButtons(): void {
+    if (this.undoB) this.undoB.disabled = !this.store.canUndo
+    if (this.redoB) this.redoB.disabled = !this.store.canRedo
+  }
+
+  /** A topbar dropdown: button + menu, closed by choosing, Esc, or clicking away. */
+  private dropdown(
+    icon: IconName, label: string, tip: string,
+    fill: (menu: HTMLElement, close: () => void) => void,
+  ): HTMLElement {
+    const wrap = el('div', 'sp-dd')
+    const b = document.createElement('button')
+    b.className = 'sp-btn'
+    b.type = 'button'
+    b.innerHTML = ICONS[icon]
+    if (label) b.append(document.createTextNode(label))
+    b.title = tip
+    b.setAttribute('aria-label', tip)
+    b.setAttribute('aria-haspopup', 'menu')
+    const menu = el('div', 'sp-ddmenu')
+    menu.setAttribute('role', 'menu')
+    const close = () => { wrap.classList.remove('sp-open'); b.setAttribute('aria-expanded', 'false') }
+    b.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const open = !wrap.classList.contains('sp-open')
+      for (const other of document.querySelectorAll('.sp-dd.sp-open')) other.classList.remove('sp-open')
+      wrap.classList.toggle('sp-open', open)
+      b.setAttribute('aria-expanded', String(open))
+      if (open) { menu.innerHTML = ''; fill(menu, close) }
+    })
+    document.addEventListener('click', close)
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close() })
+    wrap.append(b, menu)
+    return wrap
+  }
+
+  private menuItem(icon: IconName, label: string, hint: string, onClick: () => void): HTMLElement {
+    const b = document.createElement('button')
+    b.className = 'sp-dditem'
+    b.type = 'button'
+    b.setAttribute('role', 'menuitem')
+    b.innerHTML = `<span class="sp-result-ico">${ICONS[icon]}</span>` +
+      `<span class="sp-result-txt"><strong>${escapeHtml(label)}</strong>` +
+      (hint ? `<span>${escapeHtml(hint)}</span>` : '') + `</span>`
+    b.addEventListener('click', (e) => { e.stopPropagation(); onClick() })
+    return b
   }
 
   /** Open/close the page drawer on narrow screens, with a scrim to tap away. */
@@ -152,8 +248,7 @@ export class Editor {
       a.href = `#p/${page.id}`
       a.className = 'sp-treelink' + (page.id === s.pageId ? ' sp-here' : '')
       const ico = el('span', 'sp-tree-ico')
-      if (page.icon) ico.textContent = page.icon
-      else ico.innerHTML = ICONS.page
+      ico.innerHTML = pageIcon(page.icon)
       const label = document.createElement('span')
       label.textContent = page.title || t('Untitled')
       a.append(ico, label)
@@ -228,6 +323,19 @@ export class Editor {
       editable: !s.readOnly,
       titleOf: (id) => s.index.page.get(id)?.title,
     })
+    // the icon lives beside the title, where changing it is discoverable
+    const inner = view.querySelector('.sp-page-inner')
+    if (inner && !s.readOnly) {
+      const pick = document.createElement('button')
+      pick.className = 'sp-pageicon'
+      pick.type = 'button'
+      pick.innerHTML = pageIcon(page.icon)
+      pick.title = t('Change this page\'s icon')
+      pick.setAttribute('aria-label', t('Change this page\'s icon'))
+      pick.addEventListener('click', () => this.openIconPicker(page.id, pick))
+      inner.prepend(pick)
+    }
+
     if (trail.length) {
       const crumb = el('nav', 'sp-crumb')
       crumb.setAttribute('aria-label', t('Breadcrumb'))
@@ -475,6 +583,7 @@ export class Editor {
 
     if (mod && e.key.toLowerCase() === 'k' && !e.shiftKey) { e.preventDefault(); this.openSearch(); return }
     if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); this.onSave?.(); return }
+    if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); this.openPrint(); return }
     if (mod && e.altKey && e.key.toLowerCase() === 'n') { e.preventDefault(); this.newPage(); return }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault()
@@ -816,6 +925,165 @@ export class Editor {
     })
   }
 
+  /** Pick a page icon from the stylised set. */
+  private openIconPicker(pageId: string, anchor: HTMLElement): void {
+    this.closeOverlay()
+    const pop = el('div', 'sp-pop sp-iconpop')
+    for (const name of PAGE_ICONS) {
+      const b = document.createElement('button')
+      b.className = 'sp-iconopt'
+      b.type = 'button'
+      b.innerHTML = ICONS[name]
+      b.title = name
+      b.setAttribute('aria-label', name)
+      b.addEventListener('click', () => {
+        this.closeOverlay()
+        this.store.commit(() => {
+          const p = this.store.index.page.get(pageId)
+          if (p) p.icon = name
+        })
+        this.paintPage()
+      })
+      pop.append(b)
+    }
+    document.body.append(pop)
+    this.overlay = pop
+    place(pop, anchor)
+    setTimeout(() => {
+      const away = (ev: MouseEvent) => {
+        if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
+      }
+      document.addEventListener('mousedown', away)
+    }, 0)
+  }
+
+  // ---- print ---------------------------------------------------------------
+  /**
+   * Printing is the ONLY export-to-PDF path, so it is a contract rather than a
+   * stylesheet: what goes in, in what order, and what happens to the things a
+   * screen can hide.
+   *
+   * Collapsed toggles print EXPANDED, always. Silently omitting content from a
+   * printed handbook is a data-loss-shaped bug — the reader has no way to know
+   * a paragraph was folded away.
+   */
+  openPrint(): void {
+    const s = this.store
+    this.openOverlay(t('Print'), (card, close) => {
+      card.append(el('h2', 'sp-card-h', t('Print or save as PDF')))
+
+      const scope = document.createElement('div')
+      scope.className = 'sp-choices'
+      let whole = true
+      const choice = (label: string, hint: string, on: boolean, pick: () => void) => {
+        const b = document.createElement('button')
+        b.className = 'sp-choice' + (on ? ' sp-sel' : '')
+        b.type = 'button'
+        b.innerHTML = `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(hint)}</span>`
+        b.addEventListener('click', () => {
+          pick()
+          for (const o of scope.querySelectorAll('.sp-choice')) o.classList.remove('sp-sel')
+          b.classList.add('sp-sel')
+        })
+        return b
+      }
+      const pageCount = s.doc.pages.filter((p) => !p.archived).length
+      scope.append(
+        choice(t('The whole space'), t('{n} pages, in sidebar order, with a contents page', { n: pageCount }), true, () => { whole = true }),
+        choice(t('This page only'), s.page?.title || t('Untitled'), false, () => { whole = false }),
+      )
+      card.append(scope)
+
+      const opts = document.createElement('div')
+      opts.className = 'sp-optlist'
+      const check = (label: string, hint: string, on: boolean) => {
+        const l = document.createElement('label')
+        l.className = 'sp-opt'
+        const i = document.createElement('input')
+        i.type = 'checkbox'
+        i.checked = on
+        l.append(i, Object.assign(document.createElement('span'), {
+          innerHTML: `<strong>${escapeHtml(label)}</strong><span>${escapeHtml(hint)}</span>`,
+        }))
+        opts.append(l)
+        return i
+      }
+      const wantArchived = check(t('Include archived pages'), t('Off by default — they were archived for a reason'), false)
+      const wantContents = check(t('Contents page'), t('A list of every page, in order'), true)
+      card.append(opts)
+
+      const note = document.createElement('p')
+      note.className = 'sp-note'
+      note.textContent = t('Collapsed toggles always print open. Your browser\'s print dialog has the "Save as PDF" option.')
+      card.append(note)
+
+      const go = document.createElement('button')
+      go.className = 'sp-btn sp-primary'
+      go.textContent = t('Print…')
+      go.addEventListener('click', () => {
+        close()
+        this.printNow({ whole, archived: wantArchived.checked, contents: wantContents.checked })
+      })
+      card.append(go)
+    })
+  }
+
+  /**
+   * Build a print-only rendering, print it, and take it away again.
+   *
+   * The screen shows ONE page; print needs all of them, so this renders a
+   * separate tree rather than trying to make the editor's DOM serve both. It
+   * is removed in `afterprint`, so nothing about the editor is left changed.
+   */
+  private printNow(opts: { whole: boolean; archived: boolean; contents: boolean }): void {
+    const s = this.store
+    const host = el('div', 'sp-printroot')
+    host.style.direction = 'ltr'
+
+    const pages = opts.whole
+      ? s.tree().map((n) => n.page).filter((p) => opts.archived || !p.archived)
+      : (s.page ? [s.page] : [])
+
+    if (opts.whole && opts.contents) {
+      const toc = el('section', 'sp-toc')
+      toc.append(el('h1', 'sp-toc-h', s.doc.title || t('Contents')))
+      const ul = el('ul', 'sp-toc-list')
+      for (const { page, depth } of s.tree()) {
+        if (!opts.archived && page.archived) continue
+        const li = document.createElement('li')
+        li.style.paddingInlineStart = `${depth * 16}px`
+        li.textContent = page.title || t('Untitled')
+        ul.append(li)
+      }
+      toc.append(ul)
+      host.append(toc)
+    }
+
+    for (const page of pages) {
+      host.append(renderPage(page, s.doc, { editable: false, forceOpen: true, titleOf: (id) => s.index.page.get(id)?.title }))
+    }
+
+    document.body.append(host)
+    document.body.classList.add('sp-printing')
+    const cleanup = () => {
+      host.remove()
+      document.body.classList.remove('sp-printing')
+      window.removeEventListener('afterprint', cleanup)
+    }
+    window.addEventListener('afterprint', cleanup)
+    // some engines return from print() before afterprint fires
+    setTimeout(() => { if (document.body.contains(host)) cleanup() }, 60000)
+    print()
+  }
+
+  private exportMarkdown(): void {
+    this.onSaveAs?.('__markdown')
+  }
+
+  private async saveAs(suffix: string): Promise<void> {
+    this.onSaveAs?.(suffix)
+  }
+
   // ---- routing ------------------------------------------------------------
   private fromHash(): void {
     const m = location.hash.match(/^#p\/(.+)$/)
@@ -934,3 +1202,23 @@ function place(pop: HTMLElement, anchor: HTMLElement | DOMRect): void {
   pop.style.left = `${Math.max(8, left)}px`
   pop.style.top = `${top}px`
 }
+
+/**
+ * A page's icon.
+ *
+ * `icon` is a NAME from the stylised set. Older documents (and anything an
+ * agent writes) may carry an emoji instead, so that still renders — but the
+ * set is what the app offers, because a sidebar of twelve colour emoji reads
+ * as a row of stickers rather than one interface.
+ */
+export function pageIcon(icon: string | undefined): string {
+  if (!icon) return ICONS.page
+  if (icon in ICONS) return ICONS[icon as IconName]
+  return escapeHtml(icon)   // an emoji, or anything else the file carried
+}
+
+/** The icons a page may choose from. */
+export const PAGE_ICONS: IconName[] = [
+  'page', 'note', 'book', 'folder', 'inbox', 'star', 'tag', 'hash',
+  'compass', 'pen', 'scale', 'link', 'todo', 'code', 'image', 'archive',
+]

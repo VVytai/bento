@@ -156,7 +156,7 @@ export function openAbout({ store, onRepaint }: AboutHooks): void {
       void navigator.clipboard?.writeText(JSON.stringify(store.doc, null, 2))
     }),
     button(t('Export as Markdown'), () => downloadMarkdown(store)),
-    button(t('Save a copy…'), () => { void saveFile(store.doc, { suffix: 'copy' } as never) }),
+    button(t('Save a copy…'), () => { void saveFile(store.doc, true) }),
   )
   card.append(exports)
   const outNote = document.createElement('p')
@@ -240,7 +240,7 @@ function htmlToMd(html: string): string {
   return [...d.childNodes].map(walk).join('').trim()
 }
 
-function downloadMarkdown(store: Store): void {
+export function downloadMarkdown(store: Store): void {
   const blob = new Blob([toMarkdown(store)], { type: 'text/markdown' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
