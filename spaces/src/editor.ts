@@ -59,7 +59,10 @@ export class Editor {
   private overlay: HTMLElement | null = null
   /** set while the editor is writing the DOM, so input handlers stand down */
   private painting = false
+  /** reading view: the document without the machinery for changing it */
+  private reading = false
   private undoB: HTMLButtonElement | null = null
+  private readB: HTMLButtonElement | null = null
   private redoB: HTMLButtonElement | null = null
   onSave: (() => void) | null = null
   onSaveAs: ((suffix: string) => void) | null = null
@@ -124,6 +127,7 @@ export class Editor {
 
     const search = iconBtn('search', t('Search all pages (⌘K)'), () => this.openSearch())
     const printB = iconBtn('print', t('Print or save as PDF (⌘P)'), () => this.openPrint())
+    this.readB = iconBtn('eye', t('Reading view — the pages without the editing tools'), () => this.toggleReading())
     const about = iconBtn('info', t('About this space'), () =>
       openAbout({ store: this.store, onRepaint: () => this.build() }))
 
@@ -149,7 +153,7 @@ export class Editor {
     saveMore.classList.add('sp-caret')
 
     bar.append(pagesB, mark, title, this.statusEl, insert, newPageB,
-      this.undoB, this.redoB, search, printB, about, saveB, saveMore)
+      this.undoB, this.redoB, search, this.readB, printB, about, saveB, saveMore)
 
     this.sidebar = el('nav', 'sp-side')
     this.sidebar.setAttribute('aria-label', t('Pages'))
@@ -163,6 +167,28 @@ export class Editor {
     this.paintPage()
     this.syncHistoryButtons()
     document.addEventListener('keydown', (e) => this.onKey(e), true)
+  }
+
+  /**
+   * Reading view.
+   *
+   * Not a separate renderer — the SAME renderer with `editable` off, so what a
+   * reader sees is what an editor sees minus the machinery. A second read-only
+   * renderer would drift, and the drift would only show up in the view nobody
+   * develops in.
+   *
+   * It is a VIEW, never a document state: nothing about it is written to the
+   * file, so a space does not arrive locked because its author was reading when
+   * they saved.
+   */
+  private toggleReading(force?: boolean): void {
+    this.reading = force ?? !this.reading
+    this.root.classList.toggle('sp-reading', this.reading)
+    this.readB?.classList.toggle('sp-on', this.reading)
+    this.readB?.setAttribute('aria-pressed', String(this.reading))
+    document.querySelector('.sp-findbar')?.remove()
+    this.paintPage()
+    this.status(this.reading ? t('Reading view — press Esc or the eye to edit') : t('Editing'))
   }
 
   /** Undo/redo must LOOK unavailable when they are, or they read as broken. */
@@ -265,11 +291,60 @@ export class Editor {
         const moved = e.dataTransfer?.getData('text/bento-page')
         if (moved && moved !== page.id) this.reparentPage(moved, page.id)
       })
+      const more = document.createElement('button')
+      more.className = 'sp-rowmore'
+      more.type = 'button'
+      more.innerHTML = ICONS.more
+      more.title = t('Page options')
+      more.setAttribute('aria-label', t('Page options'))
+      more.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); this.openPageMenu(page.id, more) })
+      a.append(more)
+
       li.append(a)
       list.append(li)
     }
     if (!list.childElementCount) list.append(el('li', 'sp-side-empty', t('No pages yet')))
     this.sidebar.append(list)
+
+    // Archived pages are OUT OF THE WAY, never invisible: they are still
+    // searchable and linkable, and someone about to share the file needs to be
+    // able to see what is going with it.
+    const archived = s.doc.pages.filter((p) => p.archived)
+    if (archived.length) {
+      const det = document.createElement('details')
+      det.className = 'sp-archived'
+      const sum = document.createElement('summary')
+      sum.textContent = t('Archived ({n})', { n: archived.length })
+      det.append(sum)
+      const al = el('ul', 'sp-tree')
+      for (const page of archived) {
+        const li = document.createElement('li')
+        const a = document.createElement('a')
+        a.href = `#p/${page.id}`
+        a.className = 'sp-treelink sp-arch-row' + (page.id === s.pageId ? ' sp-here' : '')
+        const ico = el('span', 'sp-tree-ico')
+        ico.innerHTML = pageIcon(page.icon)
+        const label = document.createElement('span')
+        label.textContent = page.title || t('Untitled')
+        a.append(ico, label)
+        a.addEventListener('click', (e) => { e.preventDefault(); s.goToPage(page.id); this.toggleSidebar(false) })
+        const un = document.createElement('button')
+        un.className = 'sp-rowmore'
+        un.type = 'button'
+        un.innerHTML = ICONS.unarchive
+        un.title = t('Restore to the page list')
+        un.setAttribute('aria-label', t('Restore to the page list'))
+        un.addEventListener('click', (e) => {
+          e.preventDefault(); e.stopPropagation()
+          s.commit(() => { const p = s.index.page.get(page.id); if (p) delete p.archived })
+        })
+        a.append(un)
+        li.append(a)
+        al.append(li)
+      }
+      det.append(al)
+      this.sidebar.append(det)
+    }
 
     // dropping on the empty area below the tree makes a page top-level again
     list.addEventListener('dragover', (e) => e.preventDefault())
@@ -300,7 +375,7 @@ export class Editor {
     if (parent) page.parent = parent
     this.store.commit(() => { this.store.doc.pages.push(page) })
     this.store.goToPage(page.id)
-    requestAnimationFrame(() => {
+    afterPaint(() => {
       const h = this.main.querySelector<HTMLElement>('[data-page-title]')
       h?.focus()
       if (h) selectAll(h)
@@ -323,12 +398,12 @@ export class Editor {
       if (trail.length > 4) break
     }
     const view = renderPage(page, s.doc, {
-      editable: !s.readOnly,
+      editable: !s.readOnly && !this.reading,
       titleOf: (id) => s.index.page.get(id)?.title,
     })
     // the icon lives beside the title, where changing it is discoverable
     const inner = view.querySelector('.sp-page-inner')
-    if (inner && !s.readOnly) {
+    if (inner && !s.readOnly && !this.reading) {
       const pick = document.createElement('button')
       pick.className = 'sp-pageicon'
       pick.type = 'button'
@@ -461,7 +536,7 @@ export class Editor {
     })
 
     for (const node of view.querySelectorAll<HTMLElement>('[data-block-id]')) {
-      if (!s.readOnly) this.addGutter(node, node.dataset.blockId!)
+      if (!s.readOnly && !this.reading) this.addGutter(node, node.dataset.blockId!)
     }
 
     for (const host of view.querySelectorAll<HTMLElement>('[data-edit]')) {
@@ -622,7 +697,7 @@ export class Editor {
   }
 
   private focusBlock(id: string, atEnd = true): void {
-    requestAnimationFrame(() => {
+    afterPaint(() => {
       const host = this.main.querySelector<HTMLElement>(`[data-edit="${CSS.escape(id)}"]`)
       if (!host) return
       host.focus()
@@ -637,6 +712,7 @@ export class Editor {
     if (mod && e.key.toLowerCase() === 'k' && !e.shiftKey) { e.preventDefault(); this.openSearch(); return }
     if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); this.onSave?.(); return }
     if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); this.openPrint(); return }
+    if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); this.openFind(); return }
     if (mod && e.altKey && e.key.toLowerCase() === 'n') { e.preventDefault(); this.newPage(); return }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault()
@@ -644,6 +720,7 @@ export class Editor {
       this.paintPage(); this.paintTree()
       return
     }
+    if (e.key === 'Escape' && this.reading && !this.overlay) { e.preventDefault(); this.toggleReading(false); return }
     if (this.overlay) return // the overlay owns the keyboard while it is open
 
     const cur = this.focused()
@@ -722,7 +799,7 @@ export class Editor {
       page.blocks.splice(i, 1)
     })
     this.paintPage()
-    requestAnimationFrame(() => {
+    afterPaint(() => {
       const host = this.main.querySelector<HTMLElement>(`[data-edit="${CSS.escape(prev.id)}"]`)
       if (host) { host.focus(); caretToOffset(host, at) }
     })
@@ -1010,6 +1087,87 @@ export class Editor {
     }, 0)
   }
 
+  /** Rename, archive, or delete one page. */
+  private openPageMenu(pageId: string, anchor: HTMLElement): void {
+    const s = this.store
+    const page = s.index.page.get(pageId)
+    if (!page) return
+    this.closeOverlay()
+    const pop = el('div', 'sp-pop')
+    pop.setAttribute('role', 'menu')
+
+    pop.append(this.menuItem('edit', t('Rename'), '', () => {
+      this.closeOverlay()
+      s.goToPage(pageId)
+      afterPaint(() => {
+        const h = this.main.querySelector<HTMLElement>('[data-page-title]')
+        if (h) { h.focus(); selectAll(h) }
+      })
+    }))
+
+    pop.append(this.menuItem('plus', t('New page inside'), '', () => {
+      this.closeOverlay()
+      this.newPage(pageId)
+    }))
+
+    pop.append(this.menuItem(page.archived ? 'unarchive' : 'archive',
+      page.archived ? t('Restore to the page list') : t('Archive'),
+      page.archived ? '' : t('Out of the sidebar, still searchable and linkable'), () => {
+        this.closeOverlay()
+        s.commit(() => {
+          const p = s.index.page.get(pageId)
+          if (!p) return
+          if (p.archived) delete p.archived
+          else p.archived = true
+        })
+      }))
+
+    pop.append(this.menuItem('trash', t('Delete…'), t('Links to it become dead'), () => {
+      this.closeOverlay()
+      this.deletePage(pageId)
+    }))
+
+    document.body.append(pop)
+    this.overlay = pop
+    place(pop, anchor)
+    setTimeout(() => {
+      const away = (ev: MouseEvent) => {
+        if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
+      }
+      document.addEventListener('mousedown', away)
+    }, 0)
+  }
+
+  /**
+   * Delete a page.
+   *
+   * Its children are re-homed to ITS parent rather than deleted with it —
+   * removing a middle page should not silently take a subtree the author was
+   * not looking at. Inbound links are counted in the confirmation, because
+   * "this will break 4 links" is the fact that decides it.
+   */
+  private deletePage(pageId: string): void {
+    const s = this.store
+    const page = s.index.page.get(pageId)
+    if (!page) return
+    if (s.doc.pages.length <= 1) { this.status(t('A space needs at least one page')); return }
+    const inbound = (s.index.backlinks.get(pageId) ?? []).length
+    const kids = s.doc.pages.filter((p) => p.parent === pageId).length
+    const parts = [t('Delete “{name}”?', { name: page.title || t('Untitled') })]
+    if (inbound) parts.push(t('{n} link(s) to it will stop working.', { n: inbound }))
+    if (kids) parts.push(t('{n} page(s) inside it move up a level.', { n: kids }))
+    if (!confirm(parts.join('\n'))) return
+    s.commit(() => {
+      for (const p of s.doc.pages) if (p.parent === pageId) {
+        if (page.parent) p.parent = page.parent
+        else delete p.parent
+      }
+      s.doc.pages.splice(s.doc.pages.findIndex((p) => p.id === pageId), 1)
+      if (s.doc.home === pageId) delete s.doc.home
+    })
+    this.repaint()
+  }
+
   // ---- images --------------------------------------------------------------
   /** Choose a file and put it in the document. */
   async pickImage(blockId: string): Promise<void> {
@@ -1093,6 +1251,148 @@ export class Editor {
     if (!this.store.page) return false
     await this.placeImage(null, file, { insertAfter: afterId ?? null })
     return true
+  }
+
+  // ---- find and replace ----------------------------------------------------
+  /**
+   * ⌘F is OURS, not the browser's.
+   *
+   * Native find cannot see a collapsed toggle's body, cannot see a page that is
+   * not currently rendered, and cannot see an archived page at all — which is
+   * most of a space. So this searches the MODEL, jumps to each hit, expands
+   * whatever was folded around it, and can replace across every page in one
+   * undoable step.
+   */
+  openFind(): void {
+    const s = this.store
+    document.querySelector('.sp-findbar')?.remove()
+    const bar = el('div', 'sp-findbar')
+    bar.setAttribute('role', 'search')
+
+    const q = document.createElement('input')
+    q.className = 'sp-find'
+    q.placeholder = t('Find in this space…')
+    q.setAttribute('aria-label', t('Find'))
+
+    const rep = document.createElement('input')
+    rep.className = 'sp-find'
+    rep.placeholder = t('Replace with…')
+    rep.setAttribute('aria-label', t('Replace with'))
+
+    const count = el('span', 'sp-findcount')
+    const mk = (icon: IconName, label: string, fn: () => void) => {
+      const b = document.createElement('button')
+      b.className = 'sp-btn'
+      b.type = 'button'
+      b.innerHTML = ICONS[icon]
+      b.title = label
+      b.setAttribute('aria-label', label)
+      b.addEventListener('click', fn)
+      return b
+    }
+
+    let hits: Array<{ pageId: string; blockId: string }> = []
+    let at = -1
+
+    const scan = () => {
+      const needle = q.value.toLowerCase()
+      hits = []
+      at = -1
+      if (needle) {
+        for (const p of s.doc.pages) {
+          for (const b of p.blocks) {
+            if (textOf(b.html).toLowerCase().includes(needle)) hits.push({ pageId: p.id, blockId: b.id })
+          }
+        }
+      }
+      count.textContent = hits.length ? t('{n} found', { n: hits.length }) : (needle ? t('none') : '')
+    }
+
+    const jump = (dir: 1 | -1) => {
+      if (!hits.length) return
+      at = (at + dir + hits.length) % hits.length
+      const hit = hits[at]
+      count.textContent = t('{i} of {n}', { i: at + 1, n: hits.length })
+
+      // Unfold FIRST, then navigate — one paint, and no dependence on when a
+      // repaint happens to land. Doing it the other way round meant reveal ran
+      // against whichever page the store had reached by the next frame, and
+      // the fold stayed shut.
+      const opened = this.revealBlock(hit.pageId, hit.blockId)
+      if (hit.pageId !== s.pageId) s.goToPage(hit.pageId)
+      else if (opened) this.paintPage()
+
+      afterPaint(() => {
+        const node = this.main.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(hit.blockId)}"]`)
+        node?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        node?.classList.add('sp-hit')
+        setTimeout(() => node?.classList.remove('sp-hit'), 1400)
+      })
+    }
+
+    const replaceAll = () => {
+      const needle = q.value
+      if (!needle || !hits.length) return
+      if (!confirm(t('Replace {n} occurrence(s) across the whole space?', { n: hits.length }))) return
+      const lower = needle.toLowerCase()
+      // ONE commit for the whole sweep: a replace-all a user has to undo forty
+      // times is not undoable in any sense they care about
+      s.commit(() => {
+        for (const p of s.doc.pages) {
+          for (const b of p.blocks) {
+            if (!b.html || !textOf(b.html).toLowerCase().includes(lower)) continue
+            b.html = replaceOutsideTags(b.html, needle, rep.value)
+          }
+        }
+      })
+      this.repaint()
+      scan()
+      this.status(t('Replaced'))
+    }
+
+    q.addEventListener('input', scan)
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); jump(e.shiftKey ? -1 : 1) }
+      if (e.key === 'Escape') { e.preventDefault(); bar.remove() }
+    })
+    rep.addEventListener('keydown', (e) => { if (e.key === 'Escape') bar.remove() })
+
+    bar.append(q, mk('arrowUp', t('Previous (⇧⏎)'), () => jump(-1)),
+      mk('arrowDown', t('Next (⏎)'), () => jump(1)), count,
+      rep, mk('replace', t('Replace all'), replaceAll),
+      mk('close', t('Close'), () => bar.remove()))
+    this.root.append(bar)
+    q.focus()
+    scan()
+  }
+
+  /**
+   * Open every toggle between a block and the top of its page, so a hit is
+   * actually visible when we arrive at it.
+   *
+   * Takes the page id EXPLICITLY rather than reading the current page: the
+   * caller may not have navigated yet, and depending on that ordering is what
+   * broke this the first time. Returns whether anything changed, so the caller
+   * can decide whether a repaint is owed.
+   */
+  private revealBlock(pageId: string, blockId: string): boolean {
+    const s = this.store
+    const page = s.index.page.get(pageId)
+    if (!page) return false
+    let changed = false
+    let cur = page.blocks.find((b) => b.id === blockId)
+    const guard = new Set<string>()
+    while (cur?.parent && !guard.has(cur.parent)) {
+      guard.add(cur.parent)
+      const owner = page.blocks.find((b) => b.id === cur!.parent)
+      if (!owner) break
+      if (owner.type === 'toggle' && !owner.open) { owner.open = true; changed = true }
+      cur = owner
+    }
+    // a fold opened to show a search hit is a VIEW change, not an edit: it is
+    // mutated directly rather than through commit(), so searching never lands
+    // on the undo stack or marks the document modified
+    return changed
   }
 
   // ---- print ---------------------------------------------------------------
@@ -1360,3 +1660,59 @@ export const PAGE_ICONS: IconName[] = [
   'page', 'note', 'book', 'folder', 'inbox', 'star', 'tag', 'hash',
   'compass', 'pen', 'scale', 'link', 'todo', 'code', 'image', 'archive',
 ]
+
+/**
+ * Replace text without touching markup.
+ *
+ * A naive string replace over `html` would happily rewrite a tag name or an
+ * href — searching for "a" and replacing it would destroy every link on the
+ * page. This walks the string and only substitutes OUTSIDE angle brackets.
+ */
+export function replaceOutsideTags(html: string, needle: string, withText: string): string {
+  if (!needle) return html
+  // CASE-INSENSITIVE, to match the search that produced the count. A
+  // case-sensitive replace behind a case-insensitive find is the worst kind of
+  // mismatch: it reports "14 found" and quietly changes nine of them.
+  const lowerNeedle = needle.toLowerCase()
+  const replaceIn = (chunk: string): string => {
+    const lower = chunk.toLowerCase()
+    let out = ''
+    let from = 0
+    for (;;) {
+      const at = lower.indexOf(lowerNeedle, from)
+      if (at < 0) { out += chunk.slice(from); return out }
+      out += chunk.slice(from, at) + withText
+      from = at + needle.length
+    }
+  }
+  const out: string[] = []
+  let i = 0
+  while (i < html.length) {
+    const lt = html.indexOf('<', i)
+    const chunk = lt < 0 ? html.slice(i) : html.slice(i, lt)
+    out.push(replaceIn(chunk))
+    if (lt < 0) break
+    const gt = html.indexOf('>', lt)
+    if (gt < 0) { out.push(html.slice(lt)); break }
+    out.push(html.slice(lt, gt + 1))   // the tag itself, untouched
+    i = gt + 1
+  }
+  return out.join('')
+}
+
+/**
+ * Run after the next paint — but run REGARDLESS.
+ *
+ * `requestAnimationFrame` does not fire at all in a hidden tab, so anything
+ * whose CORRECTNESS depends on it silently never happens: search a space,
+ * switch tabs before the frame lands, come back, and the jump was never
+ * completed. rAF is right when the page is visible (it is the only way to act
+ * after layout); a timeout is the fallback that always arrives.
+ */
+export function afterPaint(fn: () => void): void {
+  if (typeof document !== 'undefined' && document.visibilityState === 'hidden') { setTimeout(fn, 0); return }
+  let done = false
+  const once = () => { if (!done) { done = true; fn() } }
+  requestAnimationFrame(once)
+  setTimeout(once, 120)   // rAF starved (throttled tab, background window)
+}
