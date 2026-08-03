@@ -290,3 +290,16 @@ jobs:
       - name: CRDT convergence rig
         # 40 seeds locally; deeper on CI where the seconds are free.
         run: SEEDS=300 node scripts/test-sync.ts
+
+      - name: CRDT equivalence rig (baseline vs candidate, byte for byte)
+        # Convergence is the weaker property: an engine that converges with
+        # ITSELF while minting different bytes than the shipped engine passes
+        # the step above and silently splits every bento/slides file in the
+        # field. This step asserts byte-identity instead.
+        #
+        # IT PASSES TRIVIALLY TODAY — there is one engine, so the candidate
+        # import resolves to the baseline module and the run announces itself
+        # as a NO-OP. The signal in a NO-OP run is the self-test: four
+        # perturbed-but-convergent engines that this rig must catch. It goes
+        # live the moment sync parameterization repoints one import.
+        run: SEEDS=200 STEPS=60 ACTORS=4 node scripts/test-sync-equiv.ts
