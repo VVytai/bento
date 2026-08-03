@@ -13,6 +13,7 @@ import { Store } from './store'
 import { renderPage } from './render'
 import { canonicalize, sanitizeInline, textOf } from './sanitize'
 import { t } from './i18n'
+import { openAbout } from './about'
 
 const CTRL = navigator.platform.toLowerCase().includes('mac') ? 'metaKey' : 'ctrlKey'
 
@@ -91,11 +92,13 @@ export class Editor {
     const menu = btn('☰', t('Pages'), () => this.sidebar.classList.toggle('sp-open'))
     menu.classList.add('sp-menu')
     const search = btn('⌕', t('Search all pages (⌘K)'), () => this.openSearch())
+    const about = btn('ⓘ', t('About this space'), () =>
+      openAbout({ store: this.store, onRepaint: () => { this.build() } }))
     const save = btn('⤓', t('Save (⌘S)'), () => this.onSave?.())
     save.classList.add('sp-primary')
     this.statusEl = el('span', 'sp-status')
 
-    bar.append(menu, mark, title, this.statusEl, search, save)
+    bar.append(menu, mark, title, this.statusEl, search, about, save)
 
     this.sidebar = el('nav', 'sp-side')
     this.sidebar.setAttribute('aria-label', t('Pages'))

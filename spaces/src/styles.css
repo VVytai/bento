@@ -214,3 +214,13 @@ body {
   .sp-b-code, .sp-b-image figure, .sp-b-quote { break-inside: avoid; }
   p, li { orphans: 2; widows: 2; }
 }
+
+/* ————— about ————— */
+.sp-about .sp-card-h { margin-top: 18px; }
+.sp-about .sp-card-h:first-child { margin-top: 2px; }
+.sp-about-blurb { margin: 0 4px 10px; }
+.sp-note { color: var(--ink-soft); font-size: 13px; margin: 6px 4px 10px; }
+.sp-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px; }
+.sp-select { font: inherit; padding: 6px 8px; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); }
+.sp-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 4px; }
+.sp-mono { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink-soft); }

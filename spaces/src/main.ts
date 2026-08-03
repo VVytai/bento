@@ -8,7 +8,7 @@ import './styles.css'
 import { configureApp, appConfig } from '../../kernel/src/app.ts'
 import {
   capturePristine, readEmbeddedDoc, serializeFile, serializeAuto,
-  saveFile, parseEnvelope, canWriteInPlace,
+  saveFile, parseEnvelope, canWriteInPlace, decryptEnvelope, setEncryptionPassword,
 } from '../../kernel/src/save.ts'
 import { putRecovery, getRecovery, clearRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
@@ -29,8 +29,10 @@ applyDirection()
 
 const embedded = readEmbeddedDoc()
 
-if (embedded && parseEnvelope(embedded)) {
-  gate(t('This file is encrypted.'), t('Password unlocking is not in this build yet.'), [])
+const envelope = embedded ? parseEnvelope(embedded) : null
+
+if (envelope) {
+  void passwordGate()
 } else {
   const res = parseDoc(embedded ?? '')
   if (res.ok) {
@@ -46,6 +48,55 @@ if (embedded && parseEnvelope(embedded)) {
   } else {
     refuse(res)
   }
+}
+
+/**
+ * An encrypted space: ask, then boot.
+ *
+ * This MUST exist for as long as the About dialog can set a password —
+ * otherwise encrypting a space locks its author out of it permanently, which
+ * is the worst bug this app could have. The password is held in memory so
+ * every later save stays encrypted.
+ */
+async function passwordGate(): Promise<void> {
+  document.getElementById('bento-splash')?.remove()
+  const wrap = document.createElement('div')
+  wrap.className = 'sp-gate'
+  const card = document.createElement('div')
+  card.className = 'sp-gate-card'
+  card.innerHTML = `<h1>${t('This space is locked')}</h1>` +
+    `<p>${t('Enter the password to open it.')}</p>`
+  const input = document.createElement('input')
+  input.type = 'password'
+  input.className = 'sp-find'
+  input.autocomplete = 'current-password'
+  const go = document.createElement('button')
+  go.className = 'sp-btn sp-primary'
+  go.textContent = t('Unlock')
+  const err = document.createElement('p')
+  err.className = 'sp-note'
+  card.append(input, go, err)
+  wrap.append(card)
+  document.body.append(wrap)
+  input.focus()
+
+  const tryUnlock = async () => {
+    const pass = input.value
+    if (!pass) return
+    go.disabled = true
+    const json = await decryptEnvelope(envelope!, pass)
+    go.disabled = false
+    if (json === null) { err.textContent = t('Wrong password — try again'); input.select(); return }
+    const res = parseDoc(json)
+    if (!res.ok) { err.textContent = t('Unlocked, but the document inside could not be read.'); return }
+    // held in memory so ⌘S and autosave keep writing encrypted
+    setEncryptionPassword(pass)
+    wrap.remove()
+    if (!res.doc.docId) res.doc.docId = uid('doc')
+    boot(res.doc, res.repaired, res.frozen)
+  }
+  go.addEventListener('click', () => { void tryUnlock() })
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') void tryUnlock() })
 }
 
 /**
