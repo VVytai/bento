@@ -19,4 +19,25 @@ registerI18n({ catalogs: {}, choices: CHOICES })
 export const LOCALE_CHOICES = CHOICES
 
 export { t, locale, setLocale, i18nApi, localeChoices } from '../../kernel/src/i18n.ts'
+import { locale } from '../../kernel/src/i18n.ts'
 export type { Catalog } from '../../kernel/src/i18n.ts'
+
+/** Languages whose CHROME reads right-to-left. */
+const RTL = new Set(['ar', 'he', 'fa', 'ur', 'ps', 'sd', 'yi'])
+
+export const isRtl = (code: string): boolean => RTL.has(code.split('-')[0].toLowerCase())
+
+/**
+ * Point the CHROME at the viewer's language (PLATFORM §8).
+ *
+ * Deliberately called AFTER capturePristine(): saves re-serialize the pristine
+ * clone, so the dir/lang attributes never reach a saved file. Direction follows
+ * the VIEWER; the DOCUMENT's own base direction is theme.dir, pinned on the
+ * inner container by the renderer. Two different things that must never be
+ * confused — a document does not mirror because its reader's UI does.
+ */
+export function applyDirection(): void {
+  const code = locale()
+  document.documentElement.lang = code
+  document.documentElement.dir = isRtl(code) ? 'rtl' : 'ltr'
+}

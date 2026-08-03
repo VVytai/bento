@@ -110,6 +110,14 @@ jobs:
       - name: Splice conformance gate (spaces)
         run: node scripts/shell-gate.mjs spaces/dist-single/Bento_Spaces.bento.html
 
+      - name: Spaces model rig
+        # Three properties that fail silently and cannot be undone once files
+        # exist: the load contract (an unreadable document must never be
+        # replaced by an empty one), format additivity, and id repair being
+        # deterministic from the BYTES — two readers of one file must agree on
+        # every id, because links and future collaboration key on them.
+        run: node scripts/test-spaces-model.ts
+
       # dash: the data app — same pipeline, same gate.
       - name: Install (dash)
         working-directory: dash
