@@ -29,6 +29,11 @@ export type Policy = 'bento-spaces-1' | (string & {})
  * Block types this build knows. `Block.type` is `string`, NOT this union —
  * an unknown type must survive a round-trip, so the type system must not be
  * able to express "only these".
+ *
+ * The VALUE is the source of truth (the union is derived from it) because
+ * `validate()` has to answer "does this build render that type?" at runtime,
+ * and a hand-maintained second copy of the list would drift the moment a block
+ * type is added. A block registry, when one lands, should own this.
  */
 export type KnownBlockType =
   | 'p' | 'h1' | 'h2' | 'h3' | 'bullet' | 'number' | 'todo' | 'toggle'

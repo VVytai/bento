@@ -197,20 +197,175 @@ the tree wastes the one thing this format does that a folder of files cannot.
 ## `window.bento`
 
 ```js
+// read
 bento.doc                                  // the live document
 bento.pages()                              // [{id, title, parent, archived, blocks}]
 bento.getPage(id)                          // one page, with its blocks
 bento.search(q)                            // [{pageId, title, blockId}]
-bento.newPage(title, parent?)              // → new page id      (one undo step)
-bento.insertBlocks(pageId, afterId, [...]) // → new block ids    (one undo step)
+bento.outline()                            // the whole space as a tree
+bento.validate()                           // what is wrong or suspect
+bento.stats()                              // pages, blocks, words, bytes, biggest assets
+
+// write — each one is ONE undoable step
+bento.newPage(title, parent?)              // → new page id, or null
+bento.insertBlocks(pageId, afterId, [...]) // → new block ids, or null
+bento.updateBlock(id, patch)               // → {ok:true, id, page} | {ok:false, err}
+bento.removeBlocks([ids])                  // → {ok:true, removed, missing, added}
+bento.moveBlock(id, {pageId?, afterId?, beforeId?, parent?})
+bento.updatePage(id, patch)                // → {ok:true, id} | {ok:false, err}
+bento.removePage(id, {descendants?})       // → {ok:true, removed, rehomed, links}
 bento.loadDoc(json)                        // replace everything (one undo step)
+
 bento.serialize()                          // the whole .bento.html file
 bento.undo() / bento.redo()
-bento.readonly                             // true = a locked or frozen file; writes no-op
+bento.readonly                             // true = a locked or frozen file; every write returns err:'readonly'
 ```
 
-`insertBlocks` and `newPage` each commit **one undoable step** and mint their
-own ids. Use them in preference to `loadDoc` for anything incremental.
+Use the patch verbs, not `loadDoc`. Rewriting the document to add a paragraph
+flattens undo to one entry and overwrites anything a person typed while you
+were thinking.
+
+**A refused write changes nothing at all — including undo history.** Every verb
+validates before it touches the document, so a rejected patch does not leave an
+empty step for someone to undo.
+
+### Results are tagged
+
+The verbs added after 0.1.0 return `{ok: true, …}` or `{ok: false, err, detail}`
+rather than `null`. `err` is one of `readonly`, `no-such-block`, `no-such-page`,
+`bad-patch`, `immutable`, `not-serializable`, `cycle`, `last-page`.
+`insertBlocks` and `newPage` keep their original shapes (ids, or `null`),
+because files and scripts already depend on them.
+
+Nothing is ever silently ignored. Sending `id` in a patch is an error, not a
+no-op; so is `blocks` in a page patch (block structure goes through the block
+verbs, which keep ids, nesting and undo coherent). In a patch, `null` **deletes**
+a field.
+
+### `bento.validate()`
+
+```js
+const { ok, counts, findings } = bento.validate()
+findings.filter(f => f.severity === 'error')
+```
+
+Each finding is `{code, severity, message, fix, page?, block?, path?}`. It
+reports duplicate and missing ids, a page inside its own subtree (which is the
+one way a page becomes unreachable), parents naming nothing, `#p/` links and
+`pagelink` cards pointing at pages that do not exist, unknown block types, block
+markup inside inline `html` (and markup that is dropped whole), hrefs outside the
+allowlist, images with no `alt`, no size, a missing `asset:` or a remote `src`,
+a `home` naming nothing, pages with no blocks, and assets nothing references.
+
+`ok` means no **errors**; warnings and info do not make a document invalid.
+Severity is meant literally, so that a clean document is silent: **`validate()`
+reports nothing at all on the space a fresh file opens with**, and the rig
+enforces that. If you get findings, they are about your document.
+
+It only reads. A finding is advice, never a refusal — `parseDoc` remains the
+thing that decides whether a document opens at all.
+
+Unknown *property names* are deliberately not reported: unknown fields are how
+this format carries a future version's data, and how you can park your own
+metadata on a block.
+
+### `bento.outline()`
+
+The whole space in one call instead of one `getPage` per page:
+
+```js
+bento.outline()
+// { title, docId, pages, blocks, words,
+//   tree: [{ id, title, depth, parent?, icon?, archived?, home?,
+//            blocks, words, headings: [{id, level, text}], links: [pageId] }] }
+```
+
+In sidebar order (depth-first). Headings carry their **block id**, so what comes
+back can be handed straight to `updateBlock` or `moveBlock`. `links` is what
+that page points at, which is the other half of the backlinks a reader sees.
+
+### `bento.stats()`
+
+```js
+bento.stats()
+// { pages, archived, blocks, words, characters, blockTypes, todos,
+//   assets: {count, bytes, orphans, orphanBytes},
+//   bytes: {document, assets, text},
+//   biggest: [{key, bytes, mime, used}] }
+```
+
+This answers "why is this file 30 MB". It is always the images: prose is free
+(2,000 pages of it is about 5 MB). `used` is how many blocks reference that
+asset — `0` means it is dead weight, and deleting the key is pure savings. The
+app shell adds a fixed ~80 KB on top of `bytes.document`.
+
+### The patch verbs, exactly
+
+```js
+bento.insertBlocks(pageId, afterId, blocks)
+```
+Mints fresh ids — never yours — and inserts after `afterId` (`null` = the end of
+the page). An `afterId` that is not on that page is an **error**; it does not
+append somewhere else and report success. Blocks in one batch may nest inside
+each other: give them temporary `id`s and use those as `parent`, and the
+references are remapped to the minted ids.
+
+```js
+bento.updateBlock(id, {html, type, done, open, src, alt, …})
+```
+Changes fields on one block. `null` deletes a field. `id` is refused. `parent`
+must name a block on the same page and may not be inside the block's own
+subtree.
+
+```js
+bento.removeBlocks([id, …])
+```
+Takes the nested blocks with it — deleting a toggle deletes its body, because
+leaving blocks pointing at an id that no longer exists means they reappear,
+un-nested, at the next load. Ids that were not there come back in `missing`. If
+this empties a page, one blank paragraph is created and returned in `added` (a
+page with no blocks has nothing to put a caret in — nobody can type in it).
+
+```js
+bento.moveBlock(id, {pageId, afterId | beforeId, parent})
+```
+Moves a block and everything nested under it. Neither anchor = the end of the
+page. Moving across pages drops a `parent` that does not exist there; pass
+`parent` to re-nest deliberately, or `null` to un-nest.
+
+```js
+bento.updatePage(id, {title, icon, parent, archived, …})
+```
+`title` is plain text (it renders as text, so markup would show literally).
+`parent` may not be one of the page's own descendants. `archived: false`
+removes the key, which is what the editor writes.
+
+```js
+bento.removePage(id, {descendants: false})
+```
+By default the pages inside it move up a level rather than disappearing with it;
+`{descendants: true}` takes the subtree. `links` in the result counts the
+inbound links that just went dead. Removing every page is refused.
+
+### What you may write
+
+Everything an agent writes goes through the same sanitizer the editor uses, on
+the way IN: an agent cannot put into a file something this build could not have
+produced. `html` is reduced to the inline allowlist (a `<script>` does not
+survive), a `code` block's html is escaped text rather than markup, and a patch
+value JSON cannot carry — a function, a `Date`, a `Map`, a cycle — is refused
+rather than vanishing quietly at save time.
+
+## Before you finish — self-audit
+
+- [ ] `bento.validate()` clean of **errors**, and every warning either fixed or
+      a deliberate choice you could defend?
+- [ ] More than one topic? **Separate pages**, not headings in one long scroll.
+- [ ] Does anything link **across** the tree, or does everything only link down?
+      Backlinks are the feature a folder of files cannot have.
+- [ ] Every image `alt`-texted and embedded as an `asset:`?
+- [ ] **Have you opened it?** Click through the pages, fold the toggles, follow
+      the links. A space nobody read is not finished.
 
 ## Gotchas
 
@@ -220,6 +375,10 @@ own ids. Use them in preference to `loadDoc` for anything incremental.
 - `docId` is the document's identity. Never regenerate it when editing.
 - A `parent` naming something that does not exist is dropped at load: the page
   becomes a root page, the block re-homes. Not fatal, but not what you meant.
+  `validate()` names every one of them.
+- **Never write a page with an empty `blocks` array.** Nothing in it can take a
+  caret, so it is a page nobody can type in. Give it `[{ "type": "p", "html":
+  "" }]` — `bento.newPage()` does exactly that.
 - `readonly: true` and a `policy` this build does not know both open **frozen**
   — the file round-trips byte-exact and edits are refused.
 - A remote image `src` shows a placeholder until the reader asks for it. Embed

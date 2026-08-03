@@ -54,6 +54,21 @@ Versions follow `0.MINOR.PATCH` while pre-1.0.
   they are embedded; an image the browser cannot open keeps its path as text
   instead of becoming a broken picture. The whole import is one undo step, and
   pages are always ADDED — nothing already in the space is replaced.
+- **A space can be authored by an agent without flying blind.** `window.bento`
+  gains `validate()` — every duplicate id, dead link, unknown block type,
+  un-`alt`-ed image, orphaned asset and unreachable page, each with a severity
+  and a fix — plus `outline()` (the whole tree, with headings, in one call) and
+  `stats()` (where the bytes went, biggest assets first). `validate()` is
+  silent on a good document; that is enforced by the test rig against the space
+  every new file opens with.
+
+- **Structured edits instead of rewriting the file.** `updateBlock`,
+  `removeBlocks`, `moveBlock`, `updatePage` and `removePage` join
+  `insertBlocks`, each one undoable step, each refusing rather than silently
+  ignoring what it cannot do. A refused edit leaves no undo entry behind.
+  Everything an agent writes goes through the editor's own sanitizer first, so
+  the API cannot put anything in a file that the app itself could not have
+  written.
 
 ## [0.1.0] — 2026-08-03
 

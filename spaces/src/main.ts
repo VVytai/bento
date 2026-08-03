@@ -15,7 +15,13 @@ import {
 import { putRecovery, getRecovery, clearRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
 import { t, applyDirection } from './i18n'
-import { parseDoc, docContentKey, uid, type SpacesDoc, type ParseResult } from './model'
+import { parseDoc, docContentKey, uid, newPage, type SpacesDoc, type ParseResult } from './model'
+import {
+  validateDoc, outlineDoc, statsDoc,
+  planInsertBlocks, planUpdateBlock, planRemoveBlocks, planMoveBlock, planUpdatePage, planRemovePage,
+  plainTitle,
+  type Plan, type PlanError,
+} from './agent'
 import { starterDoc } from './starter'
 import { Store } from './store'
 import { Editor } from './editor'
@@ -242,6 +248,22 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
   void offerRecovery(doc, store, editor)
 
   // ---- the AI round-trip (PLATFORM §7) -----------------------------------
+  //
+  // Every write verb is ONE undoable step, and every one of them runs its plan
+  // FIRST: `store.commit` checkpoints undo before it mutates, so planning
+  // inside the commit would leave an undo entry behind for a patch that was
+  // refused. A refused patch changes nothing at all, including history.
+  function run<T extends object>(plan: Plan<T>): ({ ok: true } & T) | PlanError {
+    if (store.readOnly) {
+      return { ok: false, err: 'readonly', detail: 'this file is open read-only; nothing was changed' }
+    }
+    if (!plan.ok) return plan
+    const { apply, ...rest } = plan
+    store.commit(apply)
+    editor.repaint()
+    return rest as { ok: true } & T
+  }
+
   ;(window as any).bento = {
     format: doc.format,
     get doc() { return store.doc },
@@ -267,35 +289,45 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
       }
       return out
     },
+    /** what is WRONG or SUSPECT — see agent.ts */
+    validate: (target?: SpacesDoc) => validateDoc(target ?? store.doc),
+    /** the whole space as a tree, for orienting in one call */
+    outline: (target?: SpacesDoc) => outlineDoc(target ?? store.doc),
+    /** where the bytes are */
+    stats: (target?: SpacesDoc) => statsDoc(target ?? store.doc),
+
     /**
      * ONE undoable step. Without this an agent appending a paragraph has to
      * rewrite and reparse the whole space through loadDoc — clobbering
      * concurrent edits and flattening undo to a single entry.
+     *
+     * Keeps its original return shape (new ids, or null) because it shipped
+     * that way; the verbs below it return tagged results.
      */
     insertBlocks: (pageId: string, afterId: string | null, blocks: unknown[]) => {
-      // A read-only or frozen document accepts no writes: store.commit
-      // early-returns. Returning the ids anyway told the caller it had created
-      // blocks that do not exist — and an agent's next call addresses them,
-      // gets nothing, and has no way to tell that from an empty page. Refuse
-      // out loud instead.
-      if (store.readOnly) return null
-      const page = store.doc.pages.find((p) => p.id === pageId)
-      if (!page || !Array.isArray(blocks)) return null
-      const made = blocks.map((raw) => {
-        const src = (raw ?? {}) as Record<string, unknown>
-        return { ...src, id: uid('b'), type: String(src.type ?? 'p') }
-      })
-      store.commit(() => {
-        const at = afterId ? page.blocks.findIndex((b) => b.id === afterId) + 1 : page.blocks.length
-        page.blocks.splice(at < 1 ? page.blocks.length : at, 0, ...(made as any))
-      })
-      editor.repaint()
-      return made.map((m) => m.id)
+      const res = run(planInsertBlocks(store.doc, pageId, afterId ?? null, blocks))
+      return res.ok ? res.ids : null
     },
+    updateBlock: (id: string, patch: unknown) => run(planUpdateBlock(store.doc, id, patch)),
+    removeBlocks: (ids: unknown) => run(planRemoveBlocks(store.doc, ids)),
+    moveBlock: (id: string, to: unknown) => run(planMoveBlock(store.doc, id, to)),
+    updatePage: (id: string, patch: unknown) => run(planUpdatePage(store.doc, id, patch)),
+    removePage: (id: string, opts?: { descendants?: boolean }) =>
+      run(planRemovePage(store.doc, id, opts ?? {})),
+
+    /**
+     * A page carries one empty paragraph, exactly as the editor's own New page
+     * does. A page with no blocks has nothing to put a caret in — no gutter, no
+     * / menu, no way to type — so an agent creating one would hand a human a
+     * page they cannot write in.
+     */
     newPage: (title: string, parent?: string) => {
       if (store.readOnly) return null
-      const page = { id: uid('p'), title: String(title ?? 'Untitled'), blocks: [], ...(parent ? { parent } : {}) }
-      store.commit(() => { store.doc.pages.push(page as any) })
+      // a parent that names nothing would silently make this a ROOT page; say
+      // no instead, so the caller finds out now rather than in the sidebar
+      if (parent && !store.doc.pages.some((p) => p.id === parent)) return null
+      const page = newPage(plainTitle(title) || 'Untitled', parent ? { parent } : {})
+      store.commit(() => { store.doc.pages.push(page) })
       editor.repaint()
       return page.id
     },

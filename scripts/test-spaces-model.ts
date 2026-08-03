@@ -596,12 +596,15 @@ for (const [label, input, err] of [
   // 3. the agent API must not report ids for blocks it did not write —
   //    store.commit early-returns on a read-only document, and the ids came
   //    back anyway.
-  for (const verb of ['insertBlocks', 'newPage']) {
-    const at = main.indexOf(`${verb}: (`)
-    const body = main.slice(at, at + 900)
-    ok(/if \(store\.readOnly\) return null/.test(body),
-      `bento.${verb} refuses on a read-only document instead of returning phantom ids`)
-  }
+  // Every write verb goes through ONE gate. It used to be a per-verb `if
+  // (store.readOnly) return null`, which is a guard the next verb forgets; the
+  // planner checks once, before applying anything, and says WHY rather than
+  // returning a bare null an agent cannot distinguish from "nothing matched".
+  ok(/function run<T extends object>\(plan: Plan<T>\): [^\n]*\{\s*\n\s*if \(store\.readOnly\)/.test(main),
+    'every agent write verb is gated read-only in one place')
+  ok(/err: 'readonly'/.test(main), '…and refusing says why, rather than returning a bare null')
+  ok(/loadDoc: \(json: string\): boolean => \{\s*\n\s*if \(store\.readOnly\) return false/.test(main),
+    'loadDoc refuses too — it replaces the whole document and does not go through the planner')
 
   // 4. #p/<page>/<block> is ALREADY admissible under sanitize.ts's allowlist,
   //    so it can arrive in a file this build did not write. It used to resolve
