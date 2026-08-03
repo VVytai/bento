@@ -12,6 +12,7 @@ import { type Block, newBlock, newPage } from './model'
 import { Store } from './store'
 import { renderPage } from './render'
 import { canonicalize, sanitizeInline, textOf } from './sanitize'
+import { countOutsideTags, replaceOutsideTags } from './findreplace'
 import { t } from './i18n'
 import { openAbout } from './about'
 import { ICONS, type IconName } from './icons'
@@ -1313,17 +1314,24 @@ export class Editor {
       return b
     }
 
+    // ONE ENTRY PER OCCURRENCE, not per block. The readout, the stepper and the
+    // replace-all confirmation then all quote the same number — and it is the
+    // number of things that will actually change, because it comes from the
+    // routine that changes them (countOutsideTags / replaceOutsideTags share
+    // mapTextChunks). Counting blocks meant "2 found" above a dialog offering
+    // to replace 2, which then replaced 4.
     let hits: Array<{ pageId: string; blockId: string }> = []
     let at = -1
 
     const scan = () => {
-      const needle = q.value.toLowerCase()
+      const needle = q.value
       hits = []
       at = -1
       if (needle) {
         for (const p of s.doc.pages) {
           for (const b of p.blocks) {
-            if (textOf(b.html).toLowerCase().includes(needle)) hits.push({ pageId: p.id, blockId: b.id })
+            const n = countOutsideTags(b.html, needle)
+            for (let i = 0; i < n; i++) hits.push({ pageId: p.id, blockId: b.id })
           }
         }
       }
@@ -1347,6 +1355,10 @@ export class Editor {
       afterPaint(() => {
         const node = this.main.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(hit.blockId)}"]`)
         node?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        // two occurrences in one block are two stops: restart the flash, or
+        // the second step looks like the stepper did nothing
+        node?.classList.remove('sp-hit')
+        void node?.offsetWidth
         node?.classList.add('sp-hit')
         setTimeout(() => node?.classList.remove('sp-hit'), 1400)
       })
@@ -1356,14 +1368,13 @@ export class Editor {
       const needle = q.value
       if (!needle || !hits.length) return
       if (!confirm(t('Replace {n} occurrence(s) across the whole space?', { n: hits.length }))) return
-      const lower = needle.toLowerCase()
       // ONE commit for the whole sweep: a replace-all a user has to undo forty
       // times is not undoable in any sense they care about
       s.commit(() => {
         for (const p of s.doc.pages) {
           for (const b of p.blocks) {
-            if (!b.html || !textOf(b.html).toLowerCase().includes(lower)) continue
-            b.html = replaceOutsideTags(b.html, needle, rep.value)
+            if (!countOutsideTags(b.html, needle)) continue
+            b.html = replaceOutsideTags(b.html!, needle, rep.value)
           }
         }
       })
@@ -1694,37 +1705,6 @@ export const PAGE_ICONS: IconName[] = [
  * href — searching for "a" and replacing it would destroy every link on the
  * page. This walks the string and only substitutes OUTSIDE angle brackets.
  */
-export function replaceOutsideTags(html: string, needle: string, withText: string): string {
-  if (!needle) return html
-  // CASE-INSENSITIVE, to match the search that produced the count. A
-  // case-sensitive replace behind a case-insensitive find is the worst kind of
-  // mismatch: it reports "14 found" and quietly changes nine of them.
-  const lowerNeedle = needle.toLowerCase()
-  const replaceIn = (chunk: string): string => {
-    const lower = chunk.toLowerCase()
-    let out = ''
-    let from = 0
-    for (;;) {
-      const at = lower.indexOf(lowerNeedle, from)
-      if (at < 0) { out += chunk.slice(from); return out }
-      out += chunk.slice(from, at) + withText
-      from = at + needle.length
-    }
-  }
-  const out: string[] = []
-  let i = 0
-  while (i < html.length) {
-    const lt = html.indexOf('<', i)
-    const chunk = lt < 0 ? html.slice(i) : html.slice(i, lt)
-    out.push(replaceIn(chunk))
-    if (lt < 0) break
-    const gt = html.indexOf('>', lt)
-    if (gt < 0) { out.push(html.slice(lt)); break }
-    out.push(html.slice(lt, gt + 1))   // the tag itself, untouched
-    i = gt + 1
-  }
-  return out.join('')
-}
 
 /**
  * Run after the next paint — but run REGARDLESS.

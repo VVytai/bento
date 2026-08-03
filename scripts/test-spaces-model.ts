@@ -30,6 +30,7 @@ import {
   parseDoc, buildIndex, docContentKey, homePage, FORMAT, isRemote,
   type SpacesDoc,
 } from '../spaces/src/model.ts'
+import { countOutsideTags, replaceOutsideTags } from '../spaces/src/findreplace.ts'
 
 let failures = 0
 let checks = 0
@@ -301,6 +302,44 @@ for (const [label, input, err] of [
   // and turning encryption ON must remove what was written before it
   ok(/clearVersions\(/.test(about) && /clearRecovery\(/.test(about),
     'setting a password clears BOTH the version timeline and the recovery snapshot')
+}
+
+// ---- find & replace: the number shown IS the number changed ----------------
+// Replace-all is destructive and lands in one commit, so the count in the
+// readout, the count in the confirmation and the count of things that change
+// must be one number. They were three: the readout counted matching BLOCKS
+// ("2 found"), the dialog quoted that as "2 occurrences", and the sweep then
+// changed 4. Counting from `textOf()` would have been wrong in the other
+// direction — a needle split across markup reads as one word but cannot be
+// replaced, so it would promise a change that never happens.
+//
+// Both functions now share one traversal, and this pins them together.
+{
+  const cases: Array<[string, number]> = [
+    ['Widget and widget and WIDGET', 3],       // case-insensitive
+    ['a <b>widget</b> inside markup', 1],      // inside a tag's content
+    ['wid<b>get</b> split across tags', 0],    // NOT replaceable, so not counted
+    ['<b>widget</b><i>widget</i>', 2],
+    ['nothing here', 0],
+    ['widgetwidget', 2],                       // adjacent, no overlap-skipping
+    ['<a href="https://widget.example">x</a>', 0],  // an attribute is not text
+  ]
+  for (const [html, expect] of cases) {
+    const n = countOutsideTags(html, 'widget')
+    ok(n === expect, `count ${JSON.stringify(html).slice(0, 40)} → ${n} (expected ${expect})`)
+
+    // the property that matters: whatever was counted is what changes
+    const after = replaceOutsideTags(html, 'widget', 'gadget')
+    const made = (after.match(/gadget/g) ?? []).length
+    ok(made === expect, `…and replacing changes exactly ${expect} (changed ${made})`)
+  }
+
+  // an empty needle must never "match everything"
+  ok(countOutsideTags('anything', '') === 0, 'an empty needle counts nothing')
+  ok(replaceOutsideTags('anything', '', 'X') === 'anything', 'an empty needle replaces nothing')
+  // markup must survive the sweep untouched
+  ok(replaceOutsideTags('a <b class="x">widget</b>!', 'widget', 'gadget') === 'a <b class="x">gadget</b>!',
+    'tags and their attributes are preserved verbatim')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
