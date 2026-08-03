@@ -158,4 +158,10 @@ export const it: Catalog = {
   "Image from {host}": "Immagine da {host}",
   "Not loaded — opening it would tell that site you opened this space.": "Non caricata: caricarla direbbe a quel sito che hai aperto questo spazio.",
   "Load this image": "Carica questa immagine",
+  "New page": "Nuova pagina",
+  "Redo": "Ripristina",
+  "Reading view": "Vista di lettura",
+  "The pages without the editing tools": "Le pagine senza gli strumenti di modifica",
+  "Version, language, password, exports": "Versione, lingua, password, esportazioni",
+  "More": "Altro",
 }

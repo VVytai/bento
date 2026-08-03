@@ -158,4 +158,10 @@ export const zh_Hans: Catalog = {
   "Image from {host}": "来自 {host} 的图片",
   "Not loaded — opening it would tell that site you opened this space.": "未加载 — 加载会让该网站知道你打开了这个空间。",
   "Load this image": "加载此图片",
+  "New page": "新建页面",
+  "Redo": "重做",
+  "Reading view": "阅读视图",
+  "The pages without the editing tools": "不带编辑工具的页面",
+  "Version, language, password, exports": "版本、语言、密码、导出",
+  "More": "更多",
 }

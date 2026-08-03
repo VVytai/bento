@@ -158,4 +158,10 @@ export const zh_Hant: Catalog = {
   "Image from {host}": "來自 {host} 的圖片",
   "Not loaded — opening it would tell that site you opened this space.": "未載入 — 載入會讓該網站知道你開啟了這個空間。",
   "Load this image": "載入此圖片",
+  "New page": "新增頁面",
+  "Redo": "重做",
+  "Reading view": "閱讀檢視",
+  "The pages without the editing tools": "不含編輯工具的頁面",
+  "Version, language, password, exports": "版本、語言、密碼、匯出",
+  "More": "更多",
 }

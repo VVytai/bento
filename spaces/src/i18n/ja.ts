@@ -158,4 +158,10 @@ export const ja: Catalog = {
   "Image from {host}": "{host} の画像",
   "Not loaded — opening it would tell that site you opened this space.": "未読み込み — 読み込むと、このスペースを開いたことがそのサイトに伝わります。",
   "Load this image": "この画像を読み込む",
+  "New page": "新規ページ",
+  "Redo": "やり直す",
+  "Reading view": "閲覧ビュー",
+  "The pages without the editing tools": "編集ツールのないページ表示",
+  "Version, language, password, exports": "バージョン・言語・パスワード・書き出し",
+  "More": "その他",
 }

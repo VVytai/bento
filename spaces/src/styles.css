@@ -491,3 +491,34 @@ select, input, textarea, [contenteditable='true'] { -webkit-user-select: auto; u
 .sp-remote-load:hover { background: var(--chrome); border-color: var(--muted); }
 /* Print shows the placeholder text, never a blank gap the reader can't explain. */
 @media print { .sp-remote { border-color: #999; background: none; } .sp-remote-load { display: none; } }
+
+/* ————— narrow topbar: hide, never scroll —————
+   Measured at 375px: the bar wanted 678px, so seven of eleven controls sat off
+   the right edge — Save among them, which made the file unsaveable on a phone.
+   The rule is slides' rule: drop text and fold the less-used controls into ⋯,
+   so every action stays reachable at every width. A horizontally scrolling
+   toolbar hides the same controls, just less honestly. */
+.sp-more { display: none; }
+
+@media (max-width: 720px) {
+  .sp-sec { display: none; }
+  .sp-more { display: inline-flex; }
+  /* the wordmark is decoration here — the tab title carries identity */
+  .sp-mark { display: none; }
+  /* Save keeps its icon; the word costs 44px and says nothing the icon doesn't */
+  .sp-bar .sp-primary span.sp-savelabel { display: none; }
+  .sp-bar { gap: 2px; }
+  .sp-doctitle { font-size: 13px; }
+}
+
+/* Hit targets: a 30px button is a miss on a touch screen. */
+@media (pointer: coarse) {
+  .sp-bar .sp-btn { min-width: 40px; min-height: 40px; justify-content: center; }
+  .sp-dditem { padding-block: 11px; }
+}
+
+/* A menu opened from the right end of the bar must open INWARD. Anchoring
+   every dropdown to its start edge put the ⋯ and Save menus half off-screen at
+   375px — the items were there, just unreadable. */
+.sp-dd-end .sp-ddmenu { inset-inline-start: auto; inset-inline-end: 0; }
+.sp-ddmenu { max-width: calc(100vw - 20px); }

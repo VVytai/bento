@@ -130,22 +130,59 @@ export class Editor {
       }
     })
 
-    const newPageB = iconBtn('page', t('New page (⌘⌥N)'), () => this.newPage())
-
     this.undoB = iconBtn('undo', t('Undo (⌘Z)'), () => { this.store.undo(); this.repaint() })
-    this.redoB = iconBtn('redo', t('Redo (⇧⌘Z)'), () => { this.store.redo(); this.repaint() })
-
     const search = iconBtn('search', t('Search all pages (⌘K)'), () => this.openSearch())
-    const printB = iconBtn('print', t('Print or save as PDF (⌘P)'), () => this.openPrint())
-    this.readB = iconBtn('eye', t('Reading view — the pages without the editing tools'), () => this.toggleReading())
-    const about = iconBtn('info', t('About this space'), () =>
-      openAbout({ store: this.store, onRepaint: () => this.build() }))
+
+    // SECONDARY ACTIONS, declared ONCE.
+    //
+    // Measured at 375px before this existed: the bar wanted 678px, so seven of
+    // eleven controls sat off the right edge — including Save. On a phone the
+    // file could not be saved at all.
+    //
+    // Below the breakpoint these collapse into the ⋯ menu and the inline copies
+    // are hidden. One list feeds both, because a phone menu maintained by hand
+    // as a copy of the desktop row drifts the first time either one changes.
+    const secondary: Array<{
+      icon: IconName
+      label: string
+      hint: string
+      run: () => void
+      keep?: (b: HTMLButtonElement) => void
+    }> = [
+      { icon: 'page', label: t('New page'), hint: '⌘⌥N', run: () => this.newPage() },
+      { icon: 'redo', label: t('Redo'), hint: '⇧⌘Z',
+        run: () => { this.store.redo(); this.repaint() },
+        keep: (b) => { this.redoB = b } },
+      { icon: 'eye', label: t('Reading view'), hint: t('The pages without the editing tools'),
+        run: () => this.toggleReading(),
+        keep: (b) => { this.readB = b } },
+      { icon: 'print', label: t('Print or save as PDF'), hint: '⌘P', run: () => this.openPrint() },
+      { icon: 'info', label: t('About this space'), hint: t('Version, language, password, exports'),
+        run: () => openAbout({ store: this.store, onRepaint: () => this.build() }) },
+    ]
+
+    const inlineSecondary = secondary.map((a) => {
+      const b = iconBtn(a.icon, a.hint && a.hint.length < 12 ? `${a.label} (${a.hint})` : a.label, a.run)
+      b.classList.add('sp-sec')
+      a.keep?.(b)
+      return b
+    })
+
+    const more = this.dropdown('more', '', t('More'), (menu, close) => {
+      for (const a of secondary) {
+        menu.append(this.menuItem(a.icon, a.label, a.hint, () => { close(); a.run() }))
+      }
+    })
+    more.classList.add('sp-more', 'sp-dd-end')
 
     // save is a split control, as in slides: the common action, and the
     // less-common ways of writing this document somewhere else
     const saveB = iconBtn('save', t('Save (⌘S)'), () => this.onSave?.())
     saveB.classList.add('sp-primary')
-    saveB.append(document.createTextNode(t('Save')))
+    const saveLabel = document.createElement('span')
+    saveLabel.className = 'sp-savelabel'
+    saveLabel.textContent = t('Save')
+    saveB.append(saveLabel)
     const saveMore = this.dropdown('chevronDown', '', t('Other ways to save'), (menu, close) => {
       menu.append(this.menuItem('copy', t('Save a copy…'), t('A second file — the original is left alone'), () => {
         close(); void this.saveAs('copy')
@@ -160,10 +197,10 @@ export class Editor {
         close(); openAbout({ store: this.store, onRepaint: () => this.build() })
       }))
     })
-    saveMore.classList.add('sp-caret')
+    saveMore.classList.add('sp-caret', 'sp-dd-end')
 
-    bar.append(pagesB, mark, title, this.statusEl, insert, newPageB,
-      this.undoB, this.redoB, search, this.readB, printB, about, saveB, saveMore)
+    bar.append(pagesB, mark, title, this.statusEl, insert,
+      this.undoB, search, ...inlineSecondary, more, saveB, saveMore)
 
     this.sidebar = el('nav', 'sp-side')
     this.sidebar.setAttribute('aria-label', t('Pages'))

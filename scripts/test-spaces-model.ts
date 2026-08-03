@@ -342,5 +342,42 @@ for (const [label, input, err] of [
     'tags and their attributes are preserved verbatim')
 }
 
+// ---- every topbar action stays reachable at every width --------------------
+// Measured at 375px before the ⋯ menu existed: the bar wanted 678px, so seven
+// of eleven controls sat off the right edge — Save among them. The file could
+// not be saved on a phone, and nothing said so: the controls were in the DOM,
+// laid out, and simply painted past the edge.
+//
+// The rule (slides' rule) is: drop text and fold, never scroll. The failure
+// mode to guard is not the CSS — it is the SECOND LIST: a ⋯ menu maintained by
+// hand as a copy of the desktop row drifts the first time either changes, and
+// the drift is invisible until someone opens the app on a phone.
+{
+  const fs = await import('node:fs')
+  const ed = fs.readFileSync(new URL('../spaces/src/editor.ts', import.meta.url), 'utf8')
+  const css = fs.readFileSync(new URL('../spaces/src/styles.css', import.meta.url), 'utf8')
+
+  ok(/const secondary: Array<\{/.test(ed), 'the secondary topbar actions are declared as ONE list')
+  ok(/secondary\.map\(/.test(ed), '…the inline row is built from that list')
+  ok(/for \(const a of secondary\)/.test(ed), '…and the ⋯ menu is built from the SAME list')
+
+  ok(/@media \(max-width: 720px\)/.test(css), 'there is a narrow-width breakpoint')
+  const narrow = css.slice(css.indexOf('@media (max-width: 720px)'))
+  ok(/\.sp-sec \{ display: none/.test(narrow), 'narrow hides the inline secondary row')
+  ok(/\.sp-more \{ display: inline-flex/.test(narrow), 'narrow reveals the ⋯ menu')
+
+  // the bar must never become a scroller — that hides the same controls, just
+  // less honestly, and it is the fix everyone reaches for first
+  const barRule = css.slice(css.indexOf('.sp-bar {'), css.indexOf('}', css.indexOf('.sp-bar {')))
+  ok(!/overflow-x:\s*(auto|scroll)/.test(barRule), 'the topbar does not scroll horizontally')
+
+  // a menu opened from the right end must open inward
+  ok(/\.sp-dd-end \.sp-ddmenu \{ inset-inline-start: auto; inset-inline-end: 0/.test(css),
+    'right-end dropdowns open inward')
+  ok(/more\.classList\.add\('sp-more', 'sp-dd-end'\)/.test(ed) &&
+     /saveMore\.classList\.add\('sp-caret', 'sp-dd-end'\)/.test(ed),
+    '…and both right-end menus say so')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
