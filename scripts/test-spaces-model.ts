@@ -31,6 +31,8 @@ import {
   type SpacesDoc,
 } from '../spaces/src/model.ts'
 import { countOutsideTags, replaceOutsideTags } from '../spaces/src/findreplace.ts'
+import { tokenize, normLang, langLabel, CODE_LANGS } from '../spaces/src/highlight.ts'
+import { escText } from '../spaces/src/sanitize.ts'
 
 let failures = 0
 let checks = 0
@@ -340,6 +342,265 @@ for (const [label, input, err] of [
   // markup must survive the sweep untouched
   ok(replaceOutsideTags('a <b class="x">widget</b>!', 'widget', 'gadget') === 'a <b class="x">gadget</b>!',
     'tags and their attributes are preserved verbatim')
+}
+
+// ---- syntax highlighting: the tokenizer is TOTAL, and cannot emit text ------
+// Highlighting is applied at render time and must never touch the document, so
+// the guarantee has to be structural rather than a promise. `tokenize` returns
+// {kind, a, b} ranges into the caller's string — it has no way to produce a
+// character the input did not contain, let alone markup — and the tokens
+// PARTITION the input exactly. Sum the slices and you get the source back,
+// byte for byte, for every language, including on input designed to break a
+// lexer: an unterminated string, a lone backslash at EOF, a `</script>`, a
+// smuggled `<img onerror>`.
+//
+// The partition is also what makes the renderer's job safe: it walks the ranges
+// and builds one text node per token, so a bug here degrades to wrong COLOUR,
+// never to wrong text and never to markup.
+{
+  const LANGS = CODE_LANGS.map((l) => l.id)
+  ok(LANGS.length >= 9 && LANGS[0] === '', 'the picker offers plain text first, then the languages')
+
+  const corpus = [
+    '',
+    'plain words with no syntax at all',
+    'const a = 1 // done\n/* block\n   comment */\nfoo("bar", `t${x}`)',
+    'def f(x):\n    """doc"""\n    return {\'k\': [1, 2.5e-3, 0xff]}\n@dec\nclass C: pass',
+    '#!/bin/sh\nset -eu\necho "${HOME}/x" | grep -c \'a\'  # trailing note\ncurl host/p#frag',
+    '{"a": 1, "b": [true, null], "c": {"d": "e"}}',
+    'on: push\njobs:\n  build:\n    runs-on: ubuntu-latest   # comment\n    steps: []',
+    "SELECT * FROM t WHERE name = 'it''s' -- note\n/* x */ ORDER BY id DESC;",
+    '<!doctype html>\n<div class="a" data-x=\'y\'>text &amp; more</div><!-- c -->\n<br/>',
+    ':root { --x: 1; }\n.a:hover, #main { color: #1c4fb5; margin: -2.5rem 0 !important }\n@media print { }',
+    // hostile / degenerate
+    '</script><script>alert(1)</script>',
+    '<img src=x onerror="alert(1)">',
+    '"never closed',
+    "'\\",
+    '/* never closed',
+    '`multi\nline\ntemplate`',
+    '<div attr="never closed',
+    '<<<>>>< <',
+    '\r\n\t\u0000\u00a0',
+    '\\\\\\',
+    '𝔘𝔫𝔦 "🎉" — 中文 # x',
+    '#',
+    '@',
+    '$',
+    '0x',
+    '1e',
+    '...',
+    '---',
+    'a'.repeat(5000),
+  ]
+
+  let bad = 0
+  let lossy = 0
+  let split = 0
+  let stringy = 0
+  for (const lang of [...LANGS, 'rust', 'NOT-A-LANGUAGE', 'JavaScript', '.py']) {
+    for (const text of corpus) {
+      const toks = tokenize(text, lang)
+      let at = 0
+      let joined = ''
+      for (const tk of toks) {
+        if (tk.a !== at || tk.b <= tk.a || tk.b > text.length) bad++
+        // a token carrying a STRING would be a way for markup to appear; the
+        // shape is the guarantee, so it is asserted rather than assumed
+        if (Object.values(tk).some((v) => typeof v !== 'number' && typeof v !== 'string')) stringy++
+        if (typeof (tk as Record<string, unknown>).text === 'string') stringy++
+        // never cut a surrogate pair in half — the renderer makes one text node
+        // per token, and half a pair renders as U+FFFD
+        if (tk.a > 0 && text.charCodeAt(tk.a - 1) >= 0xd800 && text.charCodeAt(tk.a - 1) <= 0xdbff) split++
+        joined += text.slice(tk.a, tk.b)
+        at = tk.b
+      }
+      if (at !== text.length) bad++
+      if (joined !== text) lossy++
+    }
+  }
+  ok(bad === 0, `tokens PARTITION the input exactly, for every language and every input (${bad} violations)`)
+  ok(lossy === 0, `reassembling the tokens reproduces the source byte for byte (${lossy} losses)`)
+  ok(stringy === 0, 'a token is offsets only — it carries no text, so it cannot carry markup')
+  ok(split === 0, 'no token boundary falls inside a surrogate pair')
+
+  // an unknown or absent language is ONE plain token, deliberately: the
+  // fallback has to look like a decision, not like a lexer that gave up midway
+  for (const lang of [undefined, '', 'rust', 'brainfuck', 42, null]) {
+    const toks = tokenize('let x = "s" // c', lang)
+    ok(toks.length === 1 && toks[0].k === '' && toks[0].a === 0 && toks[0].b === 16,
+      `lang=${JSON.stringify(lang)} renders as one plain run`)
+  }
+
+  // aliases people actually type in a fence
+  for (const [raw, want] of [
+    ['javascript', 'js'], ['JS', 'js'], ['  tsx ', 'ts'], ['.py', 'py'], ['bash', 'sh'],
+    ['yml', 'yaml'], ['psql', 'sql'], ['svg', 'html'], ['rust', ''], ['', ''],
+  ] as const) {
+    ok(normLang(raw) === want, `normLang(${JSON.stringify(raw)}) = ${JSON.stringify(want)}`)
+  }
+  ok(langLabel('bash') === 'Shell', 'a known tag shows its language name')
+  ok(langLabel('rust') === 'rust', 'an UNKNOWN tag shows itself, so a plain block explains why it is plain')
+
+  /** The kind of the token covering `needle`'s first occurrence. */
+  const kindAt = (text: string, lang: string, needle: string, nth = 0): string => {
+    let at = -1
+    for (let i = 0; i <= nth; i++) at = text.indexOf(needle, at + 1)
+    const tk = tokenize(text, lang).find((t) => t.a <= at && t.b >= at + needle.length)
+    return tk ? tk.k : '?'
+  }
+
+  const cases: Array<[string, string, string, string]> = [
+    // language, source, needle, expected kind
+    ['js', 'const x = 1 // hi', 'const', 'k'],
+    ['js', 'const x = 1 // hi', '// hi', 'c'],
+    ['js', 'const x = 1 // hi', '1', 'n'],
+    ['js', 'f("a\\"b", 2)', '"a\\"b"', 's'],
+    ['js', 'x = `a\nb`', '`a\nb`', 's'],
+    ['js', 'JSON.parse(s)', 'JSON', 'l'],
+    ['ts', 'let a: string = "x"', 'string', 'l'],
+    ['py', 'def f():\n  return None', 'def', 'k'],
+    ['py', 'x = """a\nb"""', '"""a\nb"""', 's'],
+    ['py', '@cache\ndef f(): pass', '@cache', 'k'],
+    ['sh', 'echo "$HOME"', 'echo', 'l'],
+    ['sh', 'echo $HOME', '$HOME', 'l'],
+    ['sh', 'curl host/p#frag', '#frag', ''],            // NOT a comment
+    ['sh', 'ls  # really a comment', '# really a comment', 'c'],
+    ['sh', "echo 'C:\\'", "'C:\\'", 's'],               // no backslash escapes
+    ['json', '{"a": 1}', '"a"', 'p'],                   // a key, not a value
+    ['json', '{"a": "b"}', '"b"', 's'],
+    ['json', '{"a": null}', 'null', 'l'],
+    ['yaml', 'on: push', 'on', 'p'],                    // key beats the literal
+    ['yaml', 'x: on', 'on', 'l'],
+    ['yaml', 'runs-on: x', 'runs-on', 'p'],
+    ['sql', 'select * from t', 'select', 'k'],
+    ['sql', 'SELECT * FROM t', 'SELECT', 'k'],          // case-insensitive
+    ['sql', "a = 'it''s'", "'it''s'", 's'],
+    ['sql', 'x -- note', '-- note', 'c'],
+    ['css', '.a { color: red }', 'color', 'p'],
+    ['css', '.a { color: #1c4fb5 }', '#1c4fb5', 'n'],
+    ['css', '#main { }', '#main', ''],                  // an id is not a colour
+    ['css', '@media print {}', '@media', 'k'],
+    ['css', 'a { margin: 10px }', '10px', 'n'],
+    ['html', '<div class="a">t</div>', '<div', 'k'],
+    ['html', '<div class="a">t</div>', 'class', 'p'],
+    ['html', '<div class="a">t</div>', '"a"', 's'],
+    ['html', '<div>text</div>', 'text', ''],
+    ['html', '<!-- c --><p>', '<!-- c -->', 'c'],
+  ]
+  for (const [lang, src, needle, want] of cases) {
+    const got = kindAt(src, lang, needle)
+    ok(got === want, `${lang}: ${JSON.stringify(needle)} in ${JSON.stringify(src).slice(0, 34)} → "${got}" (want "${want}")`)
+  }
+
+  // an unterminated string stops at the line, not at end of file: half-written
+  // code is the normal state of a code block, and one stray quote must not turn
+  // the rest of the block into a string while you are typing
+  {
+    const src = 'a = "oops\nb = 2\nc = 3'
+    ok(kindAt(src, 'js', '"oops') === 's' && kindAt(src, 'js', 'b = ') === '',
+      'an unterminated string ends at the newline, not at end of file')
+  }
+}
+
+// ---- what a code block STORES is plain text, and it round-trips -------------
+// Colour is applied at render time; `Block.html` stays what it always was.
+// `escText` is what the editor writes back, and it must be the exact inverse of
+// the html parser's text decode — otherwise every save of an untouched block
+// differs from the one before it, forever, in a format with no server to fix it.
+{
+  const decode = (s: string): string =>
+    s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+
+  const texts = [
+    'const a = 1',
+    'if (a < b && c > d) {}',
+    '</script><script>alert(1)</script>',
+    '<img src=x onerror="alert(1)">',
+    'q = "double" and \'single\'',
+    'a &amp; b',                 // already-escaped-looking text must survive
+    'tab\there\nnewline\n\n',
+    '𝔘𝔫𝔦 🎉 中文',
+  ]
+  let round = 0
+  for (const s of texts) if (decode(escText(s)) !== s) round++
+  ok(round === 0, 'escText round-trips through an html text decode, exactly')
+  ok(!escText('say "hi"').includes('&quot;'),
+    'escText leaves quotes alone — escaping them would make every save differ from the last')
+  ok(escText('a & b') === 'a &amp; b' && escText('<i>') === '&lt;i&gt;',
+    'escText escapes &, < and > — so a code block can never close its own tag')
+
+  // and the whole document round-trips with code blocks in it
+  const withCode = doc({
+    pages: [{
+      id: 'p1', title: 'Code', blocks: [
+        { id: 'b1', type: 'code', lang: 'js', html: escText('const a = "<b>" // &') },
+        { id: 'b2', type: 'code', lang: 'rust', html: escText('fn main() {}') },
+        { id: 'b3', type: 'code', html: escText('no language at all') },
+      ],
+    }],
+  })
+  const r = parseDoc(withCode)
+  ok(r.ok, 'a document full of code blocks parses')
+  if (r.ok) {
+    ok(r.doc.pages[0].blocks[0].html === 'const a = "&lt;b&gt;" // &amp;',
+      'a code block\'s html survives parse untouched')
+    ok(r.doc.pages[0].blocks[1].lang === 'rust',
+      'a language this build cannot highlight is PRESERVED, not normalised away')
+    const again = parseDoc(JSON.stringify(r.doc))
+    ok(again.ok && JSON.stringify(again.doc.pages) === JSON.stringify(r.doc.pages),
+      'and a second round trip changes nothing')
+  }
+}
+
+// ---- highlighting builds NODES, never a string of markup -------------------
+// The tokenizer cannot emit text (above), so the only place markup could enter
+// is the painter. It must build with createElement/createTextNode and assign
+// through textContent/Text.data — never innerHTML, which is how every other
+// highlighter on the web does it and why they all need their own escaper.
+{
+  const fs = await import('node:fs')
+  const read = (f: string) => fs.readFileSync(new URL(`../spaces/src/${f}`, import.meta.url), 'utf8')
+
+  const hl = read('highlight.ts')
+  ok(!/innerHTML|outerHTML|insertAdjacentHTML|document\./.test(hl),
+    'highlight.ts touches no DOM at all — it is a pure string→ranges function')
+
+  const ren = read('render.ts')
+  const paint = /export function paintCode[\s\S]*?\n}\n/.exec(ren)?.[0] ?? ''
+  ok(paint.length > 0, 'render.ts exports paintCode')
+  ok(!/innerHTML/.test(paint), 'paintCode never assigns innerHTML')
+  ok(/createTextNode/.test(paint) && /createElement/.test(paint),
+    'paintCode builds text nodes and elements')
+  ok(/text\.slice\(tk\.a, tk\.b\)/.test(paint),
+    'every painted string is a SLICE OF THE INPUT, so colouring cannot invent a character')
+
+  // and the editor must read a code host as TEXT. Reading innerHTML there would
+  // write the colour spans into the document — a permanent format change for a
+  // render-time feature.
+  const ed = read('editor.ts')
+  const wireCode = /private wireCode[\s\S]*?\n  }\n/.exec(ed)?.[0] ?? ''
+  ok(wireCode.length > 0, 'editor.ts has a dedicated code-block host')
+  ok(!/innerHTML/.test(wireCode) && /host\.textContent/.test(wireCode),
+    'the code host is read as textContent — colour spans never reach the model')
+  ok(/escText\(text\)/.test(wireCode), 'and stored through escText')
+
+  // A code block is TEXT: Enter must insert a newline rather than split the
+  // block, because the model is now read from textContent and a `<br>` or a
+  // wrapping `<div>` (which is what some engines insert) would vanish from it.
+  ok(/b\.type === 'code'[\s\S]{0,400}insertText\('\\n'\)/.test(ed),
+    'Enter inside a code block inserts a newline instead of splitting the block')
+
+  // THE TRAILING SPACE IS NOT A SPACE. Measured in Chrome on the built shell:
+  // after typing "## " into an empty block, `host.textContent` is
+  // ['#','#',160] — the engine inserts U+00A0 so the space cannot collapse — so
+  // `/^## $/` never matched and EVERY space-completed markdown trigger was
+  // dead. The ```lang fence needs the same trailing space, which is how this
+  // surfaced. The normalisation is applied to the test text only, never to the
+  // model.
+  ok(/replace\(\/\\u00a0\/g, ' '\)/.test(ed),
+    'autoformat normalises the NBSP a browser inserts for a trailing space')
+  ok(!/\u00a0/.test(ed), 'and editor.ts carries no LITERAL invisible NBSP, which would not survive retyping')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

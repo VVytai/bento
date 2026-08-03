@@ -89,7 +89,12 @@ export function starterDoc(): SpacesDoc {
           b('todo', '<code>[] </code> makes a checkbox', { done: false }),
           b('h2', 'Blocks that are not text'),
           b('quote', 'A quote — type <code>&gt; </code>.'),
-          b('code', 'const space = oneFile\n// ```  makes a code block', { lang: 'js' }),
+          b('code',
+            '// ```js  makes a highlighted block\n' +
+            'const space = { file: 1, pages: 5 }\n' +
+            'console.log(`one file, ${space.pages} pages`)',
+            { lang: 'js' }),
+          b('p', 'Hover a code block to see — and change — its language.'),
           toggle,
           b('p', 'Anything indented under a toggle folds away with it.', { parent: toggle.id }),
           b('divider'),

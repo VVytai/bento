@@ -1578,3 +1578,78 @@ feature that genuinely cannot be core (a licence that forbids bundling, or bytes
 that dwarf the shell even after a first-party rewrite), or a demonstrated need
 for third-party authorship. Absent those, the answer to "should this be an
 extension?" is "should this be core, a separate artifact, or a skill?"
+
+## 2026-08-03 — Code highlighting is in-house, offsets-only, and render-time
+
+**Decision.** `bento/spaces` highlights code with its own ~350-line lexer
+(`spaces/src/highlight.ts`), not a library, in eight languages: JavaScript,
+TypeScript, Python, Shell, JSON, YAML, SQL, HTML/XML, CSS. Everything else
+renders plain, deliberately.
+
+**Why no library.** highlight.js is ~120KB and the useful subset of Prism is
+~30KB+; the whole spaces shell was 72KB compressed. Either is the largest thing
+in a product whose premise is that you can mail the file. Measured after
+shipping ours: the lexer + painter + chip + palette cost **4.0KB compressed**,
+and all eight vocabularies together a further **1.4KB** — ~180 bytes per
+language, because keyword lists are lowercase ASCII and deflate eats them. So
+the machinery is the cost and languages are nearly free, which inverts the
+instinct to "support fewer languages to save space". It also means the honest
+reason to stop at eight is testing, not bytes.
+
+**Which eight.** What a working notebook accumulates — shell one-liners, a
+config file, a snippet from the codebase — not a survey of languages. Adding a
+curly-brace language is one keyword list; resist it anyway, because a language
+nobody tested renders *nearly* right, which is worse than the plain fallback.
+An unknown tag is kept verbatim in `lang`, so a `rust` block round-trips,
+exports as ```` ```rust ````, and lights up by itself if the lexer learns it.
+
+**THE TOKENIZER RETURNS OFFSETS, NEVER STRINGS.** A token is `{kind, a, b}` into
+the caller's text and the tokens partition `[0, len)` exactly. That is the
+security property, not tidiness: code in a space is text someone mailed you, and
+a highlighter that cannot produce a character cannot produce markup, whatever
+the input does. The painter walks the ranges and builds nodes with
+`createTextNode`; there is no constructed markup string anywhere in the path and
+therefore no escaper to get wrong — which is how every other highlighter on the
+web does it, and why they all need one. `scripts/test-spaces-model.ts` asserts
+the partition across every language over a corpus that includes `</script>`,
+`<img onerror>`, unterminated strings and lone backslashes.
+
+**Colour never enters the document.** `Block.html` stays the html-escaped plain
+text it always was, so the same block is the same bytes whether or not the
+reading build can highlight it, and reading view and print get their colour from
+the same `renderBlock` call the editor uses. The editor's code host is therefore
+read as `textContent` (not `innerHTML`, which now contains the colour spans) and
+written through `sanitize.ts escText`, which escapes `&`, `<`, `>` and *not* `"`
+— matching the html serializer exactly, so an untouched block never serializes
+differently from the save before it.
+
+**Highlighting a live contenteditable: reconcile, do not replace.** The painter
+diffs the token stream against the existing child nodes and mutates only what
+differs. The point is that on `input` the browser has ALREADY applied the
+keystroke, so re-tokenising usually yields byte-identical nodes: measured in
+Chrome on the built shell, typing in the middle of a line produced **one
+`characterData` mutation (the browser's own) and zero `childList` mutations**,
+and the caret moved 76 → 77 — untouched rather than restored. Only a keystroke
+that moves a token boundary restructures anything; typing `"` produced
+`childList` records and the caret went 79 → 80, restored by character offset.
+An explicit save/restore on every keystroke would have been simpler and wrong:
+assigning `Text.data` is specified to collapse a live range inside it to offset
+0, so the restore has to exist — it just must not be the common path. IME
+composition is skipped until `compositionend`; the model keeps up regardless.
+
+**Found while building this: every markdown trigger was dead.** A space typed at
+the end of a contenteditable line is inserted as U+00A0 so it cannot collapse.
+Measured: after typing `## `, `host.textContent` is `['#','#',160]`, so
+`/^## $/` never matched — `# `, `- `, `1. `, `> `, `[] ` and `--- ` had never
+fired since 0.1.0. `autoformat` now normalises the NBSP before testing (never in
+the model). This surfaced because the ```` ```lang ```` fence needs the same
+trailing space; the bare ```` ``` ```` trigger was changed to be
+space-completed, both for consistency with every other rule in that table and
+because there is no keystroke left to type the language into otherwise.
+
+**A trailing newline in an edited code block is Chrome, and it is bounded.**
+Measured on a bare `pre-wrap` contenteditable with no Bento code involved:
+inserting multi-line text yields one trailing `\n` (the caret placeholder), and
+it does not accumulate — seeded with `abc\n` and typed into, the result is
+`abcy\n`, still one. Left alone; the previous `innerHTML` read produced the same
+byte.
