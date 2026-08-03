@@ -15,6 +15,7 @@ import { canonicalize, sanitizeInline, textOf } from './sanitize'
 import { t } from './i18n'
 import { openAbout } from './about'
 import { ICONS, type IconName } from './icons'
+import { internAsset, prepareImage, humanBytes, IMAGE_EMBED_BUDGET, blobToDataUri } from './assets'
 
 const CTRL = navigator.platform.toLowerCase().includes('mac') ? 'metaKey' : 'ctrlKey'
 
@@ -46,6 +47,7 @@ const SLASH_ITEMS: Array<{ type: string; label: string; hint: string; icon: Icon
   { type: 'code', label: 'Code', hint: '```', icon: 'code' },
   { type: 'divider', label: 'Divider', hint: '---', icon: 'divider' },
   { type: 'pagelink', label: 'Link to page', hint: 'A card that opens a page', icon: 'link' },
+  { type: 'image', label: 'Image', hint: 'Embedded in the file', icon: 'image' },
 ]
 
 export class Editor {
@@ -109,6 +111,7 @@ export class Editor {
           this.store.commit(() => { page.blocks.push(fresh) })
           this.paintPage()
           if (item.type === 'pagelink') this.insertPageCard(fresh.id)
+          else if (item.type === 'image') void this.pickImage(fresh.id)
           else this.focusBlock(fresh.id)
         }))
       }
@@ -498,6 +501,56 @@ export class Editor {
         s.commit(() => { const b = s.block(id); if (b) b.open = !b.open })
         this.paintPage()
       })
+    }
+
+    // an image can arrive by paste or by drop, not only through a menu
+    view.addEventListener('paste', (e) => {
+      const cur = this.blockAt(document.activeElement)
+      if (e.clipboardData?.files?.length) {
+        e.preventDefault()
+        void this.imageFromTransfer(e.clipboardData, cur?.id)
+      }
+    })
+    view.addEventListener('dragover', (e) => {
+      if (e.dataTransfer?.types.includes('Files')) { e.preventDefault(); view.classList.add('sp-filedrop') }
+    })
+    view.addEventListener('dragleave', () => view.classList.remove('sp-filedrop'))
+    view.addEventListener('drop', (e) => {
+      if (!e.dataTransfer?.types.includes('Files')) return
+      e.preventDefault()
+      view.classList.remove('sp-filedrop')
+      const near = (e.target as HTMLElement)?.closest?.('[data-block-id]') as HTMLElement | null
+      void this.imageFromTransfer(e.dataTransfer, near?.dataset.blockId)
+    })
+
+    for (const fig of view.querySelectorAll<HTMLElement>('.sp-b-image')) {
+      const id = fig.dataset.blockId!
+      const b = s.block(id)
+      const tools = el('div', 'sp-imgtools')
+      const sizeBtn = document.createElement('button')
+      sizeBtn.className = 'sp-btn'
+      sizeBtn.type = 'button'
+      sizeBtn.textContent = `${b?.width ?? 100}%`
+      sizeBtn.title = t('Width in the text column')
+      sizeBtn.addEventListener('click', () => {
+        const steps = [100, 75, 50, 33]
+        const cur = Number(b?.width ?? 100)
+        const next = steps[(steps.indexOf(cur) + 1) % steps.length]
+        s.commit(() => { const bb = s.block(id); if (bb) bb.width = next })
+        this.paintPage()
+      })
+      tools.append(sizeBtn)
+      // a re-encoded image says so, and offers the untouched bytes back
+      if (b && b.original === false) {
+        const badge = document.createElement('button')
+        badge.className = 'sp-btn sp-badge'
+        badge.type = 'button'
+        badge.textContent = t('Resized')
+        badge.title = t('This image was resized to keep the file small. Click to replace it with the original.')
+        badge.addEventListener('click', () => void this.pickImage(id))
+        tools.append(badge)
+      }
+      fig.append(tools)
     }
 
     // intra-space links navigate without leaving the document
@@ -955,6 +1008,91 @@ export class Editor {
       }
       document.addEventListener('mousedown', away)
     }, 0)
+  }
+
+  // ---- images --------------------------------------------------------------
+  /** Choose a file and put it in the document. */
+  async pickImage(blockId: string): Promise<void> {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/*'
+    input.addEventListener('change', () => {
+      const file = input.files?.[0]
+      if (file) void this.placeImage(blockId, file)
+    })
+    input.click()
+  }
+
+  /**
+   * Embed one image.
+   *
+   * Everything slow and asynchronous — reading, decoding, re-encoding, hashing
+   * — happens BEFORE the commit, so the bytes and the reference land in ONE
+   * synchronous mutation. That is what makes an image insert a single undo
+   * step instead of a half-inserted block if something throws in between.
+   */
+  async placeImage(
+    blockId: string | null,
+    file: File | Blob,
+    opts: { keepOriginal?: boolean; insertAfter?: string | null } = {},
+  ): Promise<void> {
+    const s = this.store
+    this.status(t('Reading image…'))
+    let prepared
+    try {
+      prepared = opts.keepOriginal
+        ? { dataUri: await blobToDataUri(file), w: 0, h: 0, original: true, wasBytes: file.size }
+        : await prepareImage(file)
+    } catch {
+      this.status(t('That file could not be read as an image'))
+      return
+    }
+
+    if (prepared.dataUri.length > IMAGE_EMBED_BUDGET) {
+      const ok = confirm(t(
+        'This image is {size} and travels inside the file, making it that much bigger for everyone you send it to. Embed it anyway?',
+        { size: humanBytes(prepared.dataUri.length) },
+      ))
+      if (!ok) { this.status(''); return }
+    }
+
+    const ref = await internAsset(s.doc, prepared.dataUri)
+    const fill = (b: Block) => {
+      b.type = 'image'
+      b.src = ref
+      b.html = ''
+      if (prepared.w) { b.w = prepared.w; b.h = prepared.h }
+      if (!prepared.original) b.original = false
+      else delete b.original
+    }
+    // ONE commit, whether the block already exists or is being created here.
+    // Creating it in a separate commit would make an inserted image take TWO
+    // undos, the second of which removes a block the author never saw.
+    s.commit(() => {
+      if (blockId) { const b = s.block(blockId); if (b) fill(b) ; return }
+      const page = s.page
+      if (!page) return
+      const fresh = newBlock('image')
+      fill(fresh)
+      const at = opts.insertAfter ? page.blocks.findIndex((b) => b.id === opts.insertAfter) + 1 : page.blocks.length
+      page.blocks.splice(at < 1 ? page.blocks.length : at, 0, fresh)
+    })
+    this.paintPage()
+    this.status(prepared.original
+      ? t('Image added ({size})', { size: humanBytes(prepared.dataUri.length) })
+      : t('Image added, resized to fit ({from} → {to})', {
+        from: humanBytes(prepared.wasBytes), to: humanBytes(prepared.dataUri.length),
+      }))
+  }
+
+  /** Drop or paste an image straight onto the page. */
+  private async imageFromTransfer(dt: DataTransfer | null, afterId?: string): Promise<boolean> {
+    const file = [...(dt?.files ?? [])].find((f) => f.type.startsWith('image/'))
+      ?? [...(dt?.items ?? [])].filter((i) => i.type.startsWith('image/')).map((i) => i.getAsFile())[0]
+    if (!file) return false
+    if (!this.store.page) return false
+    await this.placeImage(null, file, { insertAfter: afterId ?? null })
+    return true
   }
 
   // ---- print ---------------------------------------------------------------

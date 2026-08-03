@@ -403,3 +403,19 @@ select, input, textarea, [contenteditable='true'] { -webkit-user-select: auto; u
   .sp-printroot .sp-pageicon, .sp-printroot .sp-backlinks { display: none; }
   @page { margin: 18mm 16mm; }
 }
+
+/* ————— images ————— */
+.sp-b-image { position: relative; }
+.sp-imgtools {
+  position: absolute; top: 8px; inset-inline-end: 8px;
+  display: flex; gap: 4px; opacity: 0; transition: opacity .12s;
+}
+.sp-b-image:hover .sp-imgtools, .sp-imgtools:focus-within { opacity: 1; }
+.sp-imgtools .sp-btn {
+  background: rgb(255 255 255 / .94); border-color: var(--line);
+  font-size: 12px; padding: 4px 8px;
+  box-shadow: 0 2px 8px rgb(20 30 45 / .12);
+}
+.sp-imgtools .sp-badge { color: var(--accent-ink); }
+.sp-b-image figure { position: relative; }
+.sp-page.sp-filedrop { outline: 2px dashed var(--blue); outline-offset: 8px; border-radius: var(--radius); }
