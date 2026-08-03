@@ -14,6 +14,28 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-03 — Sync parameterization is gated on BYTE equivalence, not convergence
+
+Making `slides/src/sync/` serve spaces (`doc.pages[] → page.blocks[]`) by
+parameterizing it over a document-shape descriptor is the agreed approach — but
+`scripts/test-sync.ts` cannot police it. It proves CONVERGENCE: replicas of the
+SAME engine agree. An engine that converges beautifully with itself while
+minting different ops, position keys or lamport stamps than the shipped one
+sails straight through it, and then every bento/slides file in the field —
+each carrying persisted `SyncStateJSON` and talking to the deployed relay —
+silently splits from its own copies, unfixably.
+
+So the gate is `scripts/test-sync-equiv.ts`: run baseline and candidate off one
+seeded PRNG stream and assert the emitted BYTES are identical (op batches with
+field order, `SyncStateJSON`, materialized doc), per step, per actor, plus a
+scripted suite for `adopt`/`mergeSnapshot`/`fromJSON`/`missingFor`. It carries
+four convergent-but-different mutant engines as a self-test, because it passes
+trivially until the candidate import is repointed and a comparator that has
+never failed proves nothing. **No parameterization work merges without this rig
+green in LIVE mode.** Fixtures now live in `scripts/lib/sync-fixtures.ts`,
+shared by both rigs, so the two never drift into different opinions of what an
+edit is. Wired into CI beside the convergence rig.
+
 ## 2026-08-02 — dash budgets BYTES with consent, not rows with a refusal
 
 **Supersedes the hard stop proposed in the dash design doc §3.2** (refuse at
