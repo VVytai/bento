@@ -1253,6 +1253,55 @@ CI-testable, but the registry drifting from the tree is. It pins `appId`
 against each app's own `configureApp()` call and the manifest URL against the
 path the release publishes to.
 
+## 2026-08-03 — Release notes, agent guides and tags are PER APP
+
+**Decision.** `scripts/apps.mjs` gained `changelog` and `agents` per app. A
+release reads its own app's changelog (`CHANGELOG.md` for slides,
+`spaces/CHANGELOG.md` for spaces) and publishes its own agent guide at
+`bento.page/<app>/agents.md`. Tags are prefixed for every app but slides.
+
+**The bug this fixes.** `release.mjs` read `join(root, 'CHANGELOG.md')`
+unconditionally, and that file's first line is "All notable changes to
+**bento/slides**". The first spaces release would therefore have SIGNED slides'
+release notes into the spaces manifest — and every shipped spaces file fetches
+that manifest at launch and renders `notes` inline in the About dialog. So the
+failure is not a build error; it is a correct-looking release that tells all of
+one product's users about a different product's changes.
+
+It is unrecoverable in the ordinary way. The notes are inside the signed
+envelope, so fixing them means re-signing — and the updater enforces version
+monotonicity, so the same version cannot be re-signed. The fix would be
+burning a version number.
+
+**Why it was invisible.** Every gate was app-scoped. The registry rig checked
+`dir`, `shell` and `appId` against each app's own source of truth, and each
+check passed for each app in isolation. The wrongness only exists in the PAIR:
+two apps naming one file. That is now a single assertion — the set of
+changelogs has the same size as the set of apps — plus, per app, "your
+changelog has a section for the version being released, and that section has
+bold lead-ins" (a section of pure prose signs EMPTY notes, which is the same
+class of silent failure).
+
+**`--print-notes`.** `node scripts/release.mjs --app <app> --print-notes`
+prints exactly what would be signed and exits before anything is built, wiped
+or signed. A one-way artifact should be readable before it is committed to;
+this makes reading it a one-second step rather than an act of faith. It runs
+ahead of the `site/` wipe, which is why `cmpVer` is a function declaration and
+not a const arrow — the const is in the TDZ at that point in the file.
+
+**Agent guides.** `docs/agents.md` already advertised
+`bento.page/<app>/agents.md` as the convention, but only the site-root
+`/agents.md` was ever written. Each app now publishes its own guide at the
+advertised URL, and slides copies its own to `/agents.md` for compatibility —
+the README and the harness `SKILL.md` point there, and that SKILL.md ships
+inside a zip people upload to claude.ai, so the root URL is effectively frozen.
+One source, two paths.
+
+**Tags.** Slides has 23 tags in the bare `vX.Y.Z` form and is at 1.0.15;
+spaces starts at 0.1.0. An unprefixed spaces tag would sort into the middle of
+slides' history and permanently claim a version slides cannot reuse. Slides
+keeps bare; everything else is `<app>-vX.Y.Z`.
+
 ## 2026-08-03 — One bento/spaces file is one SPACE, and the reason is a save primitive
 
 Spaces is a tree of pages in ONE `.bento.html`, with links as same-document

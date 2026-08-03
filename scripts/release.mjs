@@ -18,6 +18,7 @@
 //     CNAME                                  bento.page
 //     index.html                             placeholder landing page
 //     <app>/index.html                       live demo (the shell itself)
+//     <app>/agents.md                        that app's AI-agent guide
 //     releases/<app>/Bento_<App>.bento.html  the download
 //     releases/<app>/manifest.json           signed update manifest
 //     releases/slides/packs/*.pack.json      language packs (slides only today)
@@ -63,6 +64,20 @@ const site = join(root, 'site')
 const published = process.env.BENTO_SITE_DIR
   ? resolve(process.env.BENTO_SITE_DIR)
   : resolve(root, '..', 'bento-site')
+
+// `--print-notes` shows exactly what this release would sign into the manifest,
+// then exits. Nothing is built, staged, wiped or signed.
+//
+// The notes are the one released artifact with no way back: they are inside the
+// signed envelope, every shipped file fetches it at launch, and re-signing the
+// same version is refused by the monotonicity check. Reading them once, before
+// the key is touched, costs a second. (The function declarations below hoist.)
+if (args.includes('--print-notes')) {
+  const sections = changelogSections()
+  console.log(`${app.appId} v${version} — from ${app.changelog}\n`)
+  console.log(releaseNotesString(sections) ?? '(no notes — the changelog has no section for this version)')
+  process.exit(0)
+}
 
 if (!args.includes('--no-build')) {
   console.log(`Building ${app.appId} v${version}…`)
@@ -114,6 +129,22 @@ cpSync(shellSrc, join(site, `releases/${app.dir}/${app.shell}`))
 // The live demo IS the shell — opening it boots the editor with the starter doc.
 cpSync(shellSrc, join(site, `${app.dir}/index.html`))
 
+// The agent guide, at the URL the guides themselves advertise:
+// `bento.page/<app>/agents.md`. Stamped with this shell's version so the guide
+// declares which feature set it matches (an agent can compare it against a
+// document written by a newer shell).
+//
+// Slides ALSO publishes to the site root — see the ownsSiteContent block below.
+// `/agents.md` is referenced by the README and by the harness SKILL.md, which
+// people upload to claude.ai as a zip, so it is effectively frozen; this is the
+// same compat shape as skills/bento-deck. Both copies come from one source.
+if (app.agents && existsSync(join(root, app.agents))) {
+  writeFileSync(
+    join(site, `${app.dir}/agents.md`),
+    readFileSync(join(root, app.agents), 'utf8').replace(/__APP_VERSION__/g, version),
+  )
+}
+
 // CONFORMANCE GATE — old updaters are frozen code; every release must
 // satisfy the splice contract they rely on. The gate itself lives in
 // scripts/shell-gate.mjs (shared with CI, which runs it on every PR build).
@@ -157,7 +188,9 @@ function changelogSections() {
   return out
 }
 
-const cmpVer = (a, b) => {
+// A declaration, not a const arrow: `--print-notes` runs before this point in
+// the file and relies on hoisting to reach it (a const would be in the TDZ).
+function cmpVer(a, b) {
   const pa = a.split('.').map(Number), pb = b.split('.').map(Number)
   for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i]
   return 0
@@ -285,13 +318,11 @@ if (app.ownsSiteContent) {
   // (each carries template:true; opening one mints a fresh, independent deck).
   execFileSync('node', [join(root, 'scripts/build-example-decks.mjs'), join(site, 'gallery')], { stdio: 'inherit' })
 
-  // The agent guide — the runnable version of the "designed for AI" claim.
-  // Stamp the current shell version so the guide declares which feature set it
-  // matches (agents can compare it to a deck written by a newer shell).
-  writeFileSync(
-    join(site, 'agents.md'),
-    readFileSync(join(root, 'docs/agents.md'), 'utf8').replace(/__APP_VERSION__/g, version),
-  )
+  // The agent guide at the SITE ROOT — the compat URL. The per-app copy at
+  // /slides/agents.md is written above, from the same source; this one exists
+  // because the README and the harness SKILL.md point at /agents.md, and that
+  // SKILL.md ships inside a zip people upload to claude.ai.
+  cpSync(join(site, `${app.dir}/agents.md`), join(site, 'agents.md'))
   // The harness skill (canonical home: the Claude Code plugin at
   // plugins/bento-slides). Published three ways: the raw SKILL.md (curl
   // one-liner), a claude.ai-uploadable zip (must contain bento-slides/SKILL.md,
