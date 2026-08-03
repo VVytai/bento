@@ -68,6 +68,17 @@ export const ICONS = {
   quote: svg('<path d="M6 17h3l2-4V7H5v6h3zM16 17h3l2-4V7h-6v6h3z"/>'),
   code: svg('<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>'),
   divider: svg('<line x1="3" y1="12" x2="21" y2="12"/>'),
+  callout: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><line x1="7" y1="5" x2="7" y2="19"/><line x1="11" y1="10" x2="17" y2="10"/><line x1="11" y1="14" x2="15" y2="14"/>'),
+
+  // CALLOUT TONE MARKS — one distinct SILHOUETTE each (circle, bulb, square,
+  // triangle, octagon), because the tone must be readable without colour
+  // vision and on a black-and-white printout. Hue is decoration here; shape and
+  // the spelled-out tone name are what carry the meaning.
+  toneNote: svg('<circle cx="12" cy="12" r="9"/><line x1="12" y1="16" x2="12" y2="11"/><line x1="12" y1="8" x2="12.01" y2="8"/>'),
+  toneTip: svg('<path d="M9 18h6"/><path d="M10 21.5h4"/><path d="M15.1 14c.2-1 .7-1.7 1.4-2.5A4.7 4.7 0 0 0 18 8a6 6 0 0 0-12 0c0 1 .2 2.2 1.5 3.5.7.8 1.2 1.5 1.4 2.5"/>'),
+  toneImportant: svg('<rect x="3" y="3" width="18" height="18" rx="3"/><line x1="12" y1="7.5" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12.01" y2="16.5"/>'),
+  toneWarning: svg('<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9.5" x2="12" y2="14"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
+  toneCaution: svg('<polygon points="7.9 2.5 16.1 2.5 21.5 7.9 21.5 16.1 16.1 21.5 7.9 21.5 2.5 16.1 2.5 7.9"/><line x1="12" y1="7.5" x2="12" y2="12.5"/><line x1="12" y1="16" x2="12.01" y2="16"/>'),
   image: svg('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.5-3.5L6 23"/>'),
 } as const
 

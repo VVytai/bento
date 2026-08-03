@@ -1669,3 +1669,44 @@ feature that genuinely cannot be core (a licence that forbids bundling, or bytes
 that dwarf the shell even after a first-party rewrite), or a demonstrated need
 for third-party authorship. Absent those, the answer to "should this be an
 extension?" is "should this be core, a separate artifact, or a skill?"
+
+## 2026-08-03 — Callout tones are GitHub's five, and the tone is never hue alone
+
+**Decision.** `bento/spaces` gains a `callout` block whose `tone` is one of
+`note` `tip` `important` `warning` `caution` — GitHub's alert vocabulary,
+spelled the way GitHub spells it. That makes markdown export the identity
+function (`tone` ⇄ `> [!TONE]`) instead of a mapping table, and a mapping table
+is exactly the kind of thing that can be got wrong once and then never
+corrected, because the wrong tone is already in files on disks.
+
+**Five, and no `success`.** Docusaurus's set (note/tip/info/warning/danger) and
+MkDocs' thirteen were the alternatives. The format is additive, so a sixth tone
+can be added later — this build renders an unknown one neutrally, labels it with
+its own word and preserves the string — while removing or renaming one is
+impossible. When the decision is one-way, ship the smaller set.
+
+**The icon is DERIVED from the tone, with an optional stored override.** Storing
+it always would freeze today's glyphs into every document written today and let
+the tone and the mark disagree (a "warning" wearing 🎉). The override exists
+because a celebration is a callout too, and it never changes what the tone
+means, in the styling or in the export.
+
+**Meaning is carried by shape and by a word, never by hue.** Each tone's mark is
+a different silhouette (circle, bulb, square, triangle, octagon) and its name is
+rendered beside it as real text, translated. The tints are decoration: amber,
+red and green are precisely the hues most colour-blind readers cannot separate,
+and print drops backgrounds by default anyway. Body text stays `--ink`, not the
+tone colour — a box exists to make a sentence more readable, not less.
+
+**Nesting is a registry fact now.** `BlockSpec.container` is `'fold'` (toggle) or
+`'always'` (callout); `render.ts` opens a body element from that rather than
+testing for the type name, and `mdQuoteChildren` drives the `> ` marker every
+descendant line needs (a GitHub alert ends at the first line without one, and
+a blank line between two blocks of one alert closes the box). ⏎ inside a callout
+puts the next line INSIDE it and ⌫ on an empty line takes you out — deliberately
+not extended to `toggle`, because a fold can be shut and a caret inside a shut
+fold is a lost line.
+
+Details: `spaces/src/blocks.ts` (the registry entry, `CALLOUT_TONES`,
+`mdLayout`), `spaces/src/render.ts` (`toneLabel`), and the callout section of
+`scripts/test-spaces-model.ts`.

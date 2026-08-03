@@ -9,21 +9,31 @@
 
 import { checkForUpdates, applyUpdate, APP_VERSION, type ReleaseInfo } from '../../kernel/src/update.ts'
 import {
-  setEncryptionPassword, isEncryptionActive, saveFile,
+  setEncryptionPassword, isEncryptionActive,
   canWriteInPlace, openedFileName,
 } from '../../kernel/src/save.ts'
 import { clearVersions, clearRecovery } from '../../kernel/src/autosave.ts'
 import { t, localeChoices, locale, setLocale } from './i18n'
 import { inertBody } from './sanitize'
-import { SPEC } from './blocks'
+import { SPEC, mdLayout } from './blocks'
 import type { Store } from './store'
 
 export interface AboutHooks {
   store: Store
   onRepaint: () => void
+  /**
+   * "Save a copy…", supplied by the caller.
+   *
+   * NOT saveFile(doc, true) here. That path assigns the picked handle to the
+   * kernel's in-place handle, so every later ⌘S writes to the copy — the bug
+   * fixed in the topbar's copy button, which this second button then kept
+   * alive because the guard only read main.ts. One implementation, two
+   * buttons, and the assertion now reads every file.
+   */
+  onSaveCopy: () => void
 }
 
-export function openAbout({ store, onRepaint }: AboutHooks): void {
+export function openAbout({ store, onRepaint, onSaveCopy }: AboutHooks): void {
   const back = document.createElement('div')
   back.className = 'sp-overlay'
   const card = document.createElement('div')
@@ -160,7 +170,7 @@ export function openAbout({ store, onRepaint }: AboutHooks): void {
       void navigator.clipboard?.writeText(JSON.stringify(store.doc, null, 2))
     }),
     button(t('Export as Markdown'), () => downloadMarkdown(store)),
-    button(t('Save a copy…'), () => { void saveFile(store.doc, true) }),
+    button(t('Save a copy…'), () => { close(); onSaveCopy() }),
   )
   card.append(exports)
   const outNote = document.createElement('p')
@@ -195,18 +205,23 @@ export function toMarkdown(store: Store): string {
   const walk = (parent: string, depth: number) => {
     for (const page of store.index.children.get(parent) ?? []) {
       out.push(`${'#'.repeat(Math.min(depth + 1, 6))} ${page.title}`, '')
-      for (const b of page.blocks) {
-        const indent = b.parent ? '  ' : ''
+      // Indent, blockquote markers and what separates one block from the next
+      // are properties of the TREE, not of a block, so they come from the
+      // registry in one pass (blocks.ts mdLayout).
+      const layout = mdLayout(page.blocks)
+      page.blocks.forEach((b, i) => {
+        const { quote, indent, sep } = layout[i]
         const text = htmlToMd(b.html ?? '')
         // From the block registry, so a new type exports correctly the moment
         // it is declared. An UNKNOWN type — a file written by a newer build —
         // falls through to its text, which is the honest default.
         const spec = SPEC.get(b.type)
-        out.push(...(spec?.toMd
+        const lines = spec?.toMd
           ? spec.toMd(b, text, indent, (id) => store.index.page.get(id)?.title)
-          : [text]))
-        out.push('')
-      }
+          : [text]
+        out.push(...lines.map((l) => quote + l))
+        out.push(sep)
+      })
       walk(page.id, depth + 1)
     }
   }

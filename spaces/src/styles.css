@@ -154,6 +154,58 @@ select, input, textarea, [contenteditable='true'] { -webkit-user-select: auto; u
   margin: 8px 0; padding: 2px 0 2px 15px;
   border-inline-start: 3px solid var(--line); color: var(--ink-2);
 }
+/* ————— callouts —————
+   The tone is carried by the MARK'S SHAPE (circle, bulb, square, triangle,
+   octagon) and by its name spelled out beside it. The tint is decoration: it
+   must be possible to tell a warning from a tip with no colour vision, on a
+   monochrome printout, and at a glance — and amber/red/green happen to be the
+   hues the most readers cannot separate.
+
+   The BODY TEXT stays --ink, never the tone colour. Coloured prose is a
+   readability tax on the sentence that mattered enough to put in a box. */
+.sp-b-callout {
+  /* the neutral fallback: a tone class always lands on top of it, but a
+     stylesheet that only works with one is a stylesheet with a hole in it */
+  --tone-bg: var(--chrome); --tone-line: var(--line); --tone-ink: var(--ink-2);
+  display: block; margin: 10px 0; padding: 9px 14px 10px;
+  border: 1px solid var(--tone-line); border-inline-start-width: 4px;
+  border-radius: var(--radius); background: var(--tone-bg);
+}
+.sp-callout-chip {
+  display: flex; align-items: center; gap: 6px;
+  margin: 0 0 2px; padding: 0; font: inherit; text-align: start;
+  color: var(--tone-ink); background: transparent; border: 0;
+  font-size: 12.5px; font-weight: 700; letter-spacing: .02em;
+  user-select: none;
+}
+button.sp-callout-chip { cursor: pointer; }
+button.sp-callout-chip:hover { text-decoration: underline; text-underline-offset: 3px; }
+.sp-callout-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  /* an author-supplied glyph is any string a file carried: hold the row height
+     whatever arrives, and never let it push the label off the line */
+  min-width: 17px; max-width: 34px; overflow: hidden; line-height: 1;
+}
+.sp-callout-mark svg { width: 15px; height: 15px; display: block; }
+.sp-callout-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-callout-body { padding-inline-start: 0; }
+.sp-callout-body > .sp-b:first-child { margin-top: 4px; }
+.sp-b-callout .sp-list { padding-inline-start: 20px; }
+
+.sp-tone-note { --tone-bg: #eef3f9; --tone-line: #7d9cbd; --tone-ink: #2b4a68; }
+.sp-tone-tip { --tone-bg: #e9f6ef; --tone-line: #4f9e79; --tone-ink: #1c5a41; }
+.sp-tone-important { --tone-bg: #f2eefb; --tone-line: #8a72cc; --tone-ink: #493081; }
+.sp-tone-warning { --tone-bg: #fdf4e3; --tone-line: #d9a326; --tone-ink: var(--accent-ink); }
+.sp-tone-caution { --tone-bg: #fdeeed; --tone-line: #cd6a63; --tone-ink: #8a2f28; }
+.sp-result-ico.sp-tone-note, .sp-result-ico.sp-tone-tip, .sp-result-ico.sp-tone-important,
+.sp-result-ico.sp-tone-warning, .sp-result-ico.sp-tone-caution { color: var(--tone-ink); }
+
+.sp-tonepop { width: 244px; }
+.sp-toneopt.sp-sel { background: var(--chrome-2); }
+.sp-tonerow { display: block; padding: 8px 9px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+.sp-tonelabel { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.sp-toneicon { width: 100%; }
+
 .sp-b-divider { padding: 12px 0; }
 .sp-b-divider hr { border: 0; border-top: 1px solid var(--line); margin: 0; }
 .sp-list { margin: 2px 0; padding-inline-start: 24px; }
@@ -327,6 +379,18 @@ select, input, textarea, [contenteditable='true'] { -webkit-user-select: auto; u
   .sp-toggle-body[hidden] { display: block !important; }  /* toggles print OPEN */
   .sp-b-h1, .sp-b-h2, .sp-b-h3, .sp-title { break-after: avoid; }
   .sp-b-code, .sp-b-image figure, .sp-b-quote { break-inside: avoid; }
+  /* A CALLOUT ON PAPER, IN BLACK AND WHITE.
+     The tint is dropped rather than trusted: browsers do not print backgrounds
+     by default, so a callout whose only cue was its fill would print as bare
+     text — and where they DO print, a mid-grey tint under body text costs
+     contrast for nothing. What survives is the box, the heavier start rule, the
+     tone's shape and the tone's name, all of which are pure black on white. */
+  .sp-b-callout {
+    background: none; border-color: #767676;
+    break-inside: avoid; padding: 8px 12px;
+  }
+  .sp-callout-chip { color: #000; }
+  .sp-callout-chip svg { stroke-width: 2.4; }
   p, li { orphans: 2; widows: 2; }
 }
 

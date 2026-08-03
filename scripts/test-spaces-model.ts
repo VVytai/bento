@@ -31,7 +31,10 @@ import {
   type SpacesDoc,
 } from '../spaces/src/model.ts'
 import { countOutsideTags, replaceOutsideTags } from '../spaces/src/findreplace.ts'
-import { SPECS, SPEC, MENU_SPECS, MD_SPECS, TAG_OF, LIST_OF } from '../spaces/src/blocks.ts'
+import {
+  SPECS, SPEC, MENU_SPECS, MD_SPECS, TAG_OF, LIST_OF, CALLOUT_TONES, mdLayout,
+} from '../spaces/src/blocks.ts'
+import type { Block } from '../spaces/src/model.ts'
 
 let failures = 0
 let checks = 0
@@ -427,6 +430,7 @@ for (const [label, input, err] of [
     '^1\\. $=>number', '^> $=>quote',
     '^\\[\\] $=>todo', '^\\[ \\] $=>todo',
     '^```$=>code', '^--- $=>divider',
+    '^\\[!(note|tip|important|warning|caution)\\] $=>callout',
   ].sort()
   ok(JSON.stringify(triggers) === JSON.stringify(expected),
     `every markdown trigger survives the registry (${triggers.length} of ${expected.length})`)
@@ -447,13 +451,108 @@ for (const [label, input, err] of [
   const fs = await import('node:fs')
   const read = (f: string) => fs.readFileSync(new URL(`../spaces/src/${f}`, import.meta.url), 'utf8')
   const ren = read('render.ts'), ed = read('editor.ts'), ab = read('about.ts')
-  ok(/import \{ TAG_OF, LIST_OF \} from '\.\/blocks'/.test(ren) &&
+  ok(/import \{[^}]*\bTAG_OF\b[^}]*\bLIST_OF\b[^}]*\} from '\.\/blocks'/.test(ren) &&
      !/const TAG_OF: Record/.test(ren) && !/const LIST_OF: Record/.test(ren),
     'render.ts derives its tag and list maps rather than repeating them')
   ok(/const SLASH_ITEMS = MENU_SPECS/.test(ed), 'the / menu is the registry')
   ok(/const AUTOFORMAT = MD_SPECS/.test(ed), 'autoformat is the registry')
   ok(/SPEC\.get\(b\.type\)/.test(ab) && !/case 'bullet': out\.push/.test(ab),
     'markdown export is the registry, not a parallel switch')
+  // …including the SIXTH place a type used to have to be added by hand
+  ok(/SPEC\.get\(type\)\?\.init\?\.\(b\)/.test(ed) && !/type === 'todo' && b\.done === undefined/.test(ed),
+    'converting a block seeds its fields from the registry, not from a list in setType')
+  // a container's body element is a registry fact, not a name test — the
+  // second container type is what turned `b.type === 'toggle'` into a bug
+  ok(/SPEC\.get\(b\.type\)\?\.container/.test(ren) && !/if \(b\.type === 'toggle'\) \{/.test(ren),
+    'render.ts opens a container body from the registry, not from a hardcoded type name')
+}
+
+// ---- the callout block -----------------------------------------------------
+// Its TONE is a permanent vocabulary and its markdown is a blockquote, which is
+// the fragile part: a GitHub alert ends at the first line that is not "> ", so
+// a nested block or a blank line silently exports half a callout as loose prose
+// — and nothing about the document, the renderer or the type system notices.
+{
+  const spec = SPEC.get('callout')!
+  ok(!!spec && spec.tag === 'aside' && spec.container === 'always' && spec.text === true,
+    'callout is an <aside> that holds text and always shows its children')
+  ok(CALLOUT_TONES.map((t) => t.tone).join() === 'note,tip,important,warning,caution',
+    'the five tones are GitHub alert names, in escalation order')
+
+  // the tone the trigger NAMED, not a default
+  const fired = (typed: string): Block => {
+    const b: Block = { id: 'x', type: 'p' }
+    const rule = MD_SPECS.find(([re]) => re.test(typed))
+    if (!rule) return b   // report a missing trigger, do not crash the rig
+    b.type = rule[1]
+    rule[2](b, rule[0].exec(typed)!)
+    return b
+  }
+  ok(fired('[!warning] ').type === 'callout' && fired('[!warning] ').tone === 'warning',
+    'typing [!warning] makes a callout that is a warning')
+  ok(fired('[!CAUTION] ').tone === 'caution', 'the trigger is case-insensitive and stores lower case')
+  { const b: Block = { id: 'x', type: 'callout' }; spec.init!(b); ok(b.tone === 'note', 'a callout with no tone named is a note') }
+  // init also runs when an EXISTING block is converted, so it must not clobber
+  { const b: Block = { id: 'x', type: 'callout', tone: 'caution' }; spec.init!(b); ok(b.tone === 'caution', 'init never overwrites a tone that is already there') }
+
+  const md = (b: Partial<Block>, text = 'x') =>
+    spec.toMd!({ id: 'c', type: 'callout', ...b } as Block, text, '', () => undefined).join('\n')
+  ok(md({ tone: 'warning' }) === '> [!WARNING]\n> x', 'a callout exports as a GitHub alert')
+  ok(md({}) === '> [!NOTE]\n> x', 'an absent tone exports as NOTE')
+  ok(md({ tone: 'success' }) === '> [!SUCCESS]\n> x',
+    'a tone this build does not know exports as the tone it IS — the word is not lost')
+  // the tone came out of a file someone mailed you
+  ok(md({ tone: 'evil]\n# heading' }).split('\n')[0] === '> [!EVILHEADING]',
+    'a newline or bracket in a tone cannot break out of the alert tag')
+  ok(md({ tone: 'note' }, 'one\ntwo') === '> [!NOTE]\n> one\n> two',
+    'every line of a multi-line callout stays inside the quote')
+  ok(md({ tone: 'note' }, '') === '> [!NOTE]\n>', 'an empty callout still closes its own line')
+
+  // …and the LAYOUT around it: markers on the subtree, no blank line inside
+  const page: Block[] = [
+    { id: 'a', type: 'p' },
+    { id: 'c', type: 'callout', tone: 'tip' },
+    { id: 'k1', type: 'bullet', parent: 'c' },
+    { id: 'k2', type: 'p', parent: 'c' },
+    { id: 'z', type: 'p' },
+  ]
+  const lay = mdLayout(page)
+  ok(lay[1].quote === '' && lay[2].quote === '> ' && lay[3].quote === '> ',
+    'every block inside a callout carries the blockquote marker')
+  ok(lay[1].sep === '>' && lay[2].sep === '>',
+    'blocks of one alert are separated by a bare ">" — a blank line would close the box')
+  ok(lay[3].sep === '' && lay[0].sep === '',
+    'the alert ends with a real blank line, and does not start early')
+  ok(lay[2].indent === '' && lay[4].quote === '',
+    'a callout child is the alert body, not an indented list item, and the box does not leak')
+  const nested = mdLayout([
+    { id: 'c', type: 'callout' }, { id: 'd', type: 'callout', parent: 'c' }, { id: 'e', type: 'p', parent: 'd' },
+  ])
+  ok(nested[1].quote === '> ' && nested[2].quote === '> > ' && nested[0].sep === '>',
+    'a callout inside a callout nests its quotes')
+  // a hand-edited file can name a parent cycle; the renderer cannot loop but an
+  // ancestor walk can, and a hung export is a hung tab
+  const cyc = mdLayout([{ id: 'a', type: 'p', parent: 'b' }, { id: 'b', type: 'p', parent: 'a' }])
+  ok(cyc.length === 2, 'a parent cycle terminates instead of hanging the export')
+
+  // the tone NAME is localized in render.ts, because the i18n sweep only sees
+  // literal strings — a tone with no case there ships as an English word
+  const fs = await import('node:fs')
+  const ren = fs.readFileSync(new URL('../spaces/src/render.ts', import.meta.url), 'utf8')
+  for (const { tone } of CALLOUT_TONES) {
+    const cap = tone[0].toUpperCase() + tone.slice(1)
+    ok(new RegExp(`case '${tone}': return t\\('${cap}'\\)`).test(ren), `${tone}: its name is translated`)
+  }
+
+  // A callout's icon and a page's icon are both "a name from the set, or any
+  // other string as text", and both take the name out of a file someone mailed
+  // you. ICONS is an object literal, so `'toString' in ICONS` is TRUE and the
+  // lookup returns a FUNCTION, which then gets stringified into the page.
+  const ed = fs.readFileSync(new URL('../spaces/src/editor.ts', import.meta.url), 'utf8')
+  // comments stripped, or the sentence explaining the rule breaks the rule
+  const code = (s: string) => s.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
+  ok(!/\bin ICONS\b/.test(code(ren)) && !/\bin ICONS\b/.test(code(ed)),
+    'an icon NAME from a document is matched with hasOwn, never `in` (which finds Object.prototype)')
 }
 
 // ---- four things that were wrong in a shipped file ------------------------
@@ -469,8 +568,23 @@ for (const [label, input, err] of [
   //    kernel did the opposite.
   ok(/writeUpdatedFileAs\(html, store\.doc/.test(main),
     'a copy is written through writeUpdatedFileAs (keepHandle defaults false)')
-  ok(!/saveFile\(store\.doc, true\)/.test(main),
-    '…and never through saveFile(doc, true), which retargets ⌘S to the copy')
+  // EVERY file, not just main.ts. The first version of this check read main.ts
+  // alone and passed while about.ts kept its own "Save a copy…" button calling
+  // saveFile(doc, true) — the same bug, in the same app, one file over.
+  {
+    const dir2 = new URL('../spaces/src/', import.meta.url)
+    const all = fs2.readdirSync(dir2).filter((f) => f.endsWith('.ts'))
+    // Comments stripped first: this file's own prose explains the bug it
+    // guards, and a scanner that reads comments flags the explanation. (The
+    // i18n sweep has the same trap — an example t('…') inside a comment adds a
+    // required key to all eight catalogs.)
+    const codeOnly = (src: string) => src
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+    const offenders = all.filter((f) => /saveFile\([^)]*,\s*true\)/.test(codeOnly(rd(f))))
+    ok(offenders.length === 0,
+      `no file saves a copy through saveFile(doc, true), which retargets ⌘S (${offenders.join(', ') || 'none'})`)
+  }
 
   // 2. doc.readonly was declared in the format and read by nothing: a space
   //    saved as a reading copy opened fully editable.

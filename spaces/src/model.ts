@@ -32,7 +32,7 @@ export type Policy = 'bento-spaces-1' | (string & {})
  */
 export type KnownBlockType =
   | 'p' | 'h1' | 'h2' | 'h3' | 'bullet' | 'number' | 'todo' | 'toggle'
-  | 'quote' | 'code' | 'divider' | 'image' | 'pagelink'
+  | 'quote' | 'code' | 'divider' | 'image' | 'pagelink' | 'callout'
 
 /**
  * A block.
@@ -78,6 +78,27 @@ export interface Block {
   h?: number
   /** pagelink: the target page id */
   page?: string
+  /**
+   * callout: which kind of callout this is — one of blocks.ts CALLOUT_TONES.
+   *
+   * An OPEN string, like `type`, and for the same reason: a tone a future build
+   * adds must survive this one untouched. An unrecognised tone renders with the
+   * neutral treatment and spells ITSELF out as its label, so the reader is told
+   * the truth rather than shown a note that is really a warning.
+   */
+  tone?: string
+  /**
+   * callout: an emoji (or a name from the icon set) REPLACING the tone's own
+   * mark.
+   *
+   * Absent is the normal case and is not a missing value — the mark is DERIVED
+   * from the tone, so every warning in a document looks like every other one,
+   * and a document written today is not frozen to today's glyphs. The override
+   * exists because "🎉 we shipped" is a callout too, and it never changes what
+   * the tone MEANS: the tone is still the tone, in the styling and in the
+   * markdown export.
+   */
+  icon?: string
 
   [extra: string]: unknown
 }
