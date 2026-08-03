@@ -164,4 +164,6 @@ export const zh_Hant: Catalog = {
   "The pages without the editing tools": "不含編輯工具的頁面",
   "Version, language, password, exports": "版本、語言、密碼、匯出",
   "More": "更多",
+  "Copy saved — you are still editing the original": "副本已儲存 — 你仍在編輯原始檔案",
+  "This is a reading copy. It opens for reading; nothing you do here changes the file.": "這是一份閱讀副本。它以閱讀方式開啟；你在此處的操作不會變更檔案。",
 }

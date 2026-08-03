@@ -670,7 +670,12 @@ export class Editor {
       const a = (e.target as HTMLElement).closest('a')
       if (!a) return
       const href = a.getAttribute('href') ?? ''
-      if (href.startsWith('#p/')) { e.preventDefault(); s.goToPage(href.slice(3)) }
+      if (!href.startsWith('#p/')) return
+      // through the same resolver as the address bar, so a block anchor
+      // navigates to its page instead of doing nothing at all
+      e.preventDefault()
+      const id = this.resolveAnchor(href)
+      if (id) s.goToPage(id)
     })
   }
 
@@ -1574,9 +1579,41 @@ export class Editor {
   }
 
   // ---- routing ------------------------------------------------------------
+  /**
+   * `#p/<page>` today, and `#p/<page>/<block>` tolerated for later.
+   *
+   * The allowlist in sanitize.ts already ADMITS the two-segment form (its
+   * pattern is `#p/`), so links of that shape can be written into a file right
+   * now — and this resolver silently did nothing with them: `index.page.has`
+   * failed on the whole string and the click did not even fall back to the
+   * page. Every block link written by any future build would be dead in every
+   * file saved before that build existed.
+   *
+   * Tolerance costs three lines and cannot be added later on the sender's
+   * behalf: sanitize.ts records why a NEW fragment form is a one-way hazard —
+   * an href written under a permissive build gets STRIPPED by a stricter one on
+   * the next edit that touches the block. So it is accepted now and addressed
+   * (scrolling to the block) whenever that ships.
+   *
+   * Prefer the WHOLE remainder as a page id: minted ids never contain a slash,
+   * but an author-supplied one may.
+   */
+  private resolveAnchor(hash: string): string | null {
+    const m = hash.match(/^#p\/(.+)$/)
+    if (!m) return null
+    const whole = m[1]
+    if (this.store.index.page.has(whole)) return whole
+    const cut = whole.lastIndexOf('/')
+    if (cut > 0) {
+      const page = whole.slice(0, cut)
+      if (this.store.index.page.has(page)) return page
+    }
+    return null
+  }
+
   private fromHash(): void {
-    const m = location.hash.match(/^#p\/(.+)$/)
-    if (m && this.store.index.page.has(m[1])) this.store.goToPage(m[1], { push: false })
+    const id = this.resolveAnchor(location.hash)
+    if (id) this.store.goToPage(id, { push: false })
   }
 
   repaint(): void { this.paintTree(); this.paintPage() }

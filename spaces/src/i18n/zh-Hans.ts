@@ -164,4 +164,6 @@ export const zh_Hans: Catalog = {
   "The pages without the editing tools": "不带编辑工具的页面",
   "Version, language, password, exports": "版本、语言、密码、导出",
   "More": "更多",
+  "Copy saved — you are still editing the original": "副本已保存 — 你仍在编辑原文件",
+  "This is a reading copy. It opens for reading; nothing you do here changes the file.": "这是一份阅读副本。它以阅读方式打开；你在此处的操作不会更改文件。",
 }

@@ -224,7 +224,18 @@ for (const [label, input, err] of [
   const fs = await import('node:fs')
   const read = (f: string) => fs.readFileSync(new URL(`../spaces/src/${f}`, import.meta.url), 'utf8')
 
-  for (const f of ['sanitize.ts', 'render.ts', 'editor.ts', 'about.ts', 'main.ts']) {
+  // EVERY source file, globbed — never a hand-written list. The list version
+  // named the five files that existed when the hole was found, so findreplace.ts
+  // and blocks.ts (added days later) were never checked, and any new module
+  // could reintroduce the live-parse hole with the guard still green. A guard
+  // that only covers the code it was written against is a guard that expires.
+  const dir = new URL('../spaces/src/', import.meta.url)
+  const walk = (d: URL): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+    e.isDirectory() ? walk(new URL(`${e.name}/`, d)) : e.name.endsWith('.ts') ? [new URL(e.name, d).pathname.slice(dir.pathname.length)] : [])
+  const sources = walk(dir)
+  ok(sources.length >= 10 && sources.includes('findreplace.ts') && sources.includes('blocks.ts'),
+    `the guard globs every source file (${sources.length} found)`)
+  for (const f of sources) {
     const src = read(f)
     // an element made with createElement, then fed innerHTML — the live-parse
     // shape. Assignments of ALREADY-SANITIZED html to a render target are fine
@@ -443,6 +454,47 @@ for (const [label, input, err] of [
   ok(/const AUTOFORMAT = MD_SPECS/.test(ed), 'autoformat is the registry')
   ok(/SPEC\.get\(b\.type\)/.test(ab) && !/case 'bullet': out\.push/.test(ab),
     'markdown export is the registry, not a parallel switch')
+}
+
+// ---- four things that were wrong in a shipped file ------------------------
+{
+  const fs2 = await import('node:fs')
+  const rd = (f: string) => fs2.readFileSync(new URL(`../spaces/src/${f}`, import.meta.url), 'utf8')
+  const main = rd('main.ts'), ed = rd('editor.ts'), mod = rd('model.ts')
+
+  // 1. "Save a copy…" must not become the ⌘S target. saveFile(doc, true)
+  //    ASSIGNS the picked handle to the module's in-place handle, so every
+  //    later save wrote to the copy while the original stayed frozen at the
+  //    moment it was taken. The code even carried a comment claiming the
+  //    kernel did the opposite.
+  ok(/writeUpdatedFileAs\(html, store\.doc/.test(main),
+    'a copy is written through writeUpdatedFileAs (keepHandle defaults false)')
+  ok(!/saveFile\(store\.doc, true\)/.test(main),
+    '…and never through saveFile(doc, true), which retargets ⌘S to the copy')
+
+  // 2. doc.readonly was declared in the format and read by nothing: a space
+  //    saved as a reading copy opened fully editable.
+  ok(/if \(frozen \|\| doc\.readonly\) store\.readOnly = true/.test(main),
+    'doc.readonly opens the space read-only')
+
+  // 3. the agent API must not report ids for blocks it did not write —
+  //    store.commit early-returns on a read-only document, and the ids came
+  //    back anyway.
+  for (const verb of ['insertBlocks', 'newPage']) {
+    const at = main.indexOf(`${verb}: (`)
+    const body = main.slice(at, at + 900)
+    ok(/if \(store\.readOnly\) return null/.test(body),
+      `bento.${verb} refuses on a read-only document instead of returning phantom ids`)
+  }
+
+  // 4. #p/<page>/<block> is ALREADY admissible under sanitize.ts's allowlist,
+  //    so it can arrive in a file this build did not write. It used to resolve
+  //    to nothing — not even the page — and produced a backlink keyed on a
+  //    page id that does not exist.
+  ok(/private resolveAnchor\(/.test(ed), 'there is one anchor resolver')
+  ok(/const id = this\.resolveAnchor\(href\)/.test(ed), '…and clicks go through it')
+  ok(/function linkTarget\(/.test(mod) && /linkTarget\(m\[1\], page\)/.test(mod),
+    'backlinks are keyed on the PAGE segment of a link target')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

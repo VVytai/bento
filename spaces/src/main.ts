@@ -9,6 +9,7 @@ import { configureApp, appConfig } from '../../kernel/src/app.ts'
 import {
   capturePristine, readEmbeddedDoc, serializeFile, serializeAuto,
   saveFile, parseEnvelope, canWriteInPlace, decryptEnvelope, setEncryptionPassword,
+  writeUpdatedFileAs,
   isEncryptionActive,
 } from '../../kernel/src/save.ts'
 import { putRecovery, getRecovery, clearRecovery, pruneOld } from '../../kernel/src/autosave.ts'
@@ -162,9 +163,20 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
   document.getElementById('bento-splash')?.remove()
 
   const store = new Store(doc)
-  if (frozen) store.readOnly = true
+  // `doc.readonly` was declared in the format and read by NOTHING: a space
+  // saved as a reading copy opened fully editable, so the one property the
+  // sender chose was the one the file did not keep. It is not a security
+  // boundary — anyone can edit the JSON — but a file that says it is a reading
+  // copy must behave like one for the person who opens it.
+  //
+  // `frozen` is the other, unrelated reason to lock: this build does not
+  // understand the file and must not rewrite it.
+  if (frozen || doc.readonly) store.readOnly = true
   const editor = new Editor(document.getElementById('app')!, store)
 
+  if (!frozen && doc.readonly) {
+    banner(t('This is a reading copy. It opens for reading; nothing you do here changes the file.'))
+  }
   if (frozen) {
     banner(frozen === 'version'
       ? t('This file was written by a newer version of bento/spaces. It is open read-only so nothing is lost.')
@@ -178,12 +190,24 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
   editor.onSaveAs = (suffix: string) => {
     if (suffix === '__markdown') { downloadMarkdown(store); return }
     store.endRun()
-    // forcePicker = "Save a copy…": it always asks where, and the kernel keeps
-    // the in-place handle pointed at the working file, so a later ⌘S does not
-    // start overwriting the copy
-    void saveFile(store.doc, true).then((res) => {
-      if (res === 'saved') editor.status(t('Copy saved'))
-    })
+    // "Save a copy…" must leave you editing the ORIGINAL. That is what the
+    // label promises, and the file you go on typing into should never silently
+    // become the backup you just took.
+    //
+    // This used to call saveFile(doc, true), under a comment claiming the
+    // kernel kept the in-place handle pointed at the working file. It does the
+    // opposite: saveFile ASSIGNS the picked handle to the module's in-place
+    // handle (kernel/src/save.ts), so every later ⌘S wrote to the copy while
+    // the original stayed frozen at the moment it was copied. The guarantee the
+    // comment described lives in writeUpdatedFileAs, whose keepHandle defaults
+    // to false — slides learned the same lesson when a share export became the
+    // ⌘S target and the next save overwrote it with the full document.
+    //
+    // The status line was dead too: saveFile returns 'saved-as' down the
+    // forcePicker path, never 'saved', so the confirmation never appeared.
+    void serializeAuto(store.doc)
+      .then((html) => writeUpdatedFileAs(html, store.doc, { suffix: suffix === 'copy' ? 'copy' : suffix }))
+      .then((ok) => { if (ok) editor.status(t('Copy saved — you are still editing the original')) })
   }
   async function doSave(): Promise<void> {
     store.endRun()
@@ -249,6 +273,12 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
      * concurrent edits and flattening undo to a single entry.
      */
     insertBlocks: (pageId: string, afterId: string | null, blocks: unknown[]) => {
+      // A read-only or frozen document accepts no writes: store.commit
+      // early-returns. Returning the ids anyway told the caller it had created
+      // blocks that do not exist — and an agent's next call addresses them,
+      // gets nothing, and has no way to tell that from an empty page. Refuse
+      // out loud instead.
+      if (store.readOnly) return null
       const page = store.doc.pages.find((p) => p.id === pageId)
       if (!page || !Array.isArray(blocks)) return null
       const made = blocks.map((raw) => {
@@ -263,12 +293,14 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
       return made.map((m) => m.id)
     },
     newPage: (title: string, parent?: string) => {
+      if (store.readOnly) return null
       const page = { id: uid('p'), title: String(title ?? 'Untitled'), blocks: [], ...(parent ? { parent } : {}) }
       store.commit(() => { store.doc.pages.push(page as any) })
       editor.repaint()
       return page.id
     },
     loadDoc: (json: string): boolean => {
+      if (store.readOnly) return false
       const r = parseDoc(json)
       if (!r.ok) return false
       store.replaceDoc(r.doc)

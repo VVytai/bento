@@ -164,4 +164,6 @@ export const pt: Catalog = {
   "The pages without the editing tools": "As páginas sem as ferramentas de edição",
   "Version, language, password, exports": "Versão, idioma, senha, exportações",
   "More": "Mais",
+  "Copy saved — you are still editing the original": "Cópia guardada — continuas a editar o original",
+  "This is a reading copy. It opens for reading; nothing you do here changes the file.": "Esta é uma cópia de leitura. Abre para leitura; nada do que fizeres aqui altera o ficheiro.",
 }

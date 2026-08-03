@@ -164,4 +164,6 @@ export const ja: Catalog = {
   "The pages without the editing tools": "編集ツールのないページ表示",
   "Version, language, password, exports": "バージョン・言語・パスワード・書き出し",
   "More": "その他",
+  "Copy saved — you are still editing the original": "コピーを保存しました — 編集中なのは引き続き元のファイルです",
+  "This is a reading copy. It opens for reading; nothing you do here changes the file.": "これは閲覧用のコピーです。読むために開きます。ここでの操作はファイルを変更しません。",
 }

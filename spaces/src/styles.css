@@ -522,3 +522,21 @@ select, input, textarea, [contenteditable='true'] { -webkit-user-select: auto; u
    375px — the items were there, just unreadable. */
 .sp-dd-end .sp-ddmenu { inset-inline-start: auto; inset-inline-end: 0; }
 .sp-ddmenu { max-width: calc(100vw - 20px); }
+
+/* ————— find & replace on a small screen —————
+   Measured at a 575px viewport: the bar laid out 644px wide and started at
+   x = -87, so the Find field itself was off the left edge — the one control
+   you must reach to use the feature at all. It is anchored to the end edge and
+   sized by its contents, so it grows off the opposite side rather than
+   wrapping.
+
+   Below the breakpoint it spans the viewport and wraps to two rows: the two
+   fields share the first row, the buttons and the counter take the second. */
+@media (max-width: 720px) {
+  .sp-findbar {
+    inset-inline: 8px; top: 52px;
+    flex-wrap: wrap; gap: 5px;
+  }
+  .sp-findbar .sp-find { flex: 1 1 120px; width: auto; min-width: 0; }
+  .sp-findcount { order: 1; flex: 1 1 100%; text-align: start; }
+}
