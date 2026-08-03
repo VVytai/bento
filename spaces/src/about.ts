@@ -31,9 +31,11 @@ export interface AboutHooks {
    * buttons, and the assertion now reads every file.
    */
   onSaveCopy: () => void
+  /** open the markdown importer — the way IN, opposite the ways out below */
+  onImport?: () => void
 }
 
-export function openAbout({ store, onRepaint, onSaveCopy }: AboutHooks): void {
+export function openAbout({ store, onRepaint, onSaveCopy, onImport }: AboutHooks): void {
   const back = document.createElement('div')
   back.className = 'sp-overlay'
   const card = document.createElement('div')
@@ -160,6 +162,18 @@ export function openAbout({ store, onRepaint, onSaveCopy }: AboutHooks): void {
     await clearRecovery(store.doc.docId)
     pwNote.textContent = t('Password set. Save to write the space encrypted.')
   }))
+
+  // ---- the way in ---------------------------------------------------------
+  // Beside the ways out on purpose: a format that can only be left is a
+  // format nobody arrives in.
+  if (onImport) {
+    card.append(h(t('Bring notes in')))
+    card.append(button(t('Import Markdown…'), () => { close(); onImport() }))
+    const inNote = document.createElement('p')
+    inNote.className = 'sp-note'
+    inNote.textContent = t('A folder of .md files becomes pages, with the folder tree and the [[wikilinks]] intact.')
+    card.append(inNote)
+  }
 
   // ---- ways out ----------------------------------------------------------
   card.append(h(t('Take it elsewhere')))

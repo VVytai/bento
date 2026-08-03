@@ -42,6 +42,18 @@ Versions follow `0.MINOR.PATCH` while pre-1.0.
 - **Fixed: Enter and Tab inside a code block.** Enter adds a line instead of
   splitting the block, and Tab indents by two spaces instead of re-parenting the
   block in the page tree.
+- **Import the notes you already have.** Drop a folder of `.md` files onto the
+  window — or pick them — and each file becomes a page, the folder tree becomes
+  the page tree, and `[[wikilinks]]` between the files become real links you can
+  click. An Obsidian vault arrives with its structure intact: headings, lists,
+  to-dos, quotes, fenced code with its language, dividers and inline
+  `**bold**` / `*italic*` / `` `code` `` / `~~strike~~` / `[links](url)`.
+  Frontmatter is kept verbatim in a folded block rather than being interpreted,
+  because spaces has no properties model yet and inventing one in an importer
+  would settle it by accident. Include the image files in the selection and
+  they are embedded; an image the browser cannot open keeps its path as text
+  instead of becoming a broken picture. The whole import is one undo step, and
+  pages are always ADDED — nothing already in the space is replaced.
 
 ## [0.1.0] — 2026-08-03
 

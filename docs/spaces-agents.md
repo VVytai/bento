@@ -99,6 +99,10 @@ set it to an emoji when the callout is not really about severity.
   "html": "The key is not recoverable." },
 { "id": "b8", "type": "bullet", "parent": "b7", "html": "inside the box" }
 ```
+A `code` block carrying `frontmatter: true` (usually `lang: "yaml"`, inside a
+collapsed toggle at the top of a page) is YAML frontmatter from an imported
+markdown file, kept verbatim. It is **not** a properties model — spaces has
+none yet — so read it if you like, but do not invent fields from it.
 
 ## Images: embed them, don't link them
 

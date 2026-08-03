@@ -1784,3 +1784,33 @@ inserting multi-line text yields one trailing `\n` (the caret placeholder), and
 it does not accumulate — seeded with `abc\n` and typed into, the result is
 `abcy\n`, still one. Left alone; the previous `innerHTML` read produced the same
 byte.
+## 2026-08-03 — Imported frontmatter is kept verbatim, not turned into properties
+
+**Decision.** `spaces/src/markdown.ts` puts a note's leading `---` YAML into a
+`code` block with `lang: 'yaml'` and `frontmatter: true`, nested inside a
+collapsed `toggle` at the top of the page. Nothing in it is parsed, and no key
+becomes a document field. The page title comes from a leading `# Heading` or
+else from the FILE NAME — never from a `title:` key.
+
+**Why not properties.** Spaces has no properties model, and this is the first
+feature that meets one. A schema invented inside an importer would be derived
+from whichever keys one person's vault happens to use (`tags`, `aliases`,
+`cssclass`, `publish`), and once files carry it there is no server to migrate
+them: the format is permanent. That would settle a design by accident, in the
+one place with the least information about it.
+
+**Why verbatim beats dropping or hiding it.** The yaml is the author's text and
+some of it is load-bearing (`aliases`, `permalink`). Kept as a code block it is
+visible, searchable by ⌘K and ⌘F, printable (toggles always print open), and it
+exports back out as a fenced yaml block. `frontmatter: true` is an additive
+marker, which is what makes the eventual adoption a mechanical sweep — find the
+marked blocks, parse them then, delete the toggle — rather than an archaeology
+exercise over prose.
+
+**Why the title ignores `title:`.** `[[wikilinks]]` resolve by FILE NAME, which
+is what Obsidian, Foam and Logseq all do. A title taken from frontmatter that
+disagrees with the file name produces a page nobody can link to by the name
+their other 300 notes use.
+
+**What would reopen this.** A properties model shipping. At that point these
+blocks are the migration input, and the marker is what makes them findable.
