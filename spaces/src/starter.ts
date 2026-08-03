@@ -8,7 +8,7 @@
 // reachable only through one, and the limits page says the awkward things out
 // loud rather than letting them be discovered.
 
-import { FORMAT, FORMAT_VERSION, defaultTheme, type SpacesDoc, type Block } from './model'
+import { FORMAT, FORMAT_VERSION, defaultTheme, type SpacesDoc, type Block } from './model.ts'
 
 const b = (type: string, html = '', extra: Partial<Block> = {}): Block =>
   ({ id: `sd-${(seq++).toString(36)}`, type, html, ...extra })

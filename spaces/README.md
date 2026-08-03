@@ -67,6 +67,7 @@ load contract and format additivity.
 | `src/store.ts` | undo, and the **typing run** |
 | `src/render.ts` | model → DOM, shared by the editor, reading view and print |
 | `src/editor.ts` | topbar, sidebar, block menu, `[[` picker, ⌘K, ⌘F, archive |
+| `src/agent.ts` | the agent surface — `validate()`, `outline()`, `stats()`, and the patch verbs behind `window.bento` |
 | `src/assets.ts` | content-addressed images and the downscale |
 | `src/about.ts` | updates, language, password, exports |
 | `src/i18n/` | per-locale catalogs; `packed.ts` is generated and is what ships |

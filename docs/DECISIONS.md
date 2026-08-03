@@ -1578,3 +1578,53 @@ feature that genuinely cannot be core (a licence that forbids bundling, or bytes
 that dwarf the shell even after a first-party rewrite), or a demonstrated need
 for third-party authorship. Absent those, the answer to "should this be an
 extension?" is "should this be core, a separate artifact, or a skill?"
+
+## 2026-08-03 — The spaces agent surface: plans, tagged results, and a validator that stays quiet
+
+**Decision.** `window.bento` in bento/spaces gains `validate()`, `outline()`,
+`stats()` and the patch verbs `updateBlock`, `removeBlocks`, `moveBlock`,
+`updatePage`, `removePage` (`spaces/src/agent.ts`). Five rules were settled
+along the way, and each is the kind another agent could reasonably reverse.
+
+**A validator earns its severities by being silent.** The bar is not "few false
+positives", it is ZERO findings on the space every new file opens with —
+asserted in `scripts/test-spaces-model.ts`, which is the only baseline of
+"idiomatic" available. The corollary is what is NOT checked: unknown property
+names. Slides warns about them because its element schema is closed; here
+unknown fields are the mechanism by which a future build's data survives an
+older one, so warning about them would fire on documents working exactly as
+designed. An agent that gets warnings for good documents stops reading them.
+
+**Plan, then apply.** Every write verb returns `{ok, apply}` and the wrapper in
+`main.ts` runs `store.commit(apply)`. `commit` checkpoints undo BEFORE it
+mutates, so validating inside the commit would leave a refused patch with an
+undo entry that undoes nothing. Verified in the browser: three refusals of three
+kinds, then one undo, reaches the state before the last real edit. The split
+also makes the whole write path testable in node — no store, no DOM.
+
+**Tagged results for the new verbs; the old two keep their shapes.**
+`insertBlocks` (ids | null) and `newPage` (id | null) shipped in 0.1.0 and are
+in a published guide, so they stay. Everything added returns
+`{ok:false, err, detail}`, because "it did nothing and told you nothing" is the
+failure mode this whole surface exists to remove. For the same reason a patch
+naming `id` (or `blocks` on a page) is REFUSED rather than ignored.
+
+**An agent cannot write what the app could not have written.** `html` is
+sanitized on the way IN, not only on the way to the screen; a `code` block's
+html is escaped text instead (the renderer shows its textContent, so sanitizing
+would delete the sample being shown), and only when it carries live tags, which
+keeps a replayed patch from double-escaping. Values JSON cannot carry — a
+function, a Date, a Map, a cycle — are refused rather than vanishing at save.
+
+**A page is never left with zero blocks.** MEASURED in the built shell: a page
+with `blocks: []` renders 0 editable hosts, 0 gutters and 0 block nodes — the
+caret, the gutter and the `/` menu all hang off a block, so nobody can ever type
+in it, and the editor cannot produce one (`mergeBack` refuses at the first
+block). So `newPage` mints a paragraph as `model.newPage` always did,
+`removeBlocks` refills a page it empties, and `validate()` calls a zero-block
+page an ERROR. The old `bento.newPage()` created exactly this page.
+
+**Cost.** +8,040 bytes on the shipped shell (73,787 → 81,827; compressed
+payload 72KB → 79KB). Most of it is the finding messages, which are the
+product: a code with no explanation is not actionable. Anyone tempted to shrink
+this should shorten prose, not drop checks.

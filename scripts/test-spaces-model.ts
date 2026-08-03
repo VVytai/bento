@@ -31,6 +31,11 @@ import {
   type SpacesDoc,
 } from '../spaces/src/model.ts'
 import { countOutsideTags, replaceOutsideTags } from '../spaces/src/findreplace.ts'
+import { starterDoc } from '../spaces/src/starter.ts'
+import {
+  validateDoc, outlineDoc, statsDoc, normalizeHtml, jsonSafe,
+  planInsertBlocks, planUpdateBlock, planRemoveBlocks, planMoveBlock, planUpdatePage, planRemovePage,
+} from '../spaces/src/agent.ts'
 
 let failures = 0
 let checks = 0
@@ -340,6 +345,295 @@ for (const [label, input, err] of [
   // markup must survive the sweep untouched
   ok(replaceOutsideTags('a <b class="x">widget</b>!', 'widget', 'gadget') === 'a <b class="x">gadget</b>!',
     'tags and their attributes are preserved verbatim')
+}
+
+// ---- the agent surface: validate() ------------------------------------------
+// A validator that reports something about a perfectly good document is one an
+// agent learns to ignore, and then it reports nothing at all. So the bar is
+// absolute: ZERO findings on the space every new file opens with. Anything the
+// starter does is by definition idiomatic, which makes it the only honest
+// baseline available — and it exercises links, a toggle with a child, a code
+// block, lists, a divider and five pages on the way past.
+{
+  const starter = starterDoc()
+  starter.docId = 'test'
+  const r = validateDoc(starter)
+  ok(r.ok, 'the starter space has no ERRORS')
+  ok(r.findings.length === 0,
+    `validate() is SILENT on the starter space (got ${r.findings.length}: ${r.findings.map((f) => f.code).join(', ') || 'none'})`)
+}
+
+// …and fires on a document that is broken in every way it knows about. One
+// deliberately awful space, one assertion per code, so a check that stops
+// firing is a named failure rather than a smaller number.
+{
+  const broken = {
+    format: FORMAT, version: 1, docId: 'd', title: 'Broken',
+    home: 'nowhere',
+    theme: {},
+    assets: { keep: 'data:image/webp;base64,AAAA', spare: 'data:image/webp;base64,BBBB' },
+    fonts: [{ family: 'Ghost', asset: 'missing-font' }],
+    pages: [
+      {
+        id: 'p1', title: 'One', blocks: [
+          { id: 'dupe', type: 'p', html: 'see <a href="#p/ghost">a page that is not here</a>' },
+          { id: 'dupe', type: 'p', html: 'same id as the block above' },
+          { id: 'b3', type: 'kanban', html: 'a type this build does not render' },
+          { id: 'b4', type: 'p', html: '<p>block markup</p><p>inside inline html</p>' },
+          { id: 'b5', type: 'p', html: 'a <table><tr><td>table</td></tr></table> is dropped whole' },
+          { id: 'b6', type: 'p', html: 'a <a href="javascript:alert(1)">bad scheme</a>' },
+          { id: 'b7', type: 'image', src: 'https://tracker.example/p.png' },
+          { id: 'b8', type: 'image', src: 'asset:gone', alt: 'x', w: 1, h: 1 },
+          { id: 'b9', type: 'pagelink', page: 'ghost' },
+          { id: 'b10', type: 'p', parent: 'not-a-block', html: 'nested under nothing' },
+          { id: 'b11', type: 'code', html: 'const x = <div>1</div>' },
+          { id: '', type: 'p', html: 'no id' },
+        ],
+      },
+      { id: 'p2', title: 'Empty', blocks: [] },
+      { id: 'p3', title: 'Blank', blocks: [{ id: 'b12', type: 'p', html: '' }] },
+      { id: 'p4', title: 'Orphan', parent: 'no-such-page', blocks: [{ id: 'b13', type: 'p', html: 'x' }] },
+      { id: 'p5', title: 'Loop', parent: 'p6', blocks: [{ id: 'b14', type: 'p', html: 'x' }] },
+      { id: 'p6', title: 'Loop', parent: 'p5', blocks: [{ id: 'b15', type: 'p', html: 'x' }] },
+    ],
+  } as unknown as SpacesDoc
+
+  const r = validateDoc(broken)
+  const by = (code: string) => r.findings.filter((f) => f.code === code)
+  const fires = (code: string, severity: string, n = 1) =>
+    ok(by(code).length >= n && by(code).every((f) => f.severity === severity),
+      `validate() reports ${code} as ${severity} (got ${by(code).length} × ${by(code)[0]?.severity ?? 'nothing'})`)
+
+  ok(!r.ok, 'a document with errors is not ok')
+  fires('duplicate-id', 'error')
+  fires('missing-id', 'error')
+  fires('no-such-home', 'warning')
+  fires('no-such-page-parent', 'warning')
+  fires('page-cycle', 'error', 2)          // both pages in the loop
+  fires('no-such-block-parent', 'warning')
+  fires('unknown-block-type', 'warning')
+  fires('block-markup', 'warning')
+  fires('dropped-markup', 'error')
+  fires('dead-href', 'warning')
+  fires('markup-in-code', 'warning')
+  fires('broken-link', 'error', 2)         // the inline link and the pagelink card
+  fires('missing-asset', 'error', 2)       // the image and the font
+  fires('remote-image', 'warning')
+  fires('image-no-alt', 'warning')
+  fires('image-no-size', 'info')
+  fires('no-blocks', 'error')
+  fires('empty-page', 'info')
+  fires('orphan-asset', 'info')
+  ok(by('orphan-asset').length === 1, 'orphan assets are ONE finding, not one per key')
+  ok(r.findings.every((f) => f.message && f.fix), 'every finding says what is wrong AND how to fix it')
+  ok(r.counts.error + r.counts.warning + r.counts.info === r.findings.length, 'the counts add up')
+}
+
+// ---- outline() --------------------------------------------------------------
+{
+  const o = outlineDoc(starterDoc())
+  ok(o.tree.length === o.pages && o.pages === 5, 'outline lists every page')
+  ok(o.tree[0].home === true, 'the landing page is marked')
+  ok(o.tree[0].links?.includes('sd-links') === true, 'a page\'s outgoing links come back with it')
+  ok((o.tree[0].headings ?? []).every((h) => h.id && h.text && h.level >= 1 && h.level <= 3),
+    'headings carry the block id, so what comes back can be patched directly')
+  ok(o.words > 100 && o.blocks > 20, 'the totals are counted, not guessed')
+
+  // a page inside its own subtree is in no walk from the root; dropping it here
+  // would make outline() a quiet liar about how many pages a space has
+  const looped = parseDoc(doc({
+    pages: [
+      { id: 'a', title: 'A', blocks: [{ id: 'x', type: 'p' }] },
+      { id: 'b', title: 'B', parent: 'c', blocks: [{ id: 'y', type: 'p' }] },
+      { id: 'c', title: 'C', parent: 'b', blocks: [{ id: 'z', type: 'p' }] },
+    ],
+  }))
+  const lo = outlineDoc((looped as any).doc)
+  ok(lo.tree.length === 3, `an unreachable page still appears in the outline (got ${lo.tree.length})`)
+}
+
+// ---- stats() ----------------------------------------------------------------
+{
+  const d = (parseDoc(doc({
+    assets: { used: 'data:image/webp;base64,' + 'A'.repeat(400), spare: 'data:image/png;base64,' + 'B'.repeat(100) },
+    pages: [{ id: 'p1', title: 'One', blocks: [
+      { id: 'b1', type: 'p', html: 'four <a href="https://x/y">words go</a> here' },
+      { id: 'b2', type: 'image', src: 'asset:used', alt: 'a' },
+      { id: 'b3', type: 'todo', html: 'done one', done: true },
+      { id: 'b4', type: 'todo', html: 'not yet' },
+    ] }],
+  })) as any).doc as SpacesDoc
+  const s = statsDoc(d)
+  ok(s.pages === 1 && s.blocks === 4, 'stats counts pages and blocks')
+  ok(s.words === 4 + 2 + 2, `words come from the text, not the markup (got ${s.words})`)
+  ok(s.todos.done === 1 && s.todos.total === 2, 'todos are counted done vs total')
+  ok(s.assets.count === 2 && s.assets.orphans === 1, 'an unreferenced asset is counted as an orphan')
+  ok(s.biggest[0].key === 'used' && s.biggest[0].used === 1 && s.biggest[0].mime === 'image/webp',
+    'the biggest asset comes first, with its mime and how many blocks use it')
+  ok(s.bytes.assets > 500 && s.bytes.document > s.bytes.assets,
+    'the byte breakdown separates assets from the document that holds them')
+}
+
+// ---- the write verbs --------------------------------------------------------
+// Each is ONE undoable step in the app; here they are exercised as plans, which
+// is the whole point of splitting plan from apply — the mutation logic is
+// reachable without a store, a DOM or an editor.
+const fresh = (): SpacesDoc => (parseDoc(doc({
+  pages: [
+    { id: 'p1', title: 'One', blocks: [
+      { id: 'a', type: 'p', html: 'first' },
+      { id: 'tog', type: 'toggle', html: 'fold', open: true },
+      { id: 'kid', type: 'p', parent: 'tog', html: 'inside the fold' },
+      { id: 'grandkid', type: 'p', parent: 'kid', html: 'deeper' },
+      { id: 'z', type: 'p', html: 'last' },
+    ] },
+    { id: 'p2', title: 'Two', parent: 'p1', blocks: [{ id: 'q', type: 'p', html: 'over here' }] },
+  ],
+})) as any).doc as SpacesDoc
+
+{
+  // html an agent supplies is sanitized on the way IN. The editor cannot
+  // produce a <script> in a block, so the API must not be a way to put one in
+  // the file — rendering strips it, but the bytes would still travel.
+  const d = fresh()
+  const p = planInsertBlocks(d, 'p1', 'a', [{ type: 'p', html: 'hi <script>alert(1)</script>' }])
+  ok(p.ok, 'insertBlocks plans')
+  if (p.ok) {
+    p.apply()
+    const made = d.pages[0].blocks.find((b) => b.id === p.ids[0])!
+    ok(!String(made.html).includes('<script'), `supplied html is sanitized on the way in (got ${made.html})`)
+    ok(d.pages[0].blocks[1].id === p.ids[0], 'and it lands directly after the block named by afterId')
+  }
+}
+{
+  // a batch could not nest inside itself before: ids are re-minted, so a child
+  // naming its parent's SUPPLIED id had no way to reach the real one
+  const d = fresh()
+  const p = planInsertBlocks(d, 'p1', null, [
+    { id: 'mine-1', type: 'toggle', html: 'new fold' },
+    { id: 'mine-2', type: 'p', parent: 'mine-1', html: 'body' },
+    { id: 'mine-3', type: 'p', parent: 'nowhere', html: 'no such owner' },
+  ])
+  ok(p.ok, 'a nested batch plans')
+  if (p.ok) {
+    p.apply()
+    const [tog, body, loose] = p.ids.map((id) => d.pages[0].blocks.find((b) => b.id === id)!)
+    ok(body.parent === tog.id, 'parent is remapped to the minted id of the block in the same batch')
+    ok(loose.parent === undefined, 'a parent that resolves to nothing is dropped, not left dangling')
+  }
+  const bad = planInsertBlocks(fresh(), 'p1', 'no-such-block', [{ type: 'p' }])
+  ok(!bad.ok && bad.err === 'no-such-block',
+    'an afterId that is not on the page is REFUSED (it used to append silently, somewhere else)')
+  ok(!planInsertBlocks(fresh(), 'p1', null, [{ type: 'p', html: () => 'x' }] as any).ok,
+    'a value JSON cannot carry is refused rather than vanishing at save time')
+}
+{
+  const d = fresh()
+  ok(!planUpdateBlock(d, 'a', { id: 'renamed' }).ok, 'updateBlock REFUSES to change an id (it never silently ignores it)')
+  ok(!planUpdateBlock(d, 'nope', { html: 'x' }).ok, 'updateBlock on a block that is not there fails')
+  ok(!planUpdateBlock(d, 'tog', { parent: 'grandkid' }).ok, 'a block cannot be re-parented into its own subtree')
+  const p = planUpdateBlock(d, 'a', { html: 'now <b>bold</b>', done: null, type: 'todo' })
+  ok(p.ok, 'updateBlock plans a type change with content')
+  if (p.ok) { p.apply(); ok(d.pages[0].blocks[0].type === 'todo', 'and applies it') }
+}
+{
+  // deleting a toggle takes its body: leaving blocks pointing at an id that no
+  // longer exists means they reappear, un-nested, in a document the agent
+  // believed it had emptied
+  const d = fresh()
+  const p = planRemoveBlocks(d, ['tog', 'ghost'])
+  ok(p.ok, 'removeBlocks plans')
+  if (p.ok) {
+    ok(p.removed.length === 3 && p.removed.includes('grandkid'), `the whole subtree goes (got ${p.removed.join(',')})`)
+    ok(p.missing[0] === 'ghost', 'an id that was not there is reported, not silently counted as removed')
+    p.apply()
+    ok(d.pages[0].blocks.length === 2, 'and the page keeps the rest')
+  }
+}
+{
+  // a page with no blocks cannot be typed into at all — no caret, no gutter, no
+  // / menu. The editor cannot produce one (mergeBack refuses at the first
+  // block), so this API must not either.
+  const d = fresh()
+  const p = planRemoveBlocks(d, ['q'])
+  ok(p.ok && p.added.length === 1, 'emptying a page mints a replacement paragraph')
+  if (p.ok) {
+    p.apply()
+    ok(d.pages[1].blocks.length === 1 && d.pages[1].blocks[0].id === p.added[0],
+      'so no page is ever left with zero blocks')
+  }
+}
+{
+  const d = fresh()
+  const p = planMoveBlock(d, 'tog', { beforeId: 'a' })
+  ok(p.ok, 'moveBlock plans')
+  if (p.ok) {
+    p.apply()
+    ok(d.pages[0].blocks.map((b) => b.id).join(',') === 'tog,kid,grandkid,a,z',
+      `a moved block takes its subtree with it, in order (got ${d.pages[0].blocks.map((b) => b.id).join(',')})`)
+  }
+  ok(!planMoveBlock(fresh(), 'tog', { afterId: 'kid' }).ok, 'a block cannot be moved inside its own subtree')
+
+  const cross = fresh()
+  const c = planMoveBlock(cross, 'kid', { pageId: 'p2', afterId: 'q' })
+  ok(c.ok, 'a block can move to another page')
+  if (c.ok) {
+    c.apply()
+    const moved = cross.pages[1].blocks.find((b) => b.id === 'kid')!
+    ok(moved !== undefined && moved.parent === undefined,
+      'and loses a parent that does not exist on the destination page')
+    ok(cross.pages[1].blocks.some((b) => b.id === 'grandkid'), 'its own children travel with it')
+  }
+}
+{
+  const d = fresh()
+  ok(!planUpdatePage(d, 'p1', { blocks: [] }).ok, 'updatePage REFUSES to assign the blocks array wholesale')
+  ok(!planUpdatePage(d, 'p1', { id: 'x' }).ok, 'and refuses to change a page id')
+  ok(!planUpdatePage(d, 'p1', { parent: 'p2' }).ok, 'a page cannot be moved inside its own subtree')
+  const p = planUpdatePage(d, 'p2', { title: 'A <b>new</b> name', archived: true })
+  ok(p.ok, 'updatePage plans')
+  if (p.ok) {
+    p.apply()
+    ok(d.pages[1].title === 'A new name', `a title is plain text — it renders as textContent (got ${d.pages[1].title})`)
+    ok(d.pages[1].archived === true, 'archived is set')
+    const off = planUpdatePage(d, 'p2', { archived: false })
+    if (off.ok) off.apply()
+    ok(!('archived' in d.pages[1]), 'and unarchiving DELETES the key, exactly as the editor does')
+  }
+}
+{
+  const d = fresh()
+  d.home = 'p2'
+  d.pages[0].blocks[0].html = 'go <a href="#p/p2">there</a>'
+  const p = planRemovePage(d, 'p2')
+  ok(p.ok, 'removePage plans')
+  if (p.ok) {
+    ok(p.links === 1, `it counts the inbound links that are about to go dead (got ${p.links})`)
+    p.apply()
+    ok(d.home === undefined, 'and clears home when it named the removed page')
+  }
+  const kids = fresh()
+  const k = planRemovePage(kids, 'p1')
+  ok(k.ok && k.rehomed === 1, 'a child page moves up a level rather than being deleted with its parent')
+  if (k.ok) { k.apply(); ok(kids.pages.length === 1 && kids.pages[0].parent === undefined, 'and lands at the root') }
+
+  const all = fresh()
+  const cascade = planRemovePage(all, 'p1', { descendants: true })
+  ok(!cascade.ok && cascade.err === 'last-page',
+    'removing every page is refused — a space with no pages cannot be edited back to life')
+  ok(!planRemovePage((parseDoc(doc()) as any).doc, 'p1').ok, 'and so is removing the only page')
+}
+{
+  // a code block's html is escaped TEXT, not markup: the renderer shows its
+  // textContent, so sanitizing it would delete the sample being shown
+  ok(normalizeHtml('<div>x</div>', 'code') === '&lt;div&gt;x&lt;/div&gt;', 'code html is escaped, not stripped')
+  ok(normalizeHtml('&lt;div&gt;', 'code') === '&lt;div&gt;',
+    'already-escaped code passes through untouched (replaying a patch must not double-escape)')
+  ok(!normalizeHtml('<img src=x onerror=alert(1)>', 'p').includes('onerror'), 'rich html is sanitized')
+  ok(jsonSafe({ a: [1, 'two', null, { b: true }] }), 'plain JSON data is accepted')
+  for (const bad of [() => 1, new Date(), new Map(), Symbol('x'), NaN, Infinity]) {
+    ok(!jsonSafe(bad), `${String(bad?.constructor?.name ?? typeof bad)} is refused`)
+  }
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
