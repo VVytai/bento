@@ -266,6 +266,20 @@ jobs:
         # the decimal convention is decided per COLUMN from the whole column.
         run: node scripts/test-dash-import.ts
 
+      - name: bento/dash formula rig
+        # A wrong number is the worst failure a spreadsheet has, and the
+        # dangerous ones are plausible rather than loud: an error that becomes a
+        # zero, a cycle that resolves to something, a column computed before the
+        # column it depends on. All three are asserted, each with a control.
+        run: node scripts/test-dash-formula.ts
+
+      - name: bento/dash chart rig
+        # A tile names columns and derives its series at render, so the whole
+        # surface worth testing is the derivation. The failure that matters most
+        # is a missing value drawn as a zero — "we sold nothing" instead of "we
+        # do not know".
+        run: node scripts/test-dash-chart.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default
