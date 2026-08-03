@@ -1753,7 +1753,12 @@ function place(pop: HTMLElement, anchor: HTMLElement | DOMRect): void {
  */
 export function pageIcon(icon: string | undefined): string {
   if (!icon) return ICONS.page
-  if (icon in ICONS) return ICONS[icon as IconName]
+  // hasOwn, not `in`: `'toString' in ICONS` is TRUE and resolves to a
+  // FUNCTION, so an icon name of "toString" or "constructor" in a mailed file
+  // returned native source text and skipped the escape below. Not markup, so
+  // not an injection — but it is author-supplied data reaching the page
+  // unescaped, and the next lookup table indexed this way might not be so lucky.
+  if (Object.hasOwn(ICONS, icon)) return ICONS[icon as IconName]
   return escapeHtml(icon)   // an emoji, or anything else the file carried
 }
 
