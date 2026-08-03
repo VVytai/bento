@@ -204,5 +204,45 @@ for (const [label, input, err] of [
     'sanitize.ts never reads the .href IDL property (it resolves to an absolute URL)')
 }
 
+// ---- untrusted html is parsed INERT, never into a live element -------------
+// Measured in a browser, 2026-08-03: `document.createElement('div').innerHTML =
+// '<img src="404" onerror="…">'` FIRES the handler. The div is detached, but
+// its elements belong to the live document, so the resource loads. `DOMParser`,
+// `<template>` and `createHTMLDocument` are inert and do not.
+//
+// That made the SANITIZER its own vector: it must parse hostile markup before
+// it can strip it, so the payload ran before the strip — at render time, on
+// merely opening a space someone sent you. Two more call sites (textOf, and
+// render.ts's code-block text extraction) had the same shape.
+//
+// Behavioural proof needs a DOM and a network failure; this pins the discipline
+// in the source, where the mistake gets made. Any new html-parsing helper must
+// go through inertBody().
+{
+  const fs = await import('node:fs')
+  const read = (f: string) => fs.readFileSync(new URL(`../spaces/src/${f}`, import.meta.url), 'utf8')
+
+  for (const f of ['sanitize.ts', 'render.ts', 'editor.ts', 'about.ts', 'main.ts']) {
+    const src = read(f)
+    // an element made with createElement, then fed innerHTML — the live-parse
+    // shape. Assignments of ALREADY-SANITIZED html to a render target are fine
+    // and read differently (`x.innerHTML = sanitizeInline(…)`), so the check is
+    // on the raw-variable form.
+    const live = /\.innerHTML\s*=\s*(html|raw|untrusted|b\.html|String\(html\))\b/.exec(src)
+    ok(!live, `${f} never parses raw html into a live element (found: ${live?.[0] ?? 'none'})`)
+  }
+
+  const san = read('sanitize.ts')
+  ok(/export function inertBody/.test(san), 'sanitize.ts exports inertBody()')
+  ok(/new DOMParser\(\)\.parseFromString/.test(san), 'inertBody parses into an inert document')
+  ok(/el\.ownerDocument\.createTextNode/.test(san),
+    'the unwrap gap node comes from the parsed document, not the live one')
+  ok(!/const host = document\.createElement/.test(san),
+    'sanitizeInline does not host untrusted html in a live element')
+
+  const ren = read('render.ts')
+  ok(/inertBody\(/.test(ren), 'render.ts extracts code-block text through inertBody')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

@@ -10,7 +10,7 @@
 // one decision.
 
 import { type SpacesDoc, type Page, type Block } from './model'
-import { sanitizeInline, esc } from './sanitize'
+import { sanitizeInline, inertBody, esc } from './sanitize'
 
 export interface RenderOpts {
   /** editable per-block hosts (the editor); false for reader/print */
@@ -180,11 +180,12 @@ function inlineHost(b: Block, opts: RenderOpts): HTMLElement {
   return inner
 }
 
+// Untrusted html — parse INERT. A detached div still loads what it creates,
+// so `<img src="404" onerror>` in a code block would run its handler here.
+// See sanitize.ts inertBody().
 const textFromHtml = (html: string | undefined): string => {
   if (!html) return ''
-  const d = document.createElement('div')
-  d.innerHTML = html
-  return d.textContent ?? ''
+  return inertBody(html).textContent ?? ''
 }
 
 export function resolveSrc(src: string, doc: SpacesDoc): string {

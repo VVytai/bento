@@ -14,6 +14,7 @@ import {
 } from '../../kernel/src/save.ts'
 import { clearVersions } from '../../kernel/src/autosave.ts'
 import { t, localeChoices, locale, setLocale } from './i18n'
+import { inertBody } from './sanitize'
 import type { Store } from './store'
 
 export interface AboutHooks {
@@ -221,8 +222,10 @@ export function toMarkdown(store: Store): string {
 /** Inline html → inline markdown. Links become `[text](#p/id)` so a reader can
  *  still see which page was meant even outside the space. */
 function htmlToMd(html: string): string {
-  const d = document.createElement('div')
-  d.innerHTML = html
+  // INERT parse — exporting must not run what it is exporting. A detached div
+  // still loads its own resources, so `<img src="404" onerror>` in a block
+  // would fire on "Download as Markdown". See sanitize.ts inertBody().
+  const d = inertBody(html)
   const walk = (n: Node): string => {
     if (n.nodeType === Node.TEXT_NODE) return n.textContent ?? ''
     if (!(n instanceof HTMLElement)) return ''

@@ -39,6 +39,27 @@ const HREF_OK = /^(https?:|mailto:|#p\/)/i
 const UNWRAP = new Set(['P', 'DIV', 'SECTION', 'ARTICLE', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'BLOCKQUOTE', 'PRE', 'FONT'])
 
 /**
+ * Parse untrusted html into an INERT document, and never into a live element.
+ *
+ * `document.createElement('div').innerHTML = hostile` looks safe because the
+ * div is detached. It is not: the elements it creates belong to the live
+ * document, so their resources LOAD. `<img src="404" onerror="…">` runs its
+ * handler from a div that was never inserted anywhere.
+ *
+ * Measured in the browser, 2026-08-03: detached div FIRES; `DOMParser`,
+ * `<template>` and `createHTMLDocument` do not, and the markup survives intact
+ * for cleaning either way.
+ *
+ * That made the sanitizer its own vector — it has to parse hostile markup
+ * before it can strip it, so the payload ran BEFORE the strip, at render time,
+ * on opening a space someone sent you. Every entry point for untrusted html
+ * goes through here, which is why it is exported: `render.ts` needs it too.
+ */
+export function inertBody(html: string): HTMLElement {
+  return new DOMParser().parseFromString(html, 'text/html').body
+}
+
+/**
  * Strip everything outside the allowlist, in place.
  *
  * Structure-carrying tags are UNWRAPPED (their text survives) rather than
@@ -47,8 +68,7 @@ const UNWRAP = new Set(['P', 'DIV', 'SECTION', 'ARTICLE', 'LI', 'UL', 'OL', 'H1'
  */
 export function sanitizeInline(html: string): string {
   if (typeof document === 'undefined') return stripAllTags(html)
-  const host = document.createElement('div')
-  host.innerHTML = html
+  const host = inertBody(html)
 
   const walk = (node: Node) => {
     for (const child of [...node.childNodes]) {
@@ -64,7 +84,10 @@ export function sanitizeInline(html: string): string {
           // "<p>a</p><p>b</p>" must not become "ab"
           const needsGap = el.nextSibling || el.previousSibling
           while (el.firstChild) el.parentNode!.insertBefore(el.firstChild, el)
-          if (needsGap) el.parentNode!.insertBefore(document.createTextNode(' '), el)
+          // el.ownerDocument, not `document`: the host lives in the inert
+          // parsed document now. Cross-document insert would work (DOM4 adopts
+          // implicitly) but relying on that is a trap for the next edit.
+          if (needsGap) el.parentNode!.insertBefore(el.ownerDocument.createTextNode(' '), el)
         }
         el.remove()
         continue
@@ -129,9 +152,7 @@ export function canonicalize(html: string): string {
 export function textOf(html: string | undefined): string {
   if (!html) return ''
   if (typeof document === 'undefined') return stripAllTags(html)
-  const d = document.createElement('div')
-  d.innerHTML = html
-  return d.textContent ?? ''
+  return inertBody(html).textContent ?? ''
 }
 
 /** Escape for safe insertion as text. */

@@ -1253,6 +1253,56 @@ CI-testable, but the registry drifting from the tree is. It pins `appId`
 against each app's own `configureApp()` call and the manifest URL against the
 path the release publishes to.
 
+## 2026-08-03 — Untrusted html is parsed INERT; a detached div is not safe
+
+**Decision.** All untrusted html in bento/spaces goes through
+`sanitize.ts inertBody()`, which parses with `DOMParser` into an inert
+document. `document.createElement('div').innerHTML = untrusted` is banned, and
+`scripts/test-spaces-model.ts` refuses it in the source.
+
+**Measured, in a browser, on the real shell over `file://`:**
+
+| construction | `<img src="404" onerror="…">` |
+|---|---|
+| `document.createElement('div').innerHTML = …` | **FIRES** |
+| `new DOMParser().parseFromString(…, 'text/html')` | inert |
+| `<template>.innerHTML = …` | inert |
+| `document.implementation.createHTMLDocument()` | inert |
+
+A detached div reads as safe — nothing was inserted into the page — but the
+elements it creates belong to the LIVE document, so their resources load. The
+handler runs from a node that was never attached to anything.
+
+**Why this was the worst possible instance of it.** The sanitizer has to parse
+hostile markup before it can strip it, so the sanitizer was itself the vector,
+and the payload ran BEFORE the strip. `sanitizeInline` is called at render time
+(`render.ts`), so the trigger was *opening a space someone sent you* — no
+click, no edit. Sanitizing at render rather than at load is otherwise the right
+call (every path into the DOM is covered by one line); it just meant this bug
+sat on the open path.
+
+Four call sites had the shape: `sanitizeInline`, `textOf`, `render.ts`'s
+code-block text extraction, and — found by the guard, not by reading —
+`about.ts`'s markdown export, so "Export as Markdown" ran what it was
+exporting.
+
+**The guard is a source assertion,** like the `.href`-IDL one above it: the
+behaviour needs a DOM and a failing network request, and the mistake is made in
+the source. It caught the fourth site the moment it was written, which is the
+argument for writing it that way.
+
+**Verified after the fix,** on the built shell from `file://`, with the removed
+construction kept in the same page as a control: only the control fired. No
+`[onerror]`, no smuggled `<img>`, no `svg[onload]`, no `javascript:` href
+reached the DOM; the `#p/` link survived, external links kept
+`rel="noopener noreferrer"`, `<p>a</p><p>b</p>` still unwrapped to "a b", and
+markdown export produced `alpha **bold** *it* \`c\` [link](#p/sd-home)`.
+
+**One consequence to remember.** The sanitizer's host now lives in a different
+document, so nodes it inserts must come from `el.ownerDocument`, not the global
+`document`. DOM4 adopts implicitly, so the wrong one would work — which is
+exactly why it is written explicitly and pinned by the rig.
+
 ## 2026-08-03 — Release notes, agent guides and tags are PER APP
 
 **Decision.** `scripts/apps.mjs` gained `changelog` and `agents` per app. A
