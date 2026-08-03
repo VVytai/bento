@@ -175,8 +175,17 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
   editor.onSave = () => { void doSave() }
   async function doSave(): Promise<void> {
     store.endRun()
+    editor.status(t('Saving…'))
     const res = await saveFile(store.doc)
-    if (res === 'saved') void clearRecovery(store.doc.docId)
+    if (res === 'saved') {
+      void clearRecovery(store.doc.docId)
+      // "Saved" is doing real work here: on a browser without file-system
+      // access this was a NEW download, and saying so is the difference
+      // between understanding that and losing track of which copy is current
+      editor.status(canWriteInPlace() ? t('Saved') : t('Saved a new copy'))
+    } else {
+      editor.status('')
+    }
   }
 
   // A recovery snapshot is the ONLY backstop on browsers with no file-system

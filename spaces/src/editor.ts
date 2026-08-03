@@ -14,6 +14,7 @@ import { renderPage } from './render'
 import { canonicalize, sanitizeInline, textOf } from './sanitize'
 import { t } from './i18n'
 import { openAbout } from './about'
+import { ICONS, type IconName } from './icons'
 
 const CTRL = navigator.platform.toLowerCase().includes('mac') ? 'metaKey' : 'ctrlKey'
 
@@ -32,19 +33,19 @@ const AUTOFORMAT: Array<[RegExp, string, (b: Block) => void]> = [
   [/^--- $/, 'divider', () => {}],
 ]
 
-const SLASH_ITEMS: Array<{ type: string; label: string; hint: string }> = [
-  { type: 'p', label: 'Text', hint: 'Plain paragraph' },
-  { type: 'h1', label: 'Heading 1', hint: '#' },
-  { type: 'h2', label: 'Heading 2', hint: '##' },
-  { type: 'h3', label: 'Heading 3', hint: '###' },
-  { type: 'bullet', label: 'Bulleted list', hint: '-' },
-  { type: 'number', label: 'Numbered list', hint: '1.' },
-  { type: 'todo', label: 'To-do', hint: '[]' },
-  { type: 'toggle', label: 'Toggle', hint: 'Collapsible section' },
-  { type: 'quote', label: 'Quote', hint: '>' },
-  { type: 'code', label: 'Code', hint: '```' },
-  { type: 'divider', label: 'Divider', hint: '---' },
-  { type: 'pagelink', label: 'Link to page', hint: 'A card that opens a page' },
+const SLASH_ITEMS: Array<{ type: string; label: string; hint: string; icon: IconName }> = [
+  { type: 'p', label: 'Text', hint: 'Plain paragraph', icon: 'text' },
+  { type: 'h1', label: 'Heading 1', hint: '#', icon: 'h1' },
+  { type: 'h2', label: 'Heading 2', hint: '##', icon: 'h2' },
+  { type: 'h3', label: 'Heading 3', hint: '###', icon: 'h3' },
+  { type: 'bullet', label: 'Bulleted list', hint: '-', icon: 'bullet' },
+  { type: 'number', label: 'Numbered list', hint: '1.', icon: 'number' },
+  { type: 'todo', label: 'To-do', hint: '[]', icon: 'todo' },
+  { type: 'toggle', label: 'Toggle', hint: 'Collapsible section', icon: 'toggle' },
+  { type: 'quote', label: 'Quote', hint: '>', icon: 'quote' },
+  { type: 'code', label: 'Code', hint: '```', icon: 'code' },
+  { type: 'divider', label: 'Divider', hint: '---', icon: 'divider' },
+  { type: 'pagelink', label: 'Link to page', hint: 'A card that opens a page', icon: 'link' },
 ]
 
 export class Editor {
@@ -89,13 +90,14 @@ export class Editor {
     // On a phone the sidebar is off-canvas, so it needs a way in. Without
     // this the page tree — the whole point of a space holding many pages — is
     // simply unreachable below 720px.
-    const menu = btn('☰', t('Pages'), () => this.sidebar.classList.toggle('sp-open'))
+    const menu = iconBtn('menu', t('Pages'), () => this.toggleSidebar())
     menu.classList.add('sp-menu')
-    const search = btn('⌕', t('Search all pages (⌘K)'), () => this.openSearch())
-    const about = btn('ⓘ', t('About this space'), () =>
-      openAbout({ store: this.store, onRepaint: () => { this.build() } }))
-    const save = btn('⤓', t('Save (⌘S)'), () => this.onSave?.())
+    const search = iconBtn('search', t('Search all pages (⌘K)'), () => this.openSearch())
+    const about = iconBtn('info', t('About this space'), () =>
+      openAbout({ store: this.store, onRepaint: () => this.build() }))
+    const save = iconBtn('save', t('Save (⌘S)'), () => this.onSave?.())
     save.classList.add('sp-primary')
+    save.append(document.createTextNode(t('Save')))
     this.statusEl = el('span', 'sp-status')
 
     bar.append(menu, mark, title, this.statusEl, search, about, save)
@@ -113,10 +115,23 @@ export class Editor {
     document.addEventListener('keydown', (e) => this.onKey(e), true)
   }
 
-  private status(msg: string): void {
+  /** Open/close the page drawer on narrow screens, with a scrim to tap away. */
+  private toggleSidebar(force?: boolean): void {
+    const open = force ?? !this.sidebar.classList.contains('sp-open')
+    this.sidebar.classList.toggle('sp-open', open)
+    document.querySelector('.sp-scrim')?.remove()
+    if (open) {
+      const scrim = el('div', 'sp-scrim')
+      scrim.addEventListener('click', () => this.toggleSidebar(false))
+      document.body.append(scrim)
+    }
+  }
+
+  status(msg: string): void {
     this.statusEl.textContent = msg
+    this.statusEl.classList.add('sp-on')
     clearTimeout((this.statusEl as any)._t)
-    ;(this.statusEl as any)._t = setTimeout(() => { this.statusEl.textContent = '' }, 1800)
+    ;(this.statusEl as any)._t = setTimeout(() => this.statusEl.classList.remove('sp-on'), 1800)
   }
 
   // ---- the page tree ------------------------------------------------------
@@ -125,7 +140,7 @@ export class Editor {
     this.sidebar.innerHTML = ''
     const head = el('div', 'sp-side-head')
     head.append(el('span', 'sp-side-title', t('Pages')))
-    head.append(btn('＋', t('New page (⌘⌥N)'), () => this.newPage()))
+    head.append(iconBtn('plus', t('New page (⌘⌥N)'), () => this.newPage()))
     this.sidebar.append(head)
 
     const list = el('ul', 'sp-tree')
@@ -136,9 +151,14 @@ export class Editor {
       const a = document.createElement('a')
       a.href = `#p/${page.id}`
       a.className = 'sp-treelink' + (page.id === s.pageId ? ' sp-here' : '')
-      a.textContent = `${page.icon ? page.icon + ' ' : ''}${page.title || t('Untitled')}`
+      const ico = el('span', 'sp-tree-ico')
+      if (page.icon) ico.textContent = page.icon
+      else ico.innerHTML = ICONS.page
+      const label = document.createElement('span')
+      label.textContent = page.title || t('Untitled')
+      a.append(ico, label)
       a.draggable = true
-      a.addEventListener('click', (e) => { e.preventDefault(); s.goToPage(page.id); this.sidebar.classList.remove('sp-open') })
+      a.addEventListener('click', (e) => { e.preventDefault(); s.goToPage(page.id); this.toggleSidebar(false) })
       a.addEventListener('dragstart', (e) => e.dataTransfer?.setData('text/bento-page', page.id))
       a.addEventListener('dragover', (e) => { e.preventDefault(); a.classList.add('sp-drop') })
       a.addEventListener('dragleave', () => a.classList.remove('sp-drop'))
@@ -150,6 +170,7 @@ export class Editor {
       li.append(a)
       list.append(li)
     }
+    if (!list.childElementCount) list.append(el('li', 'sp-side-empty', t('No pages yet')))
     this.sidebar.append(list)
 
     // dropping on the empty area below the tree makes a page top-level again
@@ -196,14 +217,116 @@ export class Editor {
     if (!page) { this.main.append(el('p', 'sp-empty', t('This space has no pages.'))); return }
 
     this.painting = true
+    const trail: string[] = []
+    for (let p = page.parent; p; p = s.index.page.get(p)?.parent) {
+      const owner = s.index.page.get(p)
+      if (!owner) break
+      trail.unshift(owner.id)
+      if (trail.length > 4) break
+    }
     const view = renderPage(page, s.doc, {
       editable: !s.readOnly,
       titleOf: (id) => s.index.page.get(id)?.title,
     })
+    if (trail.length) {
+      const crumb = el('nav', 'sp-crumb')
+      crumb.setAttribute('aria-label', t('Breadcrumb'))
+      trail.forEach((id, i) => {
+        if (i) crumb.append(Object.assign(document.createElement('span'), { textContent: '›' }))
+        const a = document.createElement('a')
+        a.href = `#p/${id}`
+        a.textContent = s.index.page.get(id)?.title || t('Untitled')
+        a.addEventListener('click', (e) => { e.preventDefault(); s.goToPage(id) })
+        crumb.append(a)
+      })
+      view.querySelector('.sp-page-inner')?.prepend(crumb)
+    }
     this.main.append(view)
     this.wire(view)
-    this.main.append(this.backlinks(page.id))
+    view.querySelector('.sp-page-inner')?.append(this.backlinks(page.id))
     this.painting = false
+  }
+
+  /**
+   * The hover gutter.
+   *
+   * A block editor with no visible affordances is a guessing game: nothing on
+   * screen says a block can be moved or that a new one can go here. These sit
+   * OUTSIDE the text column so they never reflow the prose, and only appear on
+   * hover so a page at rest is just the writing.
+   */
+  private addGutter(node: HTMLElement, blockId: string): void {
+    const g = el('div', 'sp-gutter')
+    const add = document.createElement('button')
+    add.className = 'sp-ghost'
+    add.type = 'button'
+    add.innerHTML = ICONS.plus
+    add.title = t('Add a block below')
+    add.setAttribute('aria-label', t('Add a block below'))
+    add.addEventListener('click', () => this.insertAfter(blockId))
+
+    const grip = document.createElement('button')
+    grip.className = 'sp-ghost'
+    grip.type = 'button'
+    grip.draggable = true
+    grip.innerHTML = ICONS.grip
+    grip.title = t('Drag to move, click for block options')
+    grip.setAttribute('aria-label', t('Block options'))
+    grip.addEventListener('click', () => this.openSlash(blockId, grip))
+    grip.addEventListener('dragstart', (e) => {
+      e.dataTransfer?.setData('text/bento-block', blockId)
+      node.classList.add('sp-dragging')
+    })
+    grip.addEventListener('dragend', () => node.classList.remove('sp-dragging'))
+
+    node.addEventListener('dragover', (e) => { e.preventDefault(); node.classList.add('sp-dropline') })
+    node.addEventListener('dragleave', () => node.classList.remove('sp-dropline'))
+    node.addEventListener('drop', (e) => {
+      e.preventDefault()
+      node.classList.remove('sp-dropline')
+      const moved = e.dataTransfer?.getData('text/bento-block')
+      if (moved && moved !== blockId) this.moveBlock(moved, blockId)
+    })
+
+    g.append(add, grip)
+    node.prepend(g)
+  }
+
+  private insertAfter(blockId: string): void {
+    const s = this.store
+    const page = s.page
+    if (!page) return
+    const fresh = newBlock('p')
+    const owner = s.block(blockId)
+    if (owner?.parent) fresh.parent = owner.parent
+    s.commit(() => {
+      page.blocks.splice(page.blocks.findIndex((b) => b.id === blockId) + 1, 0, fresh)
+    })
+    this.paintPage()
+    this.focusBlock(fresh.id)
+  }
+
+  /** Move a block (and anything nested under it) to sit after another. */
+  private moveBlock(moved: string, after: string): void {
+    const s = this.store
+    const page = s.page
+    if (!page) return
+    const from = page.blocks.findIndex((b) => b.id === moved)
+    if (from < 0) return
+    // a subtree travels with its owner, or its children would be orphaned
+    const kids: string[] = []
+    const collect = (id: string) => {
+      for (const b of page.blocks) if (b.parent === id) { kids.push(b.id); collect(b.id) }
+    }
+    collect(moved)
+    if (kids.includes(after)) return // never drop a block inside its own subtree
+    s.commit(() => {
+      const group = [moved, ...kids].map((id) => page.blocks.find((b) => b.id === id)!).filter(Boolean)
+      for (const b of group) page.blocks.splice(page.blocks.indexOf(b), 1)
+      const at = page.blocks.findIndex((b) => b.id === after) + 1
+      page.blocks.splice(at, 0, ...group)
+    })
+    this.paintPage()
   }
 
   /** Attach behaviour to a freshly painted page. */
@@ -211,6 +334,11 @@ export class Editor {
     const s = this.store
 
     const title = view.querySelector<HTMLElement>('[data-page-title]')
+    if (title) {
+      title.dataset.ph = t('Untitled')
+      if (!title.textContent?.trim()) title.dataset.empty = '1'
+      title.addEventListener('input', () => { if (title.textContent?.trim()) delete title.dataset.empty; else title.dataset.empty = '1' })
+    }
     title?.addEventListener('input', () => {
       if (this.painting) return
       const id = title.dataset.pageTitle!
@@ -221,8 +349,13 @@ export class Editor {
       this.paintTreeSoon()
     })
 
+    for (const node of view.querySelectorAll<HTMLElement>('[data-block-id]')) {
+      if (!s.readOnly) this.addGutter(node, node.dataset.blockId!)
+    }
+
     for (const host of view.querySelectorAll<HTMLElement>('[data-edit]')) {
       const id = host.dataset.edit!
+      host.dataset.ph = t('Type / for blocks, [[ to link a page')
       host.addEventListener('input', () => {
         if (this.painting) return
         delete host.dataset.empty
@@ -493,6 +626,8 @@ export class Editor {
     this.overlay = null
   }
 
+  /** Anchor a popover to a rect, kept inside the viewport. */
+
   /** ⌘K — search every page, including collapsed toggles and archived pages. */
   openSearch(): void {
     const s = this.store
@@ -519,9 +654,11 @@ export class Editor {
           const li = document.createElement('li')
           const a = document.createElement('button')
           a.className = 'sp-result'
-          a.innerHTML = `<strong>${escapeHtml(p.title || t('Untitled'))}</strong>` +
-            (p.archived ? ` <em class="sp-arch">${t('archived')}</em>` : '') +
-            `<span>${escapeHtml(hits.slice(0, 2).join(' · ').slice(0, 140))}</span>`
+          a.innerHTML =
+            `<span class="sp-result-ico">${ICONS.page}</span>` +
+            `<span class="sp-result-txt"><strong>${escapeHtml(p.title || t('Untitled'))}` +
+            (p.archived ? ` <em class="sp-arch">${t('archived')}</em>` : '') + `</strong>` +
+            `<span>${escapeHtml(hits.slice(0, 2).join(' · ').slice(0, 140))}</span></span>`
           a.addEventListener('click', () => { close(); s.goToPage(p.id) })
           li.append(a)
           results.append(li)
@@ -532,31 +669,82 @@ export class Editor {
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') results.querySelector<HTMLElement>('.sp-result')?.click()
       })
-      card.append(input, results)
+      card.append(el('h2', 'sp-card-h', t('Search this space')), input, results)
     })
   }
 
-  private openSlash(blockId: string): void {
-    this.openOverlay(t('Turn into'), (card, close) => {
-      const list = el('ul', 'sp-results')
-      for (const item of SLASH_ITEMS) {
+  /**
+   * The block menu, anchored where you are.
+   *
+   * A centred modal for "turn this line into a heading" loses the thing you
+   * were pointing at. This opens beside the caret (or the gutter button that
+   * summoned it), is driven entirely by the keyboard, and filters as you type
+   * so `/h2` reaches a heading without the hand leaving the keys.
+   */
+  private openSlash(blockId: string, anchor?: HTMLElement): void {
+    this.closeOverlay()
+    const pop = el('div', 'sp-pop')
+    pop.setAttribute('role', 'listbox')
+    const find = document.createElement('input')
+    find.className = 'sp-find'
+    find.placeholder = t('Filter blocks…')
+    const list = el('ul', 'sp-results')
+    pop.append(find, list)
+
+    let items = SLASH_ITEMS
+    let sel = 0
+    const commit = (item: typeof SLASH_ITEMS[number]) => {
+      this.closeOverlay()
+      const blk = this.store.block(blockId)
+      // the "/" that opened the menu is a command, not content
+      if (blk && (blk.html ?? '').trim() === '/') blk.html = ''
+      if (item.type === 'pagelink') this.insertPageCard(blockId)
+      else this.setType(blockId, item.type)
+    }
+    const paint = () => {
+      list.innerHTML = ''
+      items.forEach((item, i) => {
         const li = document.createElement('li')
         const b = document.createElement('button')
-        b.className = 'sp-result'
-        b.innerHTML = `<strong>${escapeHtml(t(item.label))}</strong><span>${escapeHtml(t(item.hint))}</span>`
-        b.addEventListener('click', () => {
-          close()
-          // the "/" that opened the menu is not content
-          const blk = this.store.block(blockId)
-          if (blk) blk.html = ''
-          if (item.type === 'pagelink') this.insertPageCard(blockId)
-          else this.setType(blockId, item.type)
-        })
+        b.className = 'sp-result' + (i === sel ? ' sp-sel' : '')
+        b.type = 'button'
+        b.setAttribute('role', 'option')
+        b.innerHTML =
+          `<span class="sp-result-ico">${ICONS[item.icon]}</span>` +
+          `<span class="sp-result-txt"><strong>${escapeHtml(t(item.label))}</strong>` +
+          `<span>${escapeHtml(t(item.hint))}</span></span>`
+        b.addEventListener('click', () => commit(item))
         li.append(b)
         list.append(li)
-      }
-      card.append(el('h2', 'sp-card-h', t('Turn into')), list)
+      })
+      if (!items.length) list.append(el('li', 'sp-noresult', t('No block matches')))
+    }
+    find.addEventListener('input', () => {
+      const q = find.value.trim().toLowerCase()
+      items = SLASH_ITEMS.filter((i) => t(i.label).toLowerCase().includes(q) || i.type.includes(q))
+      sel = 0
+      paint()
     })
+    find.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(sel + 1, items.length - 1); paint() }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(sel - 1, 0); paint() }
+      else if (e.key === 'Enter') { e.preventDefault(); if (items[sel]) commit(items[sel]) }
+      else if (e.key === 'Escape') { e.preventDefault(); this.closeOverlay(); this.focusBlock(blockId) }
+    })
+    paint()
+
+    document.body.append(pop)
+    this.overlay = pop
+    place(pop, anchor ?? caretRect())
+    find.focus()
+
+    // clicking anywhere else dismisses, but not the first click that opened it
+    setTimeout(() => {
+      const away = (ev: MouseEvent) => {
+        if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
+      }
+      document.addEventListener('mousedown', away)
+    }, 0)
   }
 
   private insertPageCard(blockId: string): void {
@@ -596,7 +784,10 @@ export class Editor {
           const li = document.createElement('li')
           const b = document.createElement('button')
           b.className = 'sp-result'
-          b.textContent = p.title || t('Untitled')
+          b.type = 'button'
+          b.innerHTML =
+            `<span class="sp-result-ico">${ICONS.page}</span>` +
+            `<span class="sp-result-txt"><strong>${escapeHtml(p.title || t('Untitled'))}</strong></span>`
           b.addEventListener('click', () => choose(p.id, p.title || t('Untitled')))
           li.append(b)
           list.append(li)
@@ -606,7 +797,10 @@ export class Editor {
           const li = document.createElement('li')
           const b = document.createElement('button')
           b.className = 'sp-result sp-new'
-          b.textContent = t('Create “{name}”', { name: input.value.trim() })
+          b.type = 'button'
+          b.innerHTML =
+            `<span class="sp-result-ico">${ICONS.plus}</span>` +
+            `<span class="sp-result-txt"><strong>${escapeHtml(t('Create “{name}”', { name: input.value.trim() }))}</strong></span>`
           b.addEventListener('click', () => {
             const page = newPage(input.value.trim())
             s.commit(() => { s.doc.pages.push(page) })
@@ -639,11 +833,11 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: s
   return n
 }
 
-function btn(glyph: string, label: string, onClick: () => void): HTMLButtonElement {
+function iconBtn(name: IconName, label: string, onClick: () => void): HTMLButtonElement {
   const b = document.createElement('button')
   b.className = 'sp-btn'
   b.type = 'button'
-  b.textContent = glyph
+  b.innerHTML = ICONS[name]
   b.title = label
   b.setAttribute('aria-label', label)
   b.addEventListener('click', onClick)
@@ -716,4 +910,27 @@ function splitAtCaret(host: HTMLElement): [string, string] {
   const head = before.cloneContents()
   const wrap = (f: DocumentFragment) => { const d = document.createElement('div'); d.append(f); return d.innerHTML }
   return [sanitizeInline(wrap(head)), sanitizeInline(wrap(tail))]
+}
+
+/** Where the caret is, in viewport coordinates. */
+function caretRect(): DOMRect {
+  const sel = getSelection()
+  if (sel && sel.rangeCount) {
+    const r = sel.getRangeAt(0).getBoundingClientRect()
+    if (r.width || r.height || r.top) return r
+  }
+  return new DOMRect(80, 120, 0, 0)
+}
+
+/** Place a popover near an anchor without letting it leave the viewport. */
+function place(pop: HTMLElement, anchor: HTMLElement | DOMRect): void {
+  const r = anchor instanceof HTMLElement ? anchor.getBoundingClientRect() : anchor
+  const w = pop.offsetWidth || 260
+  const h = pop.offsetHeight || 260
+  let left = r.left
+  let top = r.bottom + 6
+  if (left + w > innerWidth - 8) left = Math.max(8, innerWidth - w - 8)
+  if (top + h > innerHeight - 8) top = Math.max(8, r.top - h - 6)
+  pop.style.left = `${Math.max(8, left)}px`
+  pop.style.top = `${top}px`
 }
