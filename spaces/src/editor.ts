@@ -10,8 +10,9 @@
 
 import { type Block, newBlock, newPage } from './model'
 import { Store } from './store'
-import { renderPage, toneLabel } from './render'
-import { canonicalize, sanitizeInline, textOf } from './sanitize'
+import { renderPage, toneLabel, paintCode } from './render'
+import { CODE_LANGS, langLabel, normLang } from './highlight'
+import { canonicalize, escText, sanitizeInline, textOf } from './sanitize'
 import { MENU_SPECS, MD_SPECS, SPEC, CALLOUT_TONES } from './blocks'
 import { countOutsideTags, replaceOutsideTags } from './findreplace'
 import { t } from './i18n'
@@ -567,6 +568,9 @@ export class Editor {
 
     for (const host of view.querySelectorAll<HTMLElement>('[data-edit]')) {
       const id = host.dataset.edit!
+      // A code block's host holds TEXT, not inline html, and carries colour
+      // that must never reach the model. It gets its own wiring.
+      if (s.block(id)?.type === 'code') { this.wireCode(id, host); continue }
       host.dataset.ph = t('Type / for blocks, [[ to link a page')
       host.addEventListener('input', () => {
         if (this.painting) return
@@ -646,6 +650,24 @@ export class Editor {
       void this.imageFromTransfer(e.dataTransfer, near?.dataset.blockId)
     })
 
+    // The language chip. It belongs to the EDITOR, not the renderer: a reader
+    // and a printed page get the colours, not the control that changes them.
+    if (!s.readOnly && !this.reading) {
+      for (const node of view.querySelectorAll<HTMLElement>('.sp-b-code')) {
+        const id = node.dataset.blockId!
+        const chip = document.createElement('button')
+        chip.className = 'sp-btn sp-langchip'
+        chip.type = 'button'
+        // the RAW tag when this build cannot highlight it, so a `rust` block
+        // says "rust" and its plain rendering reads as a gap, not a bug
+        chip.textContent = langLabel(s.block(id)?.lang) || t('Plain text')
+        chip.title = t('Language — what this block is highlighted as')
+        chip.setAttribute('aria-label', t('Language — what this block is highlighted as'))
+        chip.addEventListener('click', () => this.openLangPicker(id, chip))
+        node.append(chip)
+      }
+    }
+
     for (const fig of view.querySelectorAll<HTMLElement>('.sp-b-image')) {
       const id = fig.dataset.blockId!
       const b = s.block(id)
@@ -688,6 +710,90 @@ export class Editor {
       const id = this.resolveAnchor(href)
       if (id) s.goToPage(id)
     })
+  }
+
+  /**
+   * A code block's editable host.
+   *
+   * TWO THINGS DIFFER from every other block, and both are load-bearing.
+   *
+   * The MODEL takes `textContent`, not `innerHTML`. The host now contains
+   * colour spans; reading innerHTML would write them into `b.html` and the
+   * document would carry presentation — a format change, permanent, for a
+   * feature that is supposed to be render-only. What is stored is the same
+   * html-escaped plain text a code block has always stored, so files written
+   * before highlighting existed and files written after are indistinguishable.
+   *
+   * The COLOUR is repainted synchronously on input, and `paintCode` reconciles
+   * rather than replacing — see its comment. Measured on the built shell: an
+   * insertion in the middle of a line changes no token boundary, so the paint
+   * performs zero DOM mutations and the caret is untouched. Only a keystroke
+   * that restructures the token stream costs a caret restore, and then the
+   * offset is exact because the reconcile is the only thing that moved it.
+   *
+   * Canonicalization is deliberately NOT run here (the generic host runs it on
+   * blur): it exists to tidy inline markup, and a code block has none.
+   */
+  private wireCode(id: string, host: HTMLElement): void {
+    const s = this.store
+    // An IME composition lives in nodes the engine owns; re-tokenising
+    // mid-composition destroys them and drops the half-typed word. The model
+    // keeps up regardless — only the colour waits for compositionend.
+    let composing = false
+    const sync = (paint: boolean): void => {
+      const text = host.textContent ?? ''
+      s.runEdit(id, () => { const b = s.block(id); if (b) b.html = escText(text) })
+      if (!paint) return
+      const at = caretIndexIn(host)
+      if (paintCode(host, text, s.block(id)?.lang) && at !== null) caretToOffset(host, at)
+    }
+    host.addEventListener('compositionstart', () => { composing = true })
+    host.addEventListener('compositionend', () => { composing = false; sync(true) })
+    host.addEventListener('input', () => { if (!this.painting) sync(!composing) })
+    host.addEventListener('blur', () => { if (!this.painting) s.endRun() })
+  }
+
+  /** Choose what a code block is highlighted as. */
+  private openLangPicker(blockId: string, anchor: HTMLElement): void {
+    const s = this.store
+    this.closeOverlay()
+    const pop = el('div', 'sp-pop sp-langpop')
+    pop.setAttribute('role', 'menu')
+    // An UNKNOWN tag matches NO row. `rust` renders plain, but it is not the
+    // same thing as plain: ticking "Plain text" for it would say the tag is
+    // already gone, and the next click would quietly delete it.
+    const raw = String(s.block(blockId)?.lang ?? '').trim()
+    const cur = normLang(raw)
+    const unknown = !!raw && !cur
+    for (const { id, label } of CODE_LANGS) {
+      const b = document.createElement('button')
+      b.className = 'sp-dditem' + (!unknown && id === cur ? ' sp-sel' : '')
+      b.type = 'button'
+      b.setAttribute('role', 'menuitem')
+      b.append(Object.assign(document.createElement('strong'), {
+        textContent: label || t('Plain text'),
+      }))
+      b.addEventListener('click', () => {
+        this.closeOverlay()
+        s.commit(() => {
+          const blk = s.block(blockId)
+          if (!blk) return
+          if (id) blk.lang = id
+          else delete blk.lang
+        })
+        this.paintPage()
+      })
+      pop.append(b)
+    }
+    document.body.append(pop)
+    this.overlay = pop
+    place(pop, anchor)
+    setTimeout(() => {
+      const away = (ev: MouseEvent) => {
+        if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
+      }
+      document.addEventListener('mousedown', away)
+    }, 0)
   }
 
   private treeTimer: ReturnType<typeof setTimeout> | undefined
@@ -734,7 +840,17 @@ export class Editor {
     return this.blockAt(document.activeElement)
   }
 
-  /** Markdown prefixes convert the block as they are typed. */
+  /**
+   * Markdown prefixes convert the block as they are typed.
+   *
+   * THE TRAILING SPACE IS NOT A SPACE. A space typed at the end of a
+   * contenteditable line is inserted by the engine as U+00A0, so that it does
+   * not collapse — measured in Chrome on the built shell: after typing "## ",
+   * `host.textContent` is `['#','#',160]` and `/^## $/` does not match it.
+   * Every space-completed trigger in the table above was therefore dead, which
+   * is most of them. Normalising here (never in the model — the block's html is
+   * cleared by the conversion anyway) fixes all of them at once.
+   */
   private autoformat(id: string, host: HTMLElement): void {
     // A trailing space typed at the end of a contentEditable line is inserted
     // by the browser as U+00A0, not U+0020 — otherwise it would collapse and
@@ -803,6 +919,25 @@ export class Editor {
 
     // native undo must never diverge from the store's history
     if (mod && (e.key.toLowerCase() === 'y')) { e.preventDefault(); s.redo(); this.paintPage(); return }
+
+    // A CODE BLOCK IS TEXT, so the block-editor keymap does not apply to it.
+    // Enter is a newline (not a block split), Tab is an indent (not a
+    // re-parent — indenting the block in the page tree is never what someone
+    // pressing Tab inside source code meant), and /, [[ and ⌘B are off.
+    //
+    // Enter is handled EXPLICITLY rather than left to the engine: what the
+    // browser inserts into a contenteditable varies (a `\n`, a `<br>`, a
+    // wrapping `<div>`), and only the first survives reading the host's
+    // textContent, which is now how the model is written. execCommand keeps
+    // the caret and fires the `input` event that repaints the colour.
+    if (b.type === 'code') {
+      // Shift is not a modifier here: there is no "soft break" in source code,
+      // so both Enters are the same newline.
+      if (e.key === 'Enter') { e.preventDefault(); insertText('\n'); return }
+      if (e.key === 'Tab') { e.preventDefault(); if (!e.shiftKey) insertText('  '); return }
+      if (e.key === '/' || e.key === '[') return
+      if (mod && ['b', 'i', 'u'].includes(e.key.toLowerCase())) { e.preventDefault(); return }
+    }
 
     if (e.key === 'Enter' && !e.shiftKey && b.type !== 'code') {
       e.preventDefault()
@@ -1771,6 +1906,21 @@ function iconBtn(name: IconName, label: string, onClick: () => void): HTMLButton
 
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/** Type text at the caret, through the engine, so the caret and `input` follow. */
+const insertText = (s: string): void => { document.execCommand('insertText', false, s) }
+
+/** Where the caret is inside a host, as a character offset. Null if it is not. */
+function caretIndexIn(host: HTMLElement): number | null {
+  const sel = getSelection()
+  if (!sel || !sel.rangeCount) return null
+  const r = sel.getRangeAt(0)
+  if (!r.collapsed || !host.contains(r.startContainer)) return null
+  const probe = r.cloneRange()
+  probe.selectNodeContents(host)
+  probe.setEnd(r.startContainer, r.startOffset)
+  return probe.toString().length
+}
 
 function atStart(host: HTMLElement): boolean {
   const sel = getSelection()

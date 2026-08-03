@@ -73,7 +73,7 @@ unique ids the first time.
 | `toggle` | `html`, `open` | a fold; blocks whose `parent` is its id are its body |
 | `callout` | `html`, `tone`, `icon` | a boxed note; blocks whose `parent` is its id are inside it |
 | `quote` | `html` | `<blockquote>` |
-| `code` | `html` (plain text), `lang` | `<pre><code>` |
+| `code` | `html` (plain text), `lang` | `<pre><code>`, syntax-coloured |
 | `divider` | — | `<hr>` |
 | `image` | `src` (see below), `alt`, `caption`, `width` (10–100 **%**), `w`/`h` (intrinsic px) | `<figure>` |
 | `pagelink` | `page` | a card linking to another page |
@@ -136,6 +136,28 @@ is remote and unloaded.
 Keep images to 1600px on the longest edge and use WebP: that is what the
 editor's own downscale does, and it is the difference between a space someone
 can mail and one they cannot.
+
+## Code blocks
+
+`html` is the source as **plain text**, html-escaped (`&` `<` `>` only) — never
+markup. Colour is applied when the page is drawn, so the document is identical
+whether or not this build can highlight the language.
+
+`lang` is a free string and is stored **exactly as you write it**. These tags
+are highlighted:
+
+`js` `ts` `py` `sh` `json` `yaml` `sql` `html` `css`
+
+plus the aliases you would reach for anyway — `javascript` `jsx` `typescript`
+`tsx` `python` `bash` `zsh` `shell` `yml` `postgres` `mysql` `xml` `svg`. Any
+other tag (`rust`, `go`, …) renders plain and is preserved: it exports as its
+own fence and starts highlighting by itself if a later build learns it. So tag
+the block honestly — never re-tag it as something close.
+
+```json
+{ "id": "b4", "type": "code", "lang": "sh",
+  "html": "curl -fsSL https://bento.page/… -o Notes.bento.html" }
+```
 
 ## Rich text
 

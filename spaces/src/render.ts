@@ -11,6 +11,7 @@
 
 import { type SpacesDoc, type Page, type Block, isRemote } from './model'
 import { sanitizeInline, inertBody, esc } from './sanitize'
+import { tokenize } from './highlight'
 import { t } from './i18n'
 import { TAG_OF, LIST_OF, SPEC, TONE } from './blocks'
 import { ICONS, type IconName } from './icons'
@@ -108,9 +109,12 @@ export function renderBlock(b: Block, doc: SpacesDoc, opts: RenderOpts = {}): HT
     case 'code': {
       const pre = document.createElement('pre')
       const code = document.createElement('code')
+      // `language-xx` is the convention every markdown pipeline already reads,
+      // and it carries the author's raw tag even when this build cannot
+      // highlight it. esc() because it lands in a class attribute.
       if (b.lang) code.className = `language-${esc(String(b.lang))}`
-      code.textContent = textFromHtml(b.html)
       if (opts.editable) { code.contentEditable = 'true'; code.dataset.edit = b.id }
+      paintCode(code, textFromHtml(b.html), b.lang)
       pre.appendChild(code)
       el.appendChild(pre)
       return el
@@ -305,6 +309,64 @@ function inlineHost(b: Block, opts: RenderOpts): HTMLElement {
 const textFromHtml = (html: string | undefined): string => {
   if (!html) return ''
   return inertBody(html).textContent ?? ''
+}
+
+/**
+ * Paint highlighted code into a `<code>` element — the ONE place colour is
+ * applied, so the editor, the reader and print can never disagree.
+ *
+ * NOTHING IS BUILT AS A STRING. `tokenize` returns ranges into `text`, and
+ * every node here comes from `createTextNode`/`textContent`. Code is text
+ * someone mailed you; the model never gains markup and neither does the DOM.
+ *
+ * IT RECONCILES RATHER THAN REPLACING, and that is the whole answer to
+ * highlighting a live contenteditable. On `input` the browser has ALREADY
+ * applied the keystroke to the DOM, so re-tokenising the same text usually
+ * yields byte-identical nodes: typing inside a string, a comment or an
+ * identifier changes that token's text and nothing else, the existing text node
+ * already holds the new value, and this function performs ZERO mutations. The
+ * caret is not restored because it was never disturbed.
+ *
+ * Only a keystroke that moves a token BOUNDARY — opening a quote, completing a
+ * keyword — restructures anything, and then `changed` is true and the caller
+ * puts the caret back by character offset. Assigning `Text.data` wholesale is
+ * specified to collapse a live range inside it to offset 0, so a restore is
+ * genuinely required there; it is just rare.
+ *
+ * Returns whether the DOM changed.
+ */
+export function paintCode(code: HTMLElement, text: string, lang?: unknown): boolean {
+  let changed = false
+  let node: ChildNode | null = code.firstChild
+
+  for (const tk of tokenize(text, lang)) {
+    const s = text.slice(tk.a, tk.b)
+    if (tk.k) {
+      const cls = `sp-t-${tk.k}`
+      const fit = node?.nodeType === 1 && (node as HTMLElement).className === cls &&
+        node.firstChild?.nodeType === 3 && !node.firstChild.nextSibling
+      if (fit) {
+        if (node!.firstChild!.nodeValue !== s) { (node!.firstChild as Text).data = s; changed = true }
+      } else {
+        const span = document.createElement('span')
+        span.className = cls
+        span.textContent = s
+        code.insertBefore(span, node)
+        changed = true
+        continue   // `node` still has to be matched against the NEXT token
+      }
+    } else if (node?.nodeType === 3) {
+      if (node.nodeValue !== s) { (node as Text).data = s; changed = true }
+    } else {
+      code.insertBefore(document.createTextNode(s), node)
+      changed = true
+      continue
+    }
+    node = node!.nextSibling
+  }
+
+  while (node) { const next = node.nextSibling; node.remove(); node = next; changed = true }
+  return changed
 }
 
 export function resolveSrc(src: string, doc: SpacesDoc): string {

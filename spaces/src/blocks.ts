@@ -166,8 +166,22 @@ export const SPECS: BlockSpec[] = [
     toMd: (_b, text) => [`> ${text}`],
   },
   {
-    type: 'code', label: 'Code', hint: '```', icon: 'code',
-    tag: 'div', text: true, custom: true, md: [/^```$/],
+    type: 'code', label: 'Code', hint: '``` ', icon: 'code',
+    tag: 'div', text: true, custom: true,
+    // The fence CARRIES ITS LANGUAGE: ```py, ```sh, ```json.
+    //
+    // Completed by a SPACE, where a bare ``` used to convert on the third
+    // backtick. A deliberate change to an existing trigger: every other rule
+    // here is space-completed (`# `, `- `, `> `, `--- `), and while ```
+    // converted instantly there was no keystroke left in which to type the
+    // language — which is the muscle memory everyone brings from GitHub and
+    // every other markdown box.
+    //
+    // The tag is stored VERBATIM, never normalised. `lang` is document data, so
+    // a language this build cannot highlight still round-trips, still exports
+    // as ```rust, and lights up by itself the day the lexer learns it.
+    md: [/^```(\w*) $/],
+    init: (b, m) => { const lang = m?.[1]; if (lang) b.lang = lang },
     toMd: (b, text) => ['```' + String(b.lang ?? ''), text, '```'],
   },
   {

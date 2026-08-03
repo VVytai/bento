@@ -21,6 +21,27 @@ Versions follow `0.MINOR.PATCH` while pre-1.0.
   The kind is named in words as well as coloured, so it survives a
   black-and-white printout and reads correctly without colour vision, and it
   exports as a GitHub alert (`> [!WARNING]`) with its nested blocks intact.
+- **Code blocks are highlighted**, in eight languages — JavaScript, TypeScript,
+  Python, Shell, JSON, YAML, SQL, HTML/XML and CSS — with a plain rendering for
+  everything else. No library: the whole lexer, painter and palette cost 5.4KB
+  in the shell, where highlight.js alone is ~120KB. Colour is applied when the
+  page is drawn and never enters the document, so a highlighted block is the
+  same bytes on disk as an unhighlighted one, and reading view and print show
+  exactly what the editor shows.
+
+- **A code block says what it is, and you can change it.** Hover a block for its
+  language chip; the fence takes the language with it, so ` ```py ` opens a
+  Python block. A language this build cannot highlight is kept as written —
+  ` ```rust ` still round-trips, still exports as ` ```rust `, and will light up
+  by itself when the lexer learns it.
+
+- **Fixed: markdown shortcuts did not fire.** A space typed at the end of a
+  line is inserted by the browser as a non-breaking space, so `# `, `- `, `1. `,
+  `> `, `[] ` and `--- ` never matched their triggers. All of them work now.
+
+- **Fixed: Enter and Tab inside a code block.** Enter adds a line instead of
+  splitting the block, and Tab indents by two spaces instead of re-parenting the
+  block in the page tree.
 
 ## [0.1.0] — 2026-08-03
 

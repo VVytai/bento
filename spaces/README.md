@@ -52,6 +52,12 @@ Three decisions worth knowing before editing the model:
   else at load, and matches `href` against `getAttribute('href')` rather than
   `.href`, because the resolved property hides `javascript:` behind a base URL.
 
+A `code` block's `html` is its source as **plain text**, html-escaped. Syntax
+colour is applied when the page is drawn (`src/highlight.ts` → `paintCode` in
+`src/render.ts`) and never enters the document, so the same block is the same
+bytes whether or not the reading build knows the language — and an unknown
+`lang` is preserved verbatim rather than normalised away.
+
 Ids are unique across the whole document and are never reused — links,
 backlinks and future collaboration key on them. A duplicate is repaired
 deterministically **from the bytes** (`repairId`), so two readers of one file
@@ -66,6 +72,7 @@ load contract and format additivity.
 | `src/sanitize.ts` | the inline allowlist — the only thing between a file someone mailed you and script execution |
 | `src/store.ts` | undo, and the **typing run** |
 | `src/render.ts` | model → DOM, shared by the editor, reading view and print |
+| `src/highlight.ts` | the code lexer — text → `{kind, a, b}` ranges, no DOM, no strings |
 | `src/editor.ts` | topbar, sidebar, block menu, `[[` picker, ⌘K, ⌘F, archive |
 | `src/assets.ts` | content-addressed images and the downscale |
 | `src/about.ts` | updates, language, password, exports |

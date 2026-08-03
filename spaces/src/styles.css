@@ -225,12 +225,55 @@ button.sp-callout-chip:hover { text-decoration: underline; text-underline-offset
    "Type / for blocks" reads as clutter, not as help */
 .sp-text[data-empty]:focus::before { content: attr(data-ph); color: #b9c2ce; pointer-events: none; }
 
+.sp-b-code { position: relative; }
 .sp-b-code pre {
   margin: 6px 0; padding: 12px 14px; overflow-x: auto;
   background: var(--chrome); border: 1px solid var(--line); border-radius: var(--radius);
 }
 .sp-b-code code { font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
 .sp-b-code code:focus { outline: none; }
+
+/* ————— syntax colours —————
+   Six roles, chosen to survive the two places code is read: a light editor and
+   a printed page. Every one clears 4.5:1 against the code well (#f5f7fa) AND
+   against white, because a browser drops the block's background when printing
+   and keeps the ink — a palette tuned only against the tinted well goes pale on
+   paper. Hue does the work, not lightness, so the block still reads as prose at
+   13px and stays legible in greyscale.
+
+   Comments reuse --muted and numbers reuse --accent-ink: the suite's palette
+   already had the right two, and a syntax theme that invents a ninth grey is a
+   syntax theme nobody can restyle. The remaining four are new because nothing
+   in the chrome palette means "string". */
+:root {
+  --code-str: #1c6b4b;
+  --code-key: #6b3fa0;
+  --code-lit: #0d6382;
+  --code-prop: #1c4fb5;
+}
+.sp-t-c { color: var(--muted); font-style: italic; }
+.sp-t-s { color: var(--code-str); }
+.sp-t-n { color: var(--accent-ink); }
+.sp-t-k { color: var(--code-key); }
+.sp-t-l { color: var(--code-lit); }
+.sp-t-p { color: var(--code-prop); }
+
+/* The chip FLOATS OVER the top-right of the well, exactly like .sp-imgtools
+   floats over an image — same shadow, same hover-only rule. It can cover the
+   end of a long first line, and the alternative (parking it outside the text
+   column, where the block gutter lives) only has room on a wide window with the
+   sidebar closed. A control that moves depending on the viewport is worse than
+   one that overlaps for as long as your pointer is on the block. */
+.sp-langchip {
+  position: absolute; top: 10px; inset-inline-end: 10px;
+  font-size: 11px; padding: 3px 8px; color: var(--muted);
+  background: rgb(255 255 255 / .94); border-color: var(--line);
+  box-shadow: 0 2px 8px rgb(20 30 45 / .12);
+  opacity: 0; transition: opacity .12s;
+}
+.sp-b-code:hover .sp-langchip, .sp-langchip:focus { opacity: 1; }
+.sp-langpop { width: 190px; }
+.sp-langpop .sp-dditem.sp-sel { background: var(--chrome-2); }
 
 .sp-twist {
   flex: 0 0 auto; border: 0; background: transparent; color: var(--muted);
@@ -374,7 +417,7 @@ button.sp-callout-chip:hover { text-decoration: underline; text-underline-offset
 
 /* ————— print: the only export-to-PDF path, so it is a contract ————— */
 @media print {
-  .sp-bar, .sp-side, .sp-banner, .sp-gutter, .sp-scrim { display: none !important; }
+  .sp-bar, .sp-side, .sp-banner, .sp-gutter, .sp-scrim, .sp-langchip { display: none !important; }
   .sp-main { overflow: visible; padding: 0; background: #fff; }
   .sp-toggle-body[hidden] { display: block !important; }  /* toggles print OPEN */
   .sp-b-h1, .sp-b-h2, .sp-b-h3, .sp-title { break-after: avoid; }
