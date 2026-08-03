@@ -90,11 +90,11 @@ export function starterDoc(): SpacesDoc {
           b('todo', '<code>[] </code> makes a checkbox', { done: false }),
           b('h2', 'Blocks that are not text'),
           b('quote', 'A quote — type <code>&gt; </code>.'),
-          b('code', 'const space = oneFile\n// ```  makes a code block', { lang: 'js' }),
+          b('code', 'const space = oneFile\n// type ``` and a SPACE to make a code block', { lang: 'js' }),
           callout,
           b('p', 'Press <code>⏎</code> in a callout and the next line goes inside it. Empty line, <code>⌫</code>, and you are out.', { parent: callout.id }),
           b('code',
-            '// ```js  makes a highlighted block\n' +
+            '// type ```js and a space — the language is yours to pick\n' +
             'const space = { file: 1, pages: 5 }\n' +
             'console.log(`one file, ${space.pages} pages`)',
             { lang: 'js' }),
