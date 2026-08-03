@@ -1253,6 +1253,75 @@ CI-testable, but the registry drifting from the tree is. It pins `appId`
 against each app's own `configureApp()` call and the manifest URL against the
 path the release publishes to.
 
+## 2026-08-03 — bento/spaces: the format decisions that must precede parallel work
+
+Five independent design reviews of bento/spaces proposed overlapping feature
+sets. Most of it is schedulable in any order. These are not: each is a place
+where two workstreams would otherwise invent conflicting PERMANENT shapes for
+the same thing, and the format has no server and no migration. Settled here so
+nobody has to guess. Nothing below ships this round except where noted.
+
+**1. Properties, tags and table columns are BLOCKS — never keys on `Page`.**
+Three reviews proposed three incompatible shapes for the same data: prefixed
+keys on the page (`p:status`), a `prop` block, and `Page.tags: string[]`.
+Ruling: `{ type: 'prop', key, value, vt, html }`. A `prop` block degrades
+losslessly on an older build — render.ts's `default:` branch renders its html —
+whereas an unknown `col:` key on a Page renders as *nothing at all* and is
+invisible to search, find-and-replace, undo and the block registry, all of
+which iterate `page.blocks`. Tags stay literal text in `html` with a derived
+index; no `page.tags` array. A markdown importer preserves YAML front matter as
+a `code` block with `lang: 'yaml'` and never invents `page.meta`.
+
+**2. Containers are one mechanism, declared once.** Tables, callouts and
+columns are all "a block that holds blocks", and three agents each generalising
+`renderBlocks`' host stack would make render.ts the conflict magnet
+PARALLEL-WORK names by name. The contract: `container: true` in the BlockSpec;
+a container gets NO gutter and NO inline text host (inside a `<tr>` either one
+fabricates a phantom cell); a child whose parent chain does not resolve renders
+as a plain block, never a stray `<td>`; and list grouping resets at every
+container boundary, or a bullet before a table adopts the first bullet after it.
+
+**3. A render-time transform may never decorate EDITABLE content.** The
+rendered DOM *is* the model here: editor.ts:575 writes `b.html =
+host.innerHTML` on every input. So any injected decoration is captured into the
+file on the next keystroke — and then the allowlist deletes it. Verified:
+sanitize.ts removes an element that is in neither ALLOWED nor UNWRAP *together
+with its children* (the child-lifting happens only inside the UNWRAP branch),
+so a rendered `<math>` costs both the rendering and the source text. Rule:
+render-time transforms are gated on `opts.editable === false`, or use the CSS
+Custom Highlight API, which touches no DOM. Slides solved the same problem by
+swapping the raw token back while editing; spaces has no equivalent and must
+not grow one by accident. This binds tag chips, inline math, mention
+highlighting and pasted-markup decoration.
+
+**4. `#p/<page>/<block>` is a legal href, tolerated from today.** Shipped in
+this round — see the commit that made `resolveAnchor` the one resolver. It
+could not wait: sanitize.ts's allowlist already admits the two-segment form, so
+such links can arrive in a file this build did not write, and its own comment
+records why a NEW fragment form can never be added later (a stricter build
+strips it on the next edit that touches the block). Addressing — actually
+scrolling to the block — comes whenever it comes; tolerance had to be now.
+
+**5. `Page.stencil`, not `Page.template`.** `SpacesDoc.template` is declared
+and documented in two comments as "re-mint docId on every open", and
+implemented by nothing. Page-level templates get the name `stencil` so the two
+meanings can never collide, and `doc.template` must either be implemented or
+have its comments deleted. A dead field with a documented meaning is more
+dangerous than an undocumented one.
+
+**6. The effective-parent rule.** A block's effective parent is `b.parent` iff
+that block exists in the same page's array AND appears strictly earlier in it;
+otherwise the block is a root block. Same for pages. This is total (nothing
+vanishes), acyclic by construction (every effective edge points backwards in
+the materialised order), orphan-free, and — the point — a pure READ-TIME
+function that mutates nothing, so two replicas that agree on the array agree on
+the tree. It is what makes concurrent re-parenting safe under collaboration
+without restricting what anyone can drag, and `renderBlocks`' host stack
+already implements a narrower version of it.
+
+**Shell ceiling for the round: 100KB compressed** (from 73KB). Spaces is 1/8th
+of slides' size and that is a feature, not an accident.
+
 ## 2026-08-03 — An encrypted space is never written to disk in the clear
 
 **Decision.** bento/spaces skips the autosave recovery snapshot while a space
