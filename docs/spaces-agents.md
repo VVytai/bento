@@ -81,6 +81,11 @@ unique ids the first time.
 and renders its `html` as a fallback. Properties are **flat on the block** —
 there is no `props` object.
 
+A `code` block carrying `frontmatter: true` (usually `lang: "yaml"`, inside a
+collapsed toggle at the top of a page) is YAML frontmatter from an imported
+markdown file, kept verbatim. It is **not** a properties model — spaces has
+none yet — so read it if you like, but do not invent fields from it.
+
 ## Images: embed them, don't link them
 
 `src` takes three forms, and only two of them display without asking:

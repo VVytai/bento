@@ -66,6 +66,7 @@ load contract and format additivity.
 | `src/sanitize.ts` | the inline allowlist — the only thing between a file someone mailed you and script execution |
 | `src/store.ts` | undo, and the **typing run** |
 | `src/render.ts` | model → DOM, shared by the editor, reading view and print |
+| `src/markdown.ts` | markdown → blocks, the folder tree → the page tree, `[[wikilinks]]` → `#p/` links. Pure and DOM-free, so the import is tested in node |
 | `src/editor.ts` | topbar, sidebar, block menu, `[[` picker, ⌘K, ⌘F, archive |
 | `src/assets.ts` | content-addressed images and the downscale |
 | `src/about.ts` | updates, language, password, exports |
@@ -82,6 +83,22 @@ on any structural change, on save, and on `replaceDoc`.
 One run = one undo entry = later, one collaboration text batch. This single
 policy sets undo granularity, autosave churn, the dirty flag and the future op
 rate, which is why it lives in the store rather than in the editor.
+
+### Getting notes in
+
+Drop a folder of `.md` files on the window, or use Pages → import. Each file
+becomes a page, folders become the page tree, and `[[wikilinks]]` are resolved
+**after every page exists**, by file name first and page title second — a
+target outside the import stays as the literal `[[Name]]` rather than silently
+un-linking. The parse (`src/markdown.ts`) is pure and DOM-free; the browser
+half (`editor.ts importFiles`) reads image bytes, runs `sanitizeInline` over
+every block, and commits the whole import in ONE step. Frontmatter is kept
+verbatim in a marked block — the reasoning is in `docs/DECISIONS.md`.
+
+An image referenced by a relative path is resolved against the files that were
+actually selected; when it is not there, the block becomes text quoting the
+path, because a browser cannot open `../attachments/x.png` and a broken `<img>`
+would be a lie about what is in the file.
 
 ### Links are fragments
 

@@ -11,6 +11,7 @@
 import { type Block, newBlock, newPage } from './model'
 import { Store } from './store'
 import { renderPage } from './render'
+import { planImport, type SourceFile } from './markdown'
 import { canonicalize, sanitizeInline, textOf } from './sanitize'
 import { countOutsideTags, replaceOutsideTags } from './findreplace'
 import { t } from './i18n'
@@ -34,6 +35,22 @@ const AUTOFORMAT: Array<[RegExp, string, (b: Block) => void]> = [
   [/^```$/, 'code', () => {}],
   [/^--- $/, 'divider', () => {}],
 ]
+
+/** What counts as a note when a folder is dropped on the app. */
+const NOTE_EXT = /\.(md|markdown|mdown|mkd)$/i
+
+/**
+ * When an import stops embedding images by itself and ASKS.
+ *
+ * A vault's attachment folder is unbounded — 400MB of screenshots is ordinary
+ * — and a space is something you mail. But the house rule for size is warn,
+ * never block (assets.ts SPACE_WEIGHT_WARN), so this is one question at one
+ * threshold, not a ceiling: answer yes and the rest embed too.
+ */
+const IMPORT_IMAGE_BUDGET = 12 * 1024 * 1024
+
+/** A picked or dropped file, with the path it had on disk. */
+interface PickedFile { path: string; file: File }
 
 const SLASH_ITEMS: Array<{ type: string; label: string; hint: string; icon: IconName }> = [
   { type: 'p', label: 'Text', hint: 'Plain paragraph', icon: 'text' },
@@ -139,7 +156,7 @@ export class Editor {
     const printB = iconBtn('print', t('Print or save as PDF (⌘P)'), () => this.openPrint())
     this.readB = iconBtn('eye', t('Reading view — the pages without the editing tools'), () => this.toggleReading())
     const about = iconBtn('info', t('About this space'), () =>
-      openAbout({ store: this.store, onRepaint: () => this.build() }))
+      openAbout({ store: this.store, onRepaint: () => this.build(), onImport: () => this.openImport() }))
 
     // save is a split control, as in slides: the common action, and the
     // less-common ways of writing this document somewhere else
@@ -157,7 +174,7 @@ export class Editor {
         close(); this.openPrint()
       }))
       menu.append(this.menuItem('lock', t('Password…'), t('Encrypt the document inside this file'), () => {
-        close(); openAbout({ store: this.store, onRepaint: () => this.build() })
+        close(); openAbout({ store: this.store, onRepaint: () => this.build(), onImport: () => this.openImport() })
       }))
     })
     saveMore.classList.add('sp-caret')
@@ -177,6 +194,19 @@ export class Editor {
     this.paintPage()
     this.syncHistoryButtons()
     document.addEventListener('keydown', (e) => this.onKey(e), true)
+
+    // Dropping notes anywhere on the app imports them — the sidebar, the
+    // topbar, the grey around the page. The page's own drop handler takes
+    // images and stands down for markdown, so the two never both fire.
+    this.root.addEventListener('dragover', (e) => {
+      if (e.dataTransfer?.types.includes('Files')) e.preventDefault()
+    })
+    this.root.addEventListener('drop', (e) => {
+      if (!isImportDrop(e.dataTransfer)) return
+      e.preventDefault()
+      const picked = collectDrop(e.dataTransfer)
+      void picked.then((files) => this.importFiles(files))
+    })
   }
 
   /**
@@ -275,6 +305,10 @@ export class Editor {
     this.sidebar.innerHTML = ''
     const head = el('div', 'sp-side-head')
     head.append(el('span', 'sp-side-title', t('Pages')))
+    // import sits beside "new page" because that is where pages come from,
+    // and because the moment someone wants it is the moment they see an empty
+    // sidebar next to a folder of notes they already have
+    head.append(iconBtn('markdown', t('Import Markdown files or a folder…'), () => this.openImport()))
     head.append(iconBtn('plus', t('New page (⌘⌥N)'), () => this.newPage()))
     this.sidebar.append(head)
 
@@ -615,8 +649,11 @@ export class Editor {
     view.addEventListener('dragleave', () => view.classList.remove('sp-filedrop'))
     view.addEventListener('drop', (e) => {
       if (!e.dataTransfer?.types.includes('Files')) return
-      e.preventDefault()
       view.classList.remove('sp-filedrop')
+      // markdown (or a folder) is an IMPORT: leave it for the app-level
+      // handler rather than rummaging through it for an image
+      if (isImportDrop(e.dataTransfer)) return
+      e.preventDefault()
       const near = (e.target as HTMLElement)?.closest?.('[data-block-id]') as HTMLElement | null
       void this.imageFromTransfer(e.dataTransfer, near?.dataset.blockId)
     })
@@ -1276,6 +1313,217 @@ export class Editor {
     return true
   }
 
+  // ---- importing existing notes ---------------------------------------------
+  /**
+   * The way in.
+   *
+   * Two pickers rather than one, because a browser input is EITHER
+   * `multiple` files OR `webkitdirectory` — there is no control that offers
+   * both — and a folder is what a vault actually is. Dropping works for both
+   * and is the gesture most people reach for first, so it is stated here
+   * rather than left to be discovered.
+   */
+  openImport(): void {
+    this.openOverlay(t('Import Markdown'), (card, close) => {
+      card.append(el('h2', 'sp-card-h', t('Import Markdown')))
+
+      const what = document.createElement('p')
+      what.className = 'sp-note'
+      what.textContent = t('Each .md file becomes a page, folders become the page tree, and [[wikilinks]] become real links. Pages are added — nothing here is replaced.')
+      card.append(what)
+
+      const zone = el('div', 'sp-dropzone', t('Drop .md files or a folder here'))
+      zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('sp-drop') })
+      zone.addEventListener('dragleave', () => zone.classList.remove('sp-drop'))
+      zone.addEventListener('drop', (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        zone.classList.remove('sp-drop')
+        const picked = collectDrop(e.dataTransfer)
+        close()
+        void picked.then((files) => this.importFiles(files))
+      })
+      card.append(zone)
+
+      const pick = (folder: boolean) => {
+        const input = document.createElement('input')
+        input.type = 'file'
+        input.multiple = true
+        if (folder) input.webkitdirectory = true
+        else input.accept = '.md,.markdown,.mdown,.mkd,image/*'
+        input.addEventListener('change', () => {
+          close()
+          // webkitRelativePath is the folder tree; a plain multi-select has
+          // none, and those files import as a flat set of pages
+          void this.importFiles([...(input.files ?? [])]
+            .map((file) => ({ path: file.webkitRelativePath || file.name, file })))
+        })
+        input.click()
+      }
+
+      const acts = el('div', 'sp-actions')
+      acts.append(
+        plainBtn(t('Choose .md files…'), () => pick(false), true),
+        plainBtn(t('Choose a folder…'), () => pick(true)),
+      )
+      card.append(acts)
+
+      const imgs = document.createElement('p')
+      imgs.className = 'sp-note'
+      // said BEFORE the import, because it is the one thing a browser cannot
+      // do for them: it has no way to open `../attachments/x.png` itself
+      imgs.textContent = t('Include the image files and they are embedded too. An image this browser cannot open is kept as its path rather than as a broken picture.')
+      card.append(imgs)
+    })
+  }
+
+  /**
+   * Import, in ONE undoable step.
+   *
+   * Everything slow or asynchronous — reading files, decoding and re-encoding
+   * images, hashing them — happens BEFORE the commit, so the pages, the blocks
+   * and the asset references land in one synchronous mutation. The same reason
+   * `placeImage` is shaped this way: a half-applied import is not something a
+   * single ⌘Z could put back.
+   */
+  async importFiles(picked: PickedFile[]): Promise<void> {
+    const s = this.store
+    if (s.readOnly) { this.status(t('This file is open read-only')); return }
+    const notes = picked.filter((p) => NOTE_EXT.test(p.path))
+    if (!notes.length) { this.status(t('No Markdown files in that selection')); return }
+    if (notes.length > 500 &&
+      !confirm(t('That is {n} files — importing them all may take a moment. Continue?', { n: notes.length }))) return
+
+    this.status(t('Reading {n} file(s)…', { n: notes.length }))
+    let files: SourceFile[]
+    try {
+      files = await Promise.all(notes.map(async (p) => ({ path: p.path, text: await p.file.text() })))
+    } catch {
+      this.status(t('Those files could not be read'))
+      return
+    }
+
+    // pages this space already has, so an incremental import links INTO it
+    const existing = new Map<string, string>()
+    for (const page of s.doc.pages) {
+      const key = page.title.trim().toLowerCase()
+      if (key && !existing.has(key)) existing.set(key, page.id)
+    }
+    const plan = planImport(files, {
+      rootTitle: t('Imported notes'),
+      resolveExisting: (target) => existing.get(target),
+    })
+
+    // ---- images ------------------------------------------------------------
+    // A relative path in a .md file names a file on the author's disk, and a
+    // browser cannot open it — no filesystem access, and the space will be
+    // mailed away from that disk anyway. So it is resolved against what was
+    // ACTUALLY selected, and when that fails the reference becomes visible
+    // text instead of an <img> that can only ever be broken.
+    const media = new Map<string, File>()
+    const byName = new Map<string, File>()
+    for (const p of picked) {
+      if (NOTE_EXT.test(p.path)) continue
+      const key = normPath(p.path)
+      if (!media.has(key)) media.set(key, p.file)
+      const name = key.slice(key.lastIndexOf('/') + 1)
+      if (!byName.has(name)) byName.set(name, p.file)
+    }
+
+    let embedded = 0
+    let embeddedBytes = 0
+    let unresolved = 0
+    let declined = 0
+    let keepEmbedding = true
+    let asked = false
+    for (const img of plan.images) {
+      const ref = decodePath(img.ref)
+      const file = media.get(joinPath(img.dir, ref)) ?? byName.get(ref.slice(ref.lastIndexOf('/') + 1).toLowerCase())
+      if (file && keepEmbedding && embeddedBytes > IMPORT_IMAGE_BUDGET && !asked) {
+        asked = true
+        keepEmbedding = confirm(t(
+          'The images in these notes come to {size} so far, and they all travel inside the file. Keep embedding them?',
+          { size: humanBytes(embeddedBytes) },
+        ))
+      }
+      if (file && keepEmbedding) {
+        try {
+          const prepared = await prepareImage(file)
+          img.block.src = await internAsset(s.doc, prepared.dataUri)
+          if (prepared.w) { img.block.w = prepared.w; img.block.h = prepared.h }
+          if (!prepared.original) img.block.original = false
+          embedded++
+          embeddedBytes += prepared.dataUri.length
+          continue
+        } catch { /* not a decodable image — fall through and say so */ }
+      }
+      // the two ways to arrive here are different facts, and the report says
+      // which: we could not find/read it, or you asked us to stop
+      if (file && !keepEmbedding) declined++
+      else unresolved++
+      img.block.type = 'p'
+      delete img.block.src
+      delete img.block.alt
+      img.block.html = `<em>${escapeHtml(t('Image not imported'))}: </em><code>${escapeHtml(img.ref)}</code>`
+    }
+
+    // THE security gate. Everything above builds html from someone's files;
+    // this is the app's real policy, with a real parser, run once over every
+    // block before any of it reaches the document (see markdown.ts's header).
+    for (const page of plan.pages) {
+      for (const b of page.blocks) if (b.html) b.html = sanitizeInline(b.html)
+    }
+
+    s.commit(() => { s.doc.pages.push(...plan.pages) })
+    if (plan.pages[0]) s.goToPage(plan.pages[0].id)
+    this.repaint()
+    this.status(t('Imported'))
+
+    this.openOverlay(t('Import Markdown'), (card, close) => {
+      card.append(el('h2', 'sp-card-h', t('Imported')))
+      const lines: string[] = [
+        t('{pages} page(s) and {blocks} block(s) added from {files} file(s).',
+          { pages: plan.stats.pages, blocks: plan.stats.blocks, files: plan.stats.files }),
+      ]
+      if (plan.stats.linked || plan.stats.dangling) {
+        lines.push(t('{n} of {total} wikilink(s) resolved.',
+          { n: plan.stats.linked, total: plan.stats.linked + plan.stats.dangling }))
+        // two sentences, not one: "1 of 1 resolved, the rest are text" is a
+        // sentence about nothing
+        if (plan.stats.dangling) lines.push(t('The rest name notes that were not in the selection, and are left as text.'))
+      }
+      if (plan.stats.frontmatter) {
+        lines.push(t('{n} page(s) had frontmatter, kept verbatim in a folded block.', { n: plan.stats.frontmatter }))
+      }
+      if (plan.stats.tables) {
+        lines.push(t('{n} table(s) kept as text: there is no table block in this format yet.', { n: plan.stats.tables }))
+      }
+      if (embedded) lines.push(t('{n} image(s) embedded ({size}).', { n: embedded, size: humanBytes(embeddedBytes) }))
+      if (unresolved) {
+        lines.push(t('{n} image(s) could not be opened, so their paths are kept as text. Import again with the image files included.', { n: unresolved }))
+      }
+      if (declined) {
+        lines.push(t('{n} image(s) were left as paths because embedding stopped there.', { n: declined }))
+      }
+      if (plan.stats.remoteImages) {
+        lines.push(t('{n} image(s) point at the web. Nothing loads until a reader asks.', { n: plan.stats.remoteImages }))
+      }
+      // "removes the pages", NOT "puts the space back exactly as it was".
+      // Measured: after ⌘Z the pages are byte-identical to before, but the
+      // image bytes stay — undo snapshots deliberately exclude `assets`
+      // (store.ts), and pruning them on undo would break REDO, which
+      // re-inserts blocks pointing at those very keys.
+      lines.push(t('⌘Z removes the imported pages again.'))
+      for (const line of lines) {
+        const p = document.createElement('p')
+        p.className = 'sp-note'
+        p.textContent = line
+        card.append(p)
+      }
+      card.append(plainBtn(t('Close'), close, true))
+    })
+  }
+
   // ---- find and replace ----------------------------------------------------
   /**
    * ⌘F is OURS, not the browser's.
@@ -1589,6 +1837,88 @@ function iconBtn(name: IconName, label: string, onClick: () => void): HTMLButton
 
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+function plainBtn(label: string, onClick: () => void, primary = false): HTMLButtonElement {
+  const b = document.createElement('button')
+  b.className = 'sp-btn' + (primary ? ' sp-primary' : '')
+  b.type = 'button'
+  b.textContent = label
+  b.addEventListener('click', onClick)
+  return b
+}
+
+// ---- dropped files ----------------------------------------------------------
+
+const normPath = (p: string): string =>
+  p.replace(/\\/g, '/').replace(/^\.?\//, '').replace(/\/+/g, '/').toLowerCase()
+
+/** `dir` + a relative reference, with `..` and `.` collapsed. Lowercased: the
+ *  case in a markdown link and the case on disk disagree often enough that
+ *  matching exactly would fail for reasons nobody could see. */
+function joinPath(dir: string, ref: string): string {
+  const parts = (ref.startsWith('/') ? ref.slice(1) : `${dir}/${ref}`).split('/')
+  const out: string[] = []
+  for (const seg of parts) {
+    if (!seg || seg === '.') continue
+    if (seg === '..') out.pop()
+    else out.push(seg)
+  }
+  return out.join('/').toLowerCase()
+}
+
+/** `my%20photo.png` is one file name, not two — editors percent-encode spaces. */
+function decodePath(ref: string): string {
+  try { return decodeURI(ref) } catch { return ref }
+}
+
+/**
+ * Everything under a drop, including whole folders.
+ *
+ * `dataTransfer.items` is EMPTIED the moment this handler yields, so every
+ * entry is taken synchronously and only then walked. `dataTransfer.files`
+ * carries a dropped folder as one nameless entry, which is why the entry API
+ * is used at all: without it, dragging a vault onto the window does nothing.
+ */
+async function collectDrop(dt: DataTransfer | null): Promise<PickedFile[]> {
+  if (!dt) return []
+  const entries = [...dt.items].map((i) => i.webkitGetAsEntry?.() ?? null).filter(Boolean) as FileSystemEntry[]
+  // the fallback takes its path the same way the picker does, so the two
+  // routes into importFiles cannot disagree about where a path comes from
+  if (!entries.length) return [...dt.files].map((file) => ({ path: file.webkitRelativePath || file.name, file }))
+  const out: PickedFile[] = []
+  for (const entry of entries) await walkEntry(entry, '', out, 0)
+  return out
+}
+
+async function walkEntry(entry: FileSystemEntry, base: string, out: PickedFile[], depth: number): Promise<void> {
+  // .obsidian, .git, .trash: configuration and deleted notes, never the notes
+  // someone means to import
+  if (entry.name.startsWith('.')) return
+  const path = base ? `${base}/${entry.name}` : entry.name
+  if (entry.isFile) {
+    const file = await new Promise<File | null>((res) =>
+      (entry as FileSystemFileEntry).file(res, () => res(null)))
+    if (file) out.push({ path, file })
+    return
+  }
+  if (depth > 12) return   // a symlink loop is not worth hanging the tab for
+  const reader = (entry as FileSystemDirectoryEntry).createReader()
+  for (;;) {
+    // readEntries hands back at most 100 at a time and signals the end with an
+    // empty batch — reading it once silently truncates a folder of 300 notes
+    const batch = await new Promise<FileSystemEntry[]>((res) =>
+      reader.readEntries(res, () => res([])))
+    if (!batch.length) break
+    for (const child of batch) await walkEntry(child, path, out, depth + 1)
+  }
+}
+
+/** Is this drop an IMPORT (markdown, or any folder) rather than an image? */
+function isImportDrop(dt: DataTransfer | null): boolean {
+  if (!dt) return false
+  if ([...dt.files].some((f) => NOTE_EXT.test(f.name))) return true
+  return [...dt.items].some((i) => i.webkitGetAsEntry?.()?.isDirectory)
+}
 
 function atStart(host: HTMLElement): boolean {
   const sel = getSelection()

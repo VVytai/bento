@@ -31,6 +31,7 @@ import {
   type SpacesDoc,
 } from '../spaces/src/model.ts'
 import { countOutsideTags, replaceOutsideTags } from '../spaces/src/findreplace.ts'
+import { parseNote, planImport, inlineHtml, type SourceFile } from '../spaces/src/markdown.ts'
 
 let failures = 0
 let checks = 0
@@ -340,6 +341,303 @@ for (const [label, input, err] of [
   // markup must survive the sweep untouched
   ok(replaceOutsideTags('a <b class="x">widget</b>!', 'widget', 'gadget') === 'a <b class="x">gadget</b>!',
     'tags and their attributes are preserved verbatim')
+}
+
+// ---- markdown import -------------------------------------------------------
+// An import is a MIGRATION: someone's only copy of ten years of notes arrives
+// through it, and every way it can go wrong is silent. A link that quietly
+// stops being a link, a frontmatter block that quietly vanishes, a code fence
+// that quietly eats the rest of the page — none of them raise anything, and
+// the author finds out months later with the source folder long deleted.
+//
+// The parser is pure and DOM-free precisely so all of this can be asserted
+// here rather than clicked through.
+{
+  const note = parseNote([
+    '---',
+    'tags: [a, b]',
+    'title: Not the title',
+    '---',
+    '',
+    '# Real title',
+    '',
+    'Text with **bold**, *italic*, `co<de>`, ~~gone~~ and [a link](https://x.example).',
+    'A second line.',
+    '',
+    '- one',
+    '  - nested',
+    '- [ ] open',
+    '- [x] done',
+    '',
+    '> quoted',
+    '> more',
+    '',
+    '```js',
+    'if (a < b && c) return "<script>";',
+    '```',
+    '',
+    '---',
+    '',
+    '![a picture](images/pic.png)',
+  ].join('\n'), 'file-name')
+
+  ok(note.title === 'Real title', 'a leading "# Heading" becomes the page title')
+  ok(!note.blocks.some((b) => b.type === 'h1' && b.html === 'Real title'),
+    '…and is REMOVED from the body, so a page does not open with its own title twice')
+  ok(parseNote('no heading here\n', 'file-name').title === 'file-name',
+    'without one, the FILE NAME is the title — the name wikilinks resolve by')
+  ok(note.title !== 'Not the title',
+    'frontmatter `title:` is deliberately NOT consulted (it can disagree with the file name)')
+
+  ok(note.frontmatter === 'tags: [a, b]\ntitle: Not the title',
+    'frontmatter is captured VERBATIM, both lines of it')
+
+  const p = note.blocks.find((b) => b.type === 'p')!
+  ok(p.html === 'Text with <strong>bold</strong>, <em>italic</em>, <code>co&lt;de&gt;</code>, <s>gone</s> and <a href="https://x.example">a link</a>.<br>A second line.',
+    `inline markdown → inline html, with a soft break kept as <br> (got ${p.html})`)
+
+  const types = note.blocks.map((b) => b.type).join(',')
+  ok(types.includes('bullet,bullet,todo,todo'), `lists and to-dos (got ${types})`)
+  const nested = note.blocks.filter((b) => b.type === 'bullet')
+  ok(nested[1].parent === nested[0].id, 'an indented item nests under the one above it')
+  const todos = note.blocks.filter((b) => b.type === 'todo')
+  ok(todos[0].done === false && todos[1].done === true, '- [ ] and - [x] carry their state')
+  ok(note.blocks.find((b) => b.type === 'quote')?.html === 'quoted<br>more',
+    'consecutive > lines are one quote')
+
+  const code = note.blocks.find((b) => b.type === 'code')!
+  ok(code.lang === 'js', 'a fence keeps its language')
+  ok(code.html === 'if (a &lt; b &amp;&amp; c) return &quot;&lt;script&gt;&quot;;',
+    `code content is escaped, so a "<" in it cannot eat the page (got ${code.html})`)
+
+  ok(note.blocks.some((b) => b.type === 'divider'), 'a --- rule is a divider')
+  ok(note.images.length === 1 && note.images[0].ref === 'images/pic.png',
+    'a relative image is reported for the importer to resolve, not left to break')
+}
+
+// hostile markdown: the parser is not the security boundary (sanitizeInline is,
+// in the browser), but it must not be a way to smuggle live markup past it
+{
+  const hostile = inlineHtml('<img src=x onerror=alert(1)> <script>alert(2)</script> ' +
+    '<a href="javascript:alert(3)">click</a> <b>ok</b> <span onclick="x">s</span>')
+  ok(!/onerror|onclick|javascript:|<script/i.test(hostile),
+    `no event handler, javascript: url or script tag survives the parser (got ${hostile})`)
+  ok(hostile.includes('<b>ok</b>') && hostile.includes('<span>s</span>'),
+    'while allowlisted inline tags do survive, stripped of attributes')
+  ok(!/<\/a>/.test(hostile),
+    'a refused <a> does not leave its closing tag behind')
+}
+
+// wikilinks — the reason an Obsidian vault import is worth anything
+{
+  const files: SourceFile[] = [
+    { path: 'Vault/Index.md', text: 'See [[Deep note]], [[notes/Deep note|an alias]] and [[Nowhere]].\n' },
+    { path: 'Vault/notes/Deep note.md', text: '# Deep note\n\nBack to [[Index]].\n' },
+    { path: 'Vault/notes/notes.md', text: 'I am the folder note.\n' },
+  ]
+  const plan = planImport(files, { rootTitle: 'Imported notes' })
+  const html = plan.pages.flatMap((pg) => pg.blocks).map((b) => b.html ?? '').join('\n')
+
+  ok(plan.stats.linked === 3 && plan.stats.dangling === 1,
+    `three wikilinks resolve and one does not (got ${plan.stats.linked}/${plan.stats.dangling})`)
+  ok(!/#w\//.test(html),
+    'NO #w/ placeholder survives — the sanitizer would strip it and the link would vanish')
+  ok(/\[\[Nowhere\]\]/.test(html),
+    'a target outside the import stays as the literal [[Nowhere]] the author wrote')
+  ok(/>an alias</.test(html), '[[target|alias]] shows the alias')
+
+  const byTitle = new Map(plan.pages.map((pg) => [pg.title, pg]))
+  const deep = byTitle.get('Deep note')!
+  ok(/href="#p\/[^"]+"/.test(html), 'resolved links are real #p/ hrefs')
+  ok(html.includes(`#p/${deep.id}`), 'and they name the page the note actually became')
+
+  // the folder tree
+  const ids = new Set(plan.pages.map((pg) => pg.id))
+  ok([...plan.pages].every((pg) => !pg.parent || ids.has(pg.parent)),
+    'every page parent resolves inside the import (a dangling one silently un-nests a page)')
+  const seen = new Set<string>()
+  let preorder = true
+  for (const pg of plan.pages) { if (pg.parent && !seen.has(pg.parent)) preorder = false; seen.add(pg.id) }
+  ok(preorder, 'pages come out in PRE-ORDER — a child never precedes its parent')
+  ok(plan.pages.filter((pg) => pg.title === 'notes').length === 1 &&
+    byTitle.get('notes')?.blocks.length === 1,
+    'a folder note (notes/notes.md) IS the folder page rather than a child of an empty one')
+  ok(deep.parent === byTitle.get('notes')!.id, 'and the folder\'s other notes hang off it')
+  {
+    // measured on a real vault: without this, Meetings/index.md titles the
+    // whole section "index"
+    const withIndex = planImport([
+      { path: 'V/Meetings/index.md', text: 'notes from meetings\n' },
+      { path: 'V/Meetings/One.md', text: 'x\n' },
+    ], { rootTitle: 'Imported notes' })
+    ok(withIndex.pages.some((pg) => pg.title === 'Meetings'),
+      'an index.md folder note is titled after its FOLDER, not "index"')
+  }
+  ok(!plan.pages.some((pg) => pg.title === 'Imported notes'),
+    'a picked FOLDER is already the root, so no container page is invented')
+
+  const flat = planImport(
+    [{ path: 'a.md', text: 'a' }, { path: 'b.md', text: 'b' }],
+    { rootTitle: 'Imported notes' },
+  )
+  ok(flat.pages[0].title === 'Imported notes' && flat.pages.slice(1).every((pg) => pg.parent === flat.pages[0].id),
+    'a flat multi-file selection gets ONE container, so the import is one thing to undo or delete')
+  const one = planImport([{ path: 'solo.md', text: 'x' }], { rootTitle: 'Imported notes' })
+  ok(one.pages.length === 1 && !one.pages[0].parent, 'a single file is just a page')
+
+  // one note added to a space that already has pages
+  const inc = planImport([{ path: 'New.md', text: 'see [[Home]] and [[Index]]\n' }], {
+    rootTitle: 'Imported notes',
+    resolveExisting: (target) => (target === 'home' ? 'p-existing-home' : undefined),
+  })
+  ok(/href="#p\/p-existing-home"/.test(inc.pages[0].blocks[0].html ?? ''),
+    'a wikilink finds a page the space ALREADY had, so an incremental import is not dead text')
+  const both = planImport(
+    [{ path: 'Home.md', text: 'me' }, { path: 'Other.md', text: 'see [[Home]]\n' }],
+    { rootTitle: 'Imported notes', resolveExisting: () => 'p-existing-home' },
+  )
+  const other = both.pages.find((pg) => pg.title === 'Other')!
+  ok(other.blocks[0].html?.includes(both.pages.find((pg) => pg.title === 'Home')!.id),
+    '…but a note IN the import always wins over a stranger page with the same title')
+}
+
+// frontmatter — a permanent format decision, so it is pinned here
+{
+  const plan = planImport(
+    [{ path: 'n.md', text: '---\nkey: value\nlist:\n  - x\n---\n\nbody\n' }],
+    { rootTitle: 'Imported notes' },
+  )
+  const blocks = plan.pages[0].blocks
+  ok(blocks[0].type === 'toggle' && blocks[1].type === 'code',
+    'frontmatter lands in a folded toggle with a code block inside it')
+  ok(blocks[1].parent === blocks[0].id, 'the yaml is the toggle\'s child, so it folds away')
+  ok(blocks[0].open === false, 'and it is folded by default (toggles still print open)')
+  ok(blocks[1].lang === 'yaml' && blocks[1].frontmatter === true,
+    'marked `frontmatter: true`, so a future properties model can adopt these mechanically')
+  ok(blocks[1].html === 'key: value\nlist:\n  - x',
+    `the yaml is verbatim, nothing parsed or dropped (got ${JSON.stringify(blocks[1].html)})`)
+  ok(blocks.some((b) => b.html === 'body'), 'and the note\'s own content is still there')
+}
+
+// blocks: ids unique, parents resolvable, pre-order within a page
+{
+  const plan = planImport([
+    { path: 'v/one.md', text: '- a\n  - b\n    - c\n\ntext\n' },
+    { path: 'v/two.md', text: '- x\n  - y\n' },
+  ], { rootTitle: 'Imported notes' })
+  const ids = new Set<string>()
+  let dup = false
+  for (const pg of plan.pages) {
+    const own = new Set<string>()
+    let order = true
+    for (const b of pg.blocks) {
+      if (ids.has(b.id)) dup = true
+      ids.add(b.id)
+      if (b.parent && !own.has(b.parent)) order = false
+      own.add(b.id)
+    }
+    ok(order, `blocks of "${pg.title}" are in pre-order (the renderer needs one forward pass)`)
+  }
+  for (const pg of plan.pages) if (ids.has(pg.id)) { /* pages share the id space */ }
+  ok(!dup, 'every imported block id is unique across the import')
+  const deep = plan.pages.find((pg) => pg.title === 'one')!.blocks
+  ok(deep[2].parent === deep[1].id && deep[1].parent === deep[0].id,
+    'three levels of indentation nest three levels deep')
+}
+
+// images: what a browser can and cannot open
+{
+  const plan = planImport([{
+    path: 'v/n.md',
+    text: '![local](pics/a.png)\n\n![web](https://e.example/b.png)\n\n![[c.png]]\n\n![[Some note]]\n',
+  }], { rootTitle: 'Imported notes' })
+  ok(plan.images.length === 2, `two local images await resolution (got ${plan.images.length})`)
+  ok(plan.images[0]?.dir === 'v', 'each carries the folder its note lived in, for relative paths')
+  ok(plan.stats.remoteImages === 1, 'a web image is kept as-is and counted, never fetched here')
+  const page = plan.pages.find((pg) => pg.title === 'n')!
+  ok(page.blocks.filter((b) => b.type === 'image').length === 3,
+    `![[c.png]] is an image (got ${page.blocks.filter((b) => b.type === 'image').length} image blocks)`)
+  ok(page.blocks.some((b) => b.type !== 'image' && /\[\[Some note\]\]/.test(b.html ?? '')),
+    '…while ![[Some note]] is a note embed: a link, and dangling here, so it stays as text')
+}
+
+// tables: no table block exists yet, and reformatting one loses it
+{
+  const plan = planImport(
+    [{ path: 'n.md', text: '| a | b |\n|---|---|\n| 1 | 2 |\n\nafter\n' }],
+    { rootTitle: 'Imported notes' },
+  )
+  const code = plan.pages[0].blocks.find((b) => b.type === 'code')
+  ok(!!code && code.html === '| a | b |\n|---|---|\n| 1 | 2 |',
+    'a markdown table is kept VERBATIM as text rather than shredded into paragraphs')
+  ok(plan.stats.tables === 1, 'and it is reported, so the author knows it is there')
+  ok(plan.pages[0].blocks.some((b) => b.html === 'after'), 'the table does not swallow what follows')
+}
+
+// scale: a real vault, parsed in node
+{
+  const files: SourceFile[] = []
+  for (let i = 0; i < 300; i++) {
+    files.push({
+      path: `Vault/${i % 7}/note-${i}.md`,
+      text: `# Note ${i}\n\nSee [[Note ${(i + 1) % 300}]].\n\n- item\n- item\n`,
+    })
+  }
+  const t0 = Date.now()
+  const plan = planImport(files, { rootTitle: 'Imported notes' })
+  const ms = Date.now() - t0
+  ok(plan.stats.linked === 300, `300 notes cross-link completely (got ${plan.stats.linked})`)
+  ok(ms < 3000, `300 notes plan in ${ms}ms`)
+}
+
+// the round trip: an imported space must REOPEN clean. Id repair is the
+// backstop, and it is a lossy one — a repaired id is a NEW id, so every link
+// pointing at the old one is now pointing at the wrong page. An importer that
+// leans on it produces a space whose links quietly rot on the second open.
+{
+  const files: SourceFile[] = []
+  for (let i = 0; i < 40; i++) {
+    files.push({ path: `V/${i % 5}/n${i}.md`, text: `# n${i}\n\nto [[n${(i + 3) % 40}]]\n` })
+  }
+  const plan = planImport(files, { rootTitle: 'Imported notes' })
+  const doc = {
+    format: FORMAT, version: 1, docId: 'd1', title: 'T', theme: {},
+    pages: [{ id: 'p-existing', title: 'Existing', blocks: [{ id: 'b-existing', type: 'p', html: 'here first' }] },
+      ...plan.pages],
+  }
+  const r = parseDoc(JSON.stringify(doc))
+  ok(r.ok, 'an imported space parses')
+  if (r.ok) {
+    ok(r.repaired.length === 0, `and needs NO id repair (got ${r.repaired.length})`)
+    ok(r.doc.pages[0].id === 'p-existing', 'the pages that were already there are still first')
+    const ix = buildIndex(r.doc)
+    const hrefs = r.doc.pages.flatMap((pg) => pg.blocks)
+      .flatMap((b) => [...(b.html ?? '').matchAll(/href="#p\/([^"]+)"/g)].map((m) => m[1]))
+    ok(hrefs.length === 40, `every resolved link survives the round trip (got ${hrefs.length})`)
+    ok(hrefs.every((id) => ix.page.has(id)), 'and every one of them still names a real page')
+  }
+}
+
+// the import ADDS. Replacing someone's space with their import is the one
+// mistake that cannot be walked back, so the discipline is pinned in source.
+{
+  const fs = await import('node:fs')
+  const ed = fs.readFileSync(new URL('../spaces/src/editor.ts', import.meta.url), 'utf8')
+  const body = ed.slice(ed.indexOf('async importFiles'), ed.indexOf('// ---- find and replace'))
+  ok(/doc\.pages\.push\(\.\.\.plan\.pages\)/.test(body),
+    'importFiles APPENDS the imported pages')
+  ok(!/replaceDoc|pages\s*=\s*/.test(body),
+    'and never replaces the document or reassigns its pages')
+  ok((body.match(/\.commit\(/g) ?? []).length === 1,
+    'in exactly ONE commit, so the whole import is one ⌘Z')
+  ok(/resolveExisting:/.test(body),
+    'and it hands the resolver the pages the space already has (browser-only wiring, pinned here)')
+  // `>= 0 &&` is load-bearing: without it, DELETING the sanitize pass passes
+  // this check (indexOf returns -1, which is "before" everything). Measured by
+  // deleting it.
+  const san = body.indexOf('sanitizeInline')
+  ok(san >= 0 && san < body.indexOf('.commit('),
+    'and every block is sanitized BEFORE it reaches the document')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

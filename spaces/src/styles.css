@@ -420,6 +420,14 @@ select, input, textarea, [contenteditable='true'] { -webkit-user-select: auto; u
 .sp-b-image figure { position: relative; }
 .sp-page.sp-filedrop { outline: 2px dashed var(--blue); outline-offset: 8px; border-radius: var(--radius); }
 
+/* ————— import ————— */
+.sp-dropzone {
+  display: grid; place-items: center; margin: 4px 4px 10px; padding: 22px 12px;
+  color: var(--muted); font-size: 13px; text-align: center;
+  border: 1.5px dashed var(--line); border-radius: var(--radius); background: var(--chrome);
+}
+.sp-dropzone.sp-drop { border-color: var(--blue); color: var(--blue); }
+
 /* ————— page rows: the options button ————— */
 .sp-treelink { position: relative; padding-inline-end: 26px; }
 .sp-rowmore {
