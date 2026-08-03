@@ -725,7 +725,21 @@ export class Editor {
 
   /** Markdown prefixes convert the block as they are typed. */
   private autoformat(id: string, host: HTMLElement): void {
-    const text = host.textContent ?? ''
+    // A trailing space typed at the end of a contentEditable line is inserted
+    // by the browser as U+00A0, not U+0020 — otherwise it would collapse and
+    // the caret would appear not to move. So `/^## $/` never matched anything a
+    // person typed, and every markdown trigger in this app was dead from the
+    // first release: measured in the built shell, `# `, `## `, `- `, `1. `,
+    // `> ` and `[] ` all arrived as [.., 160] and converted nothing.
+    //
+    // It survived a test because the test assigned `host.textContent` directly
+    // — with a real space, which is a path no keystroke takes. Drive
+    // autoformat with execCommand('insertText'), or it proves nothing.
+    //
+    // Normalised for the TEST only. The model keeps whatever the browser put
+    // there; rewriting the author's text to make a pattern match would be a
+    // cure worse than the disease.
+    const text = (host.textContent ?? '').replace(/\u00a0/g, ' ')
     for (const [re, type, extra] of AUTOFORMAT) {
       if (!re.test(text)) continue
       const s = this.store

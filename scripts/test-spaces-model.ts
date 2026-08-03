@@ -497,5 +497,26 @@ for (const [label, input, err] of [
     'backlinks are keyed on the PAGE segment of a link target')
 }
 
+// ---- markdown triggers must survive a real keystroke -----------------------
+// A trailing space typed at the end of a contentEditable line is inserted as
+// U+00A0, not U+0020. So `/^## $/` matched nothing anyone typed and EVERY
+// markdown trigger was dead from 0.1.0 — in the feature the starter space
+// advertises on its Writing page.
+//
+// It survived because a test set `host.textContent` directly, with a real
+// space. That is not typing, and it is why this assertion is about the FIX
+// rather than the behaviour: the behaviour needs a browser and
+// execCommand('insertText'), which is the only way to reproduce the NBSP.
+{
+  const fs2 = await import('node:fs')
+  const ed = fs2.readFileSync(new URL('../spaces/src/editor.ts', import.meta.url), 'utf8')
+  const fn = ed.slice(ed.indexOf('private autoformat('), ed.indexOf('private autoformat(') + 1600)
+  ok(/replace\(\/\\u00a0\/g, ' '\)/.test(fn),
+    'autoformat normalises U+00A0 before testing its patterns')
+  // …and only for the test: rewriting the author's text would be worse
+  ok(!/b\.html = .*replace\(\/\\u00a0/.test(ed),
+    '…and never rewrites the stored text to make a pattern match')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
