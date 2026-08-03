@@ -5,21 +5,52 @@
 // re-exports the engine, so registration is guaranteed to precede the first
 // t() call by ES module evaluation order.
 //
-// SCAFFOLD: no translations yet — English-string-as-key means every string
-// works untranslated, and catalogs can be added later without touching call
-// sites. App code imports './i18n', never the kernel module directly.
+// ENGLISH-STRING-AS-KEY (gettext style): the source sentence IS the key, so a
+// missing entry falls back to readable English rather than a blank. Never call
+// t() in a module-level const — it would freeze at import time, before the
+// viewer's locale is resolved.
 
-import { registerI18n } from '../../kernel/src/i18n.ts'
+import { registerI18n, locale } from '../../kernel/src/i18n.ts'
 import type { LocaleChoice } from '../../kernel/src/i18n.ts'
+import { PACKED, PACKED_LOCALES } from './i18n/packed'
 
-const CHOICES: LocaleChoice[] = [{ code: 'en', label: 'English' }]
+/** Offered in the About picker, each labelled in its own language. */
+const CHOICES: LocaleChoice[] = [
+  { code: 'en', label: 'English' },
+  { code: 'ja', label: '日本語' },
+  { code: 'zh-Hans', label: '简体中文' },
+  { code: 'zh-Hant', label: '繁體中文' },
+  { code: 'es', label: 'Español' },
+  { code: 'fr', label: 'Français' },
+  { code: 'de', label: 'Deutsch' },
+  { code: 'it', label: 'Italiano' },
+  { code: 'pt', label: 'Português' },
+]
 
-registerI18n({ catalogs: {}, choices: CHOICES })
+registerI18n({
+  packed: {
+    locales: PACKED_LOCALES,
+    table: PACKED,
+    // Regional codes a browser actually reports, mapped onto a column. Without
+    // these, a zh-TW reader falls all the way back to English despite the
+    // traditional catalog being right there.
+    alias: {
+      zh: 'zh-Hans',
+      'zh-CN': 'zh-Hans',
+      'zh-SG': 'zh-Hans',
+      'zh-TW': 'zh-Hant',
+      'zh-HK': 'zh-Hant',
+      'zh-MO': 'zh-Hant',
+      'pt-BR': 'pt',
+      'pt-PT': 'pt',
+    },
+  },
+  choices: CHOICES,
+})
 
 export const LOCALE_CHOICES = CHOICES
 
 export { t, locale, setLocale, i18nApi, localeChoices } from '../../kernel/src/i18n.ts'
-import { locale } from '../../kernel/src/i18n.ts'
 export type { Catalog } from '../../kernel/src/i18n.ts'
 
 /** Languages whose CHROME reads right-to-left. */

@@ -110,6 +110,13 @@ jobs:
       - name: Splice conformance gate (spaces)
         run: node scripts/shell-gate.mjs spaces/dist-single/Bento_Spaces.bento.html
 
+      - name: Spaces i18n packed table is current
+        # The per-locale catalogs are the source of truth; packed.ts is
+        # generated and is what ships inside every saved file. A core catalog
+        # cannot be corrected without a release, so an incomplete one fails the
+        # build rather than shipping a half-translated interface.
+        run: node scripts/build-spaces-i18n.mjs --check
+
       - name: Spaces model rig
         # Three properties that fail silently and cannot be undone once files
         # exist: the load contract (an unreadable document must never be
