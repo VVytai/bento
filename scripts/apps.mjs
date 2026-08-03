@@ -54,5 +54,6 @@ export const APPS = {
     // Same reasoning as spaces: no pack catalog yet, and deferring the CATALOG
     // is fine where deferring the CHANNEL would not be.
     packs: false,
+    changelog: 'dash/CHANGELOG.md',
   },
 }

@@ -1418,6 +1418,17 @@ spaces starts at 0.1.0. An unprefixed spaces tag would sort into the middle of
 slides' history and permanently claim a version slides cannot reuse. Slides
 keeps bare; everything else is `<app>-vX.Y.Z`.
 
+**Reconciled with #234.** bento/dash hit the same bug independently and landed
+a convention-based resolver (`<dir>/CHANGELOG.md`, else the root) while this was
+in flight. Both now go through ONE `changelogPath()` in release.mjs — registry
+field first, convention second, root last — used by the signing path and by
+`--print-notes` alike, so what a release reports and what it reads cannot
+drift. The registry states it explicitly for all three apps, and the rig
+asserts each app RESOLVES to its own file, which is what keeps the root
+fallback unreachable. That matters because the fallback is only harmless while
+version numbers do not overlap: the day a second app reaches 1.0.x, an empty
+manifest would quietly become a wrong one.
+
 ## 2026-08-03 — One bento/spaces file is one SPACE, and the reason is a save primitive
 
 Spaces is a tree of pages in ONE `.bento.html`, with links as same-document

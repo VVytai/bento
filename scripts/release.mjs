@@ -74,7 +74,7 @@ const published = process.env.BENTO_SITE_DIR
 // the key is touched, costs a second. (The function declarations below hoist.)
 if (args.includes('--print-notes')) {
   const sections = changelogSections()
-  console.log(`${app.appId} v${version} — from ${app.changelog}\n`)
+  console.log(`${app.appId} v${version} — from ${changelogPath()}\n`)
   console.log(releaseNotesString(sections) ?? '(no notes — the changelog has no section for this version)')
   process.exit(0)
 }
@@ -168,15 +168,31 @@ const key = opt('key', null)
  * so the whole changelog section would be a needless payload. Bold lead-ins
  * only — the headline of each entry — with the full text a link away.
  */
+/**
+ * Where THIS app's release notes come from.
+ *
+ * The root CHANGELOG.md is slides' — it says so in its own first line — and its
+ * versions are 1.0.x, so a second app releasing 0.1.0 matched nothing and
+ * shipped a manifest with no notes at all. Worse, once two apps' version
+ * numbers overlap, the fallback stops being empty and starts being WRONG: an
+ * app would describe another product's changes to its own users, inside a
+ * signed envelope that cannot be re-signed for the same version.
+ *
+ * So: the registry states it, the `<dir>/CHANGELOG.md` convention covers an app
+ * that has not, and the root is the last resort. ONE resolver, used by both the
+ * signing path and `--print-notes`, so what a release reports and what it reads
+ * cannot drift. `scripts/test-release-apps.mjs` asserts every app resolves to
+ * its own file, which is what keeps the last resort unreachable.
+ */
+function changelogPath() {
+  if (app.changelog) return app.changelog
+  const byConvention = `${app.dir}/CHANGELOG.md`
+  return existsSync(join(root, byConvention)) ? byConvention : 'CHANGELOG.md'
+}
+
 function changelogSections() {
   // Every released section, newest first: [{ version, heads }]
-  //
-  // Per-app first. The root CHANGELOG.md is slides' — it says so in its own
-  // first line — and its versions are 1.0.x, so a second app releasing 0.1.0
-  // matched nothing and shipped a manifest with no notes at all. An app with
-  // its own CHANGELOG.md uses it; everything else falls back to the root.
-  const appCl = join(root, `${app.dir}/CHANGELOG.md`)
-  const cl = readFileSync(existsSync(appCl) ? appCl : join(root, 'CHANGELOG.md'), 'utf8')
+  const cl = readFileSync(join(root, changelogPath()), 'utf8')
   const out = []
   const re = /^## \[(\d+\.\d+\.\d+)\][^\n]*$/gm
   const marks = [...cl.matchAll(re)]

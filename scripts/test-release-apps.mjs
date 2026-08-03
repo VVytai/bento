@@ -81,9 +81,15 @@ for (const [key, app] of Object.entries(APPS)) {
   // ---- release notes -------------------------------------------------------
   // The notes are lifted from the section matching THIS version and signed
   // into the manifest, so both halves have to line up before a release runs.
-  const clPath = app.changelog && join(root, app.changelog)
-  ok(!!app.changelog && existsSync(clPath), `${key}: declares a changelog that exists (${app.changelog})`)
-  if (app.changelog && existsSync(clPath)) {
+  // Resolved exactly as release.mjs resolves it: registry, then the
+  // <dir>/CHANGELOG.md convention, then the root. The root is slides' file, so
+  // reaching it from another app is the failure — these checks are what keep it
+  // unreachable.
+  const resolved = app.changelog
+    ?? (existsSync(join(root, `${app.dir}/CHANGELOG.md`)) ? `${app.dir}/CHANGELOG.md` : 'CHANGELOG.md')
+  const clPath = join(root, resolved)
+  ok(existsSync(clPath), `${key}: resolves to a changelog that exists (${resolved})`)
+  if (existsSync(clPath)) {
     const cl = readFileSync(clPath, 'utf8')
     // A section for the version being released, with at least one bold lead-in
     // — release.mjs harvests exactly those, so a section of prose signs EMPTY
@@ -107,7 +113,8 @@ for (const [key, app] of Object.entries(APPS)) {
 // The actual 2026-08-03 bug: two apps reading one file. Distinctness is the
 // property, and it is one line — the wrongness was never visible in either
 // app's own checks, only in the pair.
-const cls = Object.entries(APPS).map(([k, a]) => [k, a.changelog])
+const cls = Object.entries(APPS).map(([k, a]) => [k, a.changelog
+  ?? (existsSync(join(root, `${a.dir}/CHANGELOG.md`)) ? `${a.dir}/CHANGELOG.md` : 'CHANGELOG.md')])
 ok(new Set(cls.map(([, c]) => c)).size === cls.length,
   `each app has its OWN changelog (${cls.map(([k, c]) => `${k}→${c}`).join(', ')})`)
 
