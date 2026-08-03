@@ -1253,6 +1253,42 @@ CI-testable, but the registry drifting from the tree is. It pins `appId`
 against each app's own `configureApp()` call and the manifest URL against the
 path the release publishes to.
 
+## 2026-08-03 — A space does not phone home when it is opened
+
+**Decision.** bento/spaces renders a remote image `src` as a placeholder naming
+the host, with a "Load this image" button. Only `asset:` and `data:` load
+without asking. Consent is per-url, per-session, in memory, and never enters
+the document.
+
+**Measured.** A space carrying `<img src="https://…/pixel.png">`, opened from
+`file://`, issued the request — observed via `PerformanceObserver`, one
+`resource` entry, before any interaction. That is a tracking pixel: the
+recipient's IP address and the moment they opened your document, delivered to
+whoever authored the file. In a format whose entire premise is that you can
+mail it to someone, it is the wrong default by a wide margin. It also breaks
+PLATFORM §1 — no network required to open.
+
+**Why it costs authors nothing.** The editor never writes a remote src. A
+picked image is downscaled, interned by content hash, and stored as `asset:`.
+Only hand- or agent-authored documents can carry a url, so the only documents
+affected are exactly the ones where a reader should be asked.
+
+**The predicate is an allowlist,** not a blocklist of `http:`. A relative path
+is a real request on a static host; so are `//host/x`, `blob:`, `filesystem:`
+and any scheme this build has not heard of. `isRemote()` lives in `model.ts`
+(pure, testable in node) and returns false only for `asset:` and `data:`.
+
+**Consent is VIEWER state, like locale and reduced motion.** Putting it in the
+file would let the author decide whether the reader phones home, and would
+carry one reader's decision to everyone the file is forwarded to. It is a plain
+`Set` on the editor, it dies with the session, and the click does not commit —
+so undo, the dirty flag and autosave never see it. All four verified.
+
+**The placeholder names the host.** "Load images" with no indication of who is
+being contacted is not consent. It also shows the `alt` text, which is now the
+thing a reader actually reads when an image does not load — so the agent guide
+tells agents to always write one, and to embed bytes rather than link them.
+
 ## 2026-08-03 — Untrusted html is parsed INERT; a detached div is not safe
 
 **Decision.** All untrusted html in bento/spaces goes through

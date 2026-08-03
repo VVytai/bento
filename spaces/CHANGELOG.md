@@ -54,5 +54,10 @@ First release.
   search results but stays in the file, restorable, because the file is the
   only copy there is.
 
+- **A space does not phone home when you open it.** If a document references
+  an image on the web, it is not fetched until you ask — the placeholder names
+  the site first. Opening a file someone mailed you should not tell a third
+  party that you read it, and nothing else in a space touches the network.
+
 - **Password protection, autosave and recovery, signed self-update** —
   the platform guarantees, on the same terms as bento/slides.

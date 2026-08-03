@@ -155,4 +155,7 @@ export const zh_Hans: Catalog = {
   "{n} link(s) to it will stop working.": "指向它的 {n} 个链接会失效。",
   "{n} page(s) inside it move up a level.": "其中的 {n} 个页面会上移一级。",
   "{n} pages, in sidebar order, with a contents page": "{n} 个页面，按侧边栏顺序，并附一个目录页",
+  "Image from {host}": "来自 {host} 的图片",
+  "Not loaded — opening it would tell that site you opened this space.": "未加载 — 加载会让该网站知道你打开了这个空间。",
+  "Load this image": "加载此图片",
 }

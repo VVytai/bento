@@ -462,3 +462,32 @@ select, input, textarea, [contenteditable='true'] { -webkit-user-select: auto; u
 .sp-btn.sp-on { background: var(--chrome-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
 .sp-app.sp-reading .sp-page-inner { font-size: 17px; }
 .sp-app.sp-reading .sp-title { margin-bottom: 18px; }
+
+/* A remote image that has not been loaded. Deliberately quiet and boxy — it
+   holds the place without pretending to be the picture. */
+.sp-remote {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 18px 20px;
+  background: var(--chrome-2);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.sp-remote-line { font-weight: 600; font-size: 14px; }
+.sp-remote-why { font-size: 13px; color: var(--muted); max-width: 46ch; }
+.sp-remote-alt { font-size: 13px; color: var(--muted); font-style: italic; }
+.sp-remote-load {
+  /* .sp-btn is transparent by design (the topbar is icon-only), so this one
+     states itself: it asks the reader to make a decision. */
+  margin-top: 6px;
+  background: #fff;
+  border-color: var(--line);
+  color: var(--ink);
+  font-weight: 550;
+  padding: 7px 13px;
+}
+.sp-remote-load:hover { background: var(--chrome); border-color: var(--muted); }
+/* Print shows the placeholder text, never a blank gap the reader can't explain. */
+@media print { .sp-remote { border-color: #999; background: none; } .sp-remote-load { display: none; } }

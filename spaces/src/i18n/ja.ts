@@ -155,4 +155,7 @@ export const ja: Catalog = {
   "{n} link(s) to it will stop working.": "このページへのリンク {n} 件が機能しなくなります。",
   "{n} page(s) inside it move up a level.": "中にある {n} ページが 1 つ上の階層に移動します。",
   "{n} pages, in sidebar order, with a contents page": "{n} ページをサイドバー順に、目次ページ付きで",
+  "Image from {host}": "{host} の画像",
+  "Not loaded — opening it would tell that site you opened this space.": "未読み込み — 読み込むと、このスペースを開いたことがそのサイトに伝わります。",
+  "Load this image": "この画像を読み込む",
 }

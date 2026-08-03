@@ -27,7 +27,7 @@
 //      docId on every open.
 
 import {
-  parseDoc, buildIndex, docContentKey, homePage, FORMAT,
+  parseDoc, buildIndex, docContentKey, homePage, FORMAT, isRemote,
   type SpacesDoc,
 } from '../spaces/src/model.ts'
 
@@ -242,6 +242,42 @@ for (const [label, input, err] of [
 
   const ren = read('render.ts')
   ok(/inertBody\(/.test(ren), 'render.ts extracts code-block text through inertBody')
+}
+
+// ---- a document must not phone home when it is merely OPENED ---------------
+// Measured: a space carrying <img src="https://…/pixel.png"> requested it on
+// open. That is a tracking pixel in a format whose whole point is that you mail
+// it — the recipient's IP and the moment they read your document, handed to
+// whoever wrote the file — and it breaks PLATFORM §1 (no network required to
+// open). Remote images now wait for the reader to ask.
+//
+// The predicate is an ALLOWLIST of the two local forms. A blocklist of `http:`
+// would miss the cases that actually matter.
+{
+  for (const local of ['asset:sABC123', 'data:image/webp;base64,AAAA']) {
+    ok(!isRemote(local), `${local.slice(0, 24)}… is local`)
+  }
+  for (const remote of [
+    'https://tracker.example/p.png',
+    'http://tracker.example/p.png',
+    '//tracker.example/p.png',            // protocol-relative
+    'photos/holiday.jpg',                 // relative — a real request on a host
+    '/abs/path.png',
+    'HTTPS://Tracker.Example/p.png',
+    'blob:https://x/y',
+    'filesystem:https://x/y',
+  ]) {
+    ok(isRemote(remote), `${remote} is remote`)
+  }
+  ok(!isRemote(''), 'an empty src is not a remote fetch')
+
+  // and the renderer must actually consult it
+  const fs = await import('node:fs')
+  const ren = fs.readFileSync(new URL('../spaces/src/render.ts', import.meta.url), 'utf8')
+  ok(/isRemote\(rawSrc\)\s*&&\s*!opts\.allowRemote/.test(ren),
+    'render.ts gates remote images on the reader\'s consent')
+  ok(!/allowRemote/.test(fs.readFileSync(new URL('../spaces/src/model.ts', import.meta.url), 'utf8')),
+    'consent is NOT a document field — it belongs to the reader, not the file')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

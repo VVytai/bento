@@ -74,12 +74,49 @@ unique ids the first time.
 | `quote` | `html` | `<blockquote>` |
 | `code` | `html` (plain text), `lang` | `<pre><code>` |
 | `divider` | — | `<hr>` |
-| `image` | `src`, `alt`, `caption`, `width` (10–100 **%**), `w`/`h` (intrinsic px) | `<figure>` |
+| `image` | `src` (see below), `alt`, `caption`, `width` (10–100 **%**), `w`/`h` (intrinsic px) | `<figure>` |
 | `pagelink` | `page` | a card linking to another page |
 
 `type` is a **string**, not a closed set: an unknown type survives a round trip
 and renders its `html` as a fallback. Properties are **flat on the block** —
 there is no `props` object.
+
+## Images: embed them, don't link them
+
+`src` takes three forms, and only two of them display without asking:
+
+| `src` | on open |
+|---|---|
+| `asset:<key>` — a key in `doc.assets` | displays |
+| `data:image/…;base64,…` | displays |
+| `https://…`, `//host/…`, or a relative path | **placeholder** until the reader clicks "Load this image" |
+
+A remote url is not fetched when a space is opened. Opening a document must
+never tell a third party that it was opened — in a format built to be mailed,
+that is a tracking pixel — and PLATFORM §1 requires that no network be needed
+to open a file. The reader's consent is per-url, per-session, and never stored
+in the document.
+
+So **embed the bytes**. Put a data: URI in `doc.assets` under a key and
+reference it as `asset:<key>`:
+
+```jsonc
+{
+  "assets": { "img1": "data:image/webp;base64,UklGR…" },
+  "pages": [{ "id": "p1", "title": "…", "blocks": [
+    { "id": "b1", "type": "image", "src": "asset:img1",
+      "alt": "Revenue by quarter", "w": 1200, "h": 800 }
+  ] }]
+}
+```
+
+Give `w`/`h` (the intrinsic pixel size) so the page does not reflow while the
+image decodes, and always write `alt` — it is what a reader sees if the image
+is remote and unloaded.
+
+Keep images to 1600px on the longest edge and use WebP: that is what the
+editor's own downscale does, and it is the difference between a space someone
+can mail and one they cannot.
 
 ## Rich text
 
@@ -139,5 +176,7 @@ own ids. Use them in preference to `loadDoc` for anything incremental.
   becomes a root page, the block re-homes. Not fatal, but not what you meant.
 - `readonly: true` and a `policy` this build does not know both open **frozen**
   — the file round-trips byte-exact and edits are refused.
+- A remote image `src` shows a placeholder until the reader asks for it. Embed
+  the bytes as an `asset:` instead — see **Images** above.
 - There is no collaboration yet. Two people editing two copies get two files
   and no merge.

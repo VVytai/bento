@@ -61,6 +61,15 @@ export class Editor {
   private painting = false
   /** reading view: the document without the machinery for changing it */
   private reading = false
+  /**
+   * Remote image urls this READER has agreed to load, this session only.
+   *
+   * Never persisted and never written to the document: consent belongs to the
+   * person opening the file, and saving it would carry one reader's decision to
+   * everyone the file is forwarded to. Re-opening asks again, which is the
+   * correct default for something that leaks an IP address.
+   */
+  private allowedRemote = new Set<string>()
   private undoB: HTMLButtonElement | null = null
   private readB: HTMLButtonElement | null = null
   private redoB: HTMLButtonElement | null = null
@@ -400,6 +409,7 @@ export class Editor {
     const view = renderPage(page, s.doc, {
       editable: !s.readOnly && !this.reading,
       titleOf: (id) => s.index.page.get(id)?.title,
+      allowRemote: (src) => this.allowedRemote.has(src),
     })
     // the icon lives beside the title, where changing it is discoverable
     const inner = view.querySelector('.sp-page-inner')
@@ -574,6 +584,18 @@ export class Editor {
       tw.addEventListener('click', () => {
         const id = (tw.closest('[data-block-id]') as HTMLElement).dataset.blockId!
         s.commit(() => { const b = s.block(id); if (b) b.open = !b.open })
+        this.paintPage()
+      })
+    }
+
+    // "Load this image" — the reader's consent to contact one remote host.
+    // NOT a commit: nothing about the document changed, so this must not touch
+    // undo, the dirty flag or autosave. It is view state, and it dies with the
+    // session (see allowedRemote).
+    for (const btn of view.querySelectorAll<HTMLElement>('[data-load-remote]')) {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault()
+        this.allowedRemote.add(btn.dataset.loadRemote!)
         this.paintPage()
       })
     }
@@ -1498,7 +1520,11 @@ export class Editor {
     }
 
     for (const page of pages) {
-      host.append(renderPage(page, s.doc, { editable: false, forceOpen: true, titleOf: (id) => s.index.page.get(id)?.title }))
+      host.append(renderPage(page, s.doc, {
+        editable: false, forceOpen: true,
+        titleOf: (id) => s.index.page.get(id)?.title,
+        allowRemote: (src) => this.allowedRemote.has(src),
+      }))
     }
 
     document.body.append(host)

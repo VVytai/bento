@@ -155,4 +155,7 @@ export const de: Catalog = {
   "{n} link(s) to it will stop working.": "{n} Links darauf funktionieren nicht mehr.",
   "{n} page(s) inside it move up a level.": "{n} Unterseiten rücken eine Ebene nach oben.",
   "{n} pages, in sidebar order, with a contents page": "{n} Seiten, in der Reihenfolge der Seitenleiste, mit Inhaltsverzeichnis",
+  "Image from {host}": "Bild von {host}",
+  "Not loaded — opening it would tell that site you opened this space.": "Nicht geladen — beim Laden erfährt diese Website, dass du diesen Space geöffnet hast.",
+  "Load this image": "Dieses Bild laden",
 }

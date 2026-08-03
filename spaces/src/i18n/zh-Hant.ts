@@ -155,4 +155,7 @@ export const zh_Hant: Catalog = {
   "{n} link(s) to it will stop working.": "指向它的 {n} 個連結將會失效。",
   "{n} page(s) inside it move up a level.": "其中的 {n} 個頁面會往上移一層。",
   "{n} pages, in sidebar order, with a contents page": "{n} 個頁面，依側邊欄順序排列，並附目錄頁",
+  "Image from {host}": "來自 {host} 的圖片",
+  "Not loaded — opening it would tell that site you opened this space.": "未載入 — 載入會讓該網站知道你開啟了這個空間。",
+  "Load this image": "載入此圖片",
 }

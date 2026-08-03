@@ -339,3 +339,17 @@ export function buildIndex(doc: SpacesDoc): SpaceIndex {
 /** The page a reader lands on. */
 export const homePage = (doc: SpacesDoc): Page | undefined =>
   (doc.home ? doc.pages.find((p) => p.id === doc.home) : undefined) ?? doc.pages[0]
+
+/**
+ * Would loading this src touch the network?
+ *
+ * `asset:` is in the file and `data:` is the bytes themselves — neither leaves
+ * the machine. Everything else does, INCLUDING a relative path (which resolves
+ * against the document's own URL and is a real request on a static host), and
+ * `//host/x`, and any scheme this build has never heard of. So the test is an
+ * allowlist of the two local forms, not a blocklist of `http`.
+ */
+export function isRemote(src: string): boolean {
+  if (!src) return false
+  return !src.startsWith('asset:') && !src.startsWith('data:')
+}

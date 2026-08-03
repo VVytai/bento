@@ -155,4 +155,7 @@ export const es: Catalog = {
   "{n} link(s) to it will stop working.": "{n} enlace(s) a ella dejarán de funcionar.",
   "{n} page(s) inside it move up a level.": "{n} página(s) que contiene suben un nivel.",
   "{n} pages, in sidebar order, with a contents page": "{n} páginas, en el orden de la barra lateral, con una página de índice",
+  "Image from {host}": "Imagen de {host}",
+  "Not loaded — opening it would tell that site you opened this space.": "No cargada: al cargarla, ese sitio sabría que has abierto este espacio.",
+  "Load this image": "Cargar esta imagen",
 }
