@@ -31,6 +31,8 @@ import {
   type SpacesDoc,
 } from '../spaces/src/model.ts'
 import { countOutsideTags, replaceOutsideTags } from '../spaces/src/findreplace.ts'
+import { inlineHtml, parseNote, planImport } from '../spaces/src/markdown.ts'
+import { planUpdatePage } from '../spaces/src/agent.ts'
 import { tokenize, normLang, langLabel, CODE_LANGS } from '../spaces/src/highlight.ts'
 import { escText } from '../spaces/src/sanitize.ts'
 import {
@@ -916,6 +918,85 @@ for (const [label, input, err] of [
   ok(/export const UNWRAP/.test(rd3('sanitize.ts')), 'the sanitizer exports its unwrap set')
   ok(/\[\.\.\.UNWRAP\]/.test(rd3('agent.ts')),
     'validate() derives the unwrap set from the sanitizer rather than restating it')
+}
+
+// ---- five defects an adversarial review reproduced -------------------------
+// All five shipped with every gate green, which is the point: each lived in a
+// case the author's own spot-check did not reach.
+{
+  // 1. Display text must escape ONCE. Everything a hold() placeholder protects
+  //    is final markup carrying its own escaping; everything else is escaped by
+  //    the single esc() at the end. Link text, wikilink aliases, autolink text
+  //    and image alt were escaped twice, so `[Q&A](…)` reached the file as
+  //    `Q&amp;amp;A` and the reader saw the entity. Bold and italic were never
+  //    affected — their text is outside any placeholder — which is exactly why
+  //    "inline formatting survived" passed.
+  for (const [src, want] of [
+    ['[a & b](https://x)', 'a &amp; b'],
+    ['[[Note & co]]', 'Note &amp; co'],
+    ['![alt & x](https://y/p.png)', 'alt &amp; x'],
+    ['**bold & co**', 'bold &amp; co'],
+  ] as Array<[string, string]>) {
+    const got = inlineHtml(src)
+    ok(got.includes(want) && !got.includes('&amp;amp;'),
+      `${src} escapes once (${got.slice(0, 52)})`)
+  }
+
+  // 2. An image is neither a continuation target nor a parent: it has no html,
+  //    so a continuation line wrote the literal string "undefined" into the
+  //    document and hid the author's text everywhere except search.
+  const capt = parseNote('- ![a picture](pic.png)\n  the caption line\n', 'f').blocks
+  ok(!JSON.stringify(capt).includes('undefined'), 'an image caption never writes "undefined" into the document')
+  ok(capt.some((b) => b.type === 'p' && b.html === 'the caption line'),
+    '…the line survives as its own paragraph')
+  ok(!capt.some((b) => b.parent && capt.find((x) => x.id === b.parent)?.type === 'image'),
+    '…and is never parented to the image, which is not a container')
+
+  // 3. No page arrives with zero blocks. A zero-block page has no editable
+  //    host, no gutter and no / menu — and the importer navigated to one.
+  const plan = planImport(
+    [{ path: 'V/Home.md', text: '# Home\n\nhi' }, { path: 'V/Sub/A.md', text: '# A\n\nyo' }, { path: 'V/E.md', text: '' }] as never,
+    { rootTitle: 'V' } as never,
+  )
+  ok(plan.pages.every((p: { blocks: unknown[] }) => p.blocks.length > 0),
+    'every imported page has at least one block, folders and empty files included')
+
+  // 4. A page cycle already in a file (parseDoc keeps it — it only drops
+  //    parents naming no page) made the ancestor walk run forever. Measured:
+  //    the call never returned and the tab died with its unsaved edits. The
+  //    reachable path is the RECOMMENDED one — validate() reports the cycle,
+  //    an agent re-homes a page to fix it, and that call hangs.
+  const cyc = parseDoc(JSON.stringify({
+    format: FORMAT, version: 1, docId: 'cyc', title: 'x', home: 'A',
+    pages: [
+      { id: 'A', title: 'A', parent: 'B', blocks: [{ id: 'a', type: 'p', html: 'a' }] },
+      { id: 'B', title: 'B', parent: 'A', blocks: [{ id: 'b', type: 'p', html: 'b' }] },
+      { id: 'C', title: 'C', blocks: [{ id: 'c', type: 'p', html: 'c' }] },
+    ],
+  }))
+  // Checked in the SOURCE as well as in behaviour: without the visited set the
+  // call never returns, so a regression HANGS this rig rather than failing it,
+  // and CI would time out with nothing useful to read. The behavioural check
+  // below still earns its place — it proves termination rather than the
+  // presence of a variable.
+  ok(/const seen = new Set<string>\(\)[\s\S]{0,220}!seen\.has\(up\)/.test(
+    (await import('node:fs')).readFileSync(new URL('../spaces/src/agent.ts', import.meta.url), 'utf8')),
+    'the ancestor walk carries a visited set')
+
+  ok(cyc.ok, 'a document carrying a page cycle still loads')
+  if (cyc.ok) {
+    const t0 = Date.now()
+    planUpdatePage(cyc.doc as never, 'C', { parent: 'A' } as never)
+    ok(Date.now() - t0 < 1000, 'updatePage terminates on a page cycle instead of hanging the tab')
+  }
+
+  // 5. The markdown quote prefix is applied PER LINE, not per returned element
+  //    — a code block's body is one multi-line string, and an unquoted 2nd line
+  //    ends the blockquote and unterminates the fence.
+  const fsq = await import('node:fs')
+  const ab = fsq.readFileSync(new URL('../spaces/src/about.ts', import.meta.url), 'utf8')
+  ok(/flatMap\(\(l\) => l\.split\('\\n'\)\)/.test(ab),
+    'markdown export quotes each LINE of a multi-line block')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

@@ -1,0 +1,10 @@
+{
+  "//": "Ceilings for the single-file shells. Raise one IN THE COMMIT that needs the bytes, and say what bought them. Checked by scripts/test-spaces-size.mjs.",
+  "shells": {
+    "spaces": {
+      "path": "spaces/dist-single/Bento_Spaces.bento.html",
+      "max": 112640,
+      "//": "110KB. Set 2026-08-04 at 108271 B, after callouts, syntax highlighting, markdown import and the agent surface took the round from 73KB. docs/DECISIONS.md carries the reasoning."
+    }
+  }
+}

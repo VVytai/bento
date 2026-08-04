@@ -20,7 +20,7 @@ Versions follow `0.MINOR.PATCH` while pre-1.0.
   Click the mark to change which kind it is, or to give it an emoji of your own.
   The kind is named in words as well as coloured, so it survives a
   black-and-white printout and reads correctly without colour vision, and it
-  exports as a GitHub alert (`> [!WARNING]`) with its nested blocks intact.
+  exports as a GitHub alert (`> [!WARNING]`) with its nested blocks intact — including multi-line ones, which the first version quietly broke: a nested code block left its 2nd line unquoted, which ends the blockquote and unterminates the fence.
 - **Code blocks are highlighted**, in eight languages — JavaScript, TypeScript,
   Python, Shell, JSON, YAML, SQL, HTML/XML and CSS — with a plain rendering for
   everything else. No library: the whole lexer, painter and palette cost 5.4KB

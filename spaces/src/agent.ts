@@ -824,7 +824,16 @@ export function planUpdatePage(doc: SpacesDoc, id: string, patch: unknown): Plan
     const owner = String(sets.parent)
     if (owner === id) return fail('cycle', 'a page cannot contain itself')
     if (!doc.pages.some((p) => p.id === owner)) return fail('no-such-page', `parent "${owner}"`)
-    for (let up: string | undefined = owner; up; up = doc.pages.find((p) => p.id === up)?.parent) {
+    // BOUNDED. A cycle already in the document (A.parent=B, B.parent=A)
+    // survives parseDoc — it only drops parents that name no page — so it
+    // arrives from any hand-edited or mailed file, and this walk ran forever:
+    // measured, the call never returns and the tab dies with every unsaved edit
+    // in it. The reachable sequence is the RECOMMENDED one — validate() reports
+    // `page-cycle`, the agent re-homes a page to fix it, and that call hangs.
+    // validateDoc next door already carries this set.
+    const seen = new Set<string>()
+    for (let up: string | undefined = owner; up && !seen.has(up); up = doc.pages.find((p) => p.id === up)?.parent) {
+      seen.add(up)
       if (up === id) return fail('cycle', `"${owner}" is inside "${id}"`)
     }
     sets.parent = owner

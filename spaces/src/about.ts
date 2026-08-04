@@ -233,7 +233,17 @@ export function toMarkdown(store: Store): string {
         const lines = spec?.toMd
           ? spec.toMd(b, text, indent, (id) => store.index.page.get(id)?.title)
           : [text]
-        out.push(...lines.map((l) => quote + l))
+        // PER LINE, not per returned element. A spec returns ELEMENTS, and an
+        // element can hold newlines: a code block's body is one multi-line
+        // string, and htmlToMd turns <br> into a newline in ordinary text. Any
+        // such child inside a callout left its 2nd..nth lines unquoted, which
+        // ENDS the blockquote — the GitHub alert stops there, a nested fence is
+        // left unterminated, and the rest of the callout falls out of the box
+        // as broken prose. The callout's own toMd split on \n; nothing else did.
+        //
+        // An empty line inside a quote must be a bare '>', never '> ' and never
+        // blank: a blank line closes the blockquote.
+        out.push(...lines.flatMap((l) => l.split('\n')).map((l) => (l ? quote + l : quote.trimEnd())))
         out.push(sep)
       })
       walk(page.id, depth + 1)

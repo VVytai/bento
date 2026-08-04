@@ -117,6 +117,15 @@ jobs:
         # build rather than shipping a half-translated interface.
         run: node scripts/build-spaces-i18n.mjs --check
 
+      - name: Spaces shell size ceiling
+        # A budget nobody measures is a wish. DECISIONS.md set a 100KB ceiling,
+        # the round finished at 108KB, and the same entry claimed the ceiling
+        # was "checked per feature from here" while shipping no mechanism — so
+        # the breach was found by a reviewer reading the number rather than by
+        # the build that caused it. Raising the ceiling is fine and expected;
+        # raising it SILENTLY is what this stops.
+        run: node scripts/test-spaces-size.mjs
+
       - name: Spaces model rig
         # Properties that fail SILENTLY, and that a shipped file cannot be
         # talked out of once it exists:

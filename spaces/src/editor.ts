@@ -1943,7 +1943,11 @@ export class Editor {
       guard.add(cur.parent)
       const owner = page.blocks.find((b) => b.id === cur!.parent)
       if (!owner) break
-      if (owner.type === 'toggle' && !owner.open) { owner.open = true; changed = true }
+      // ANY fold, from the registry — not a `type === 'toggle'` test. The
+      // merge commit claimed containers were registry data; this one survived,
+      // latent only because toggle is the sole 'fold' today. A ⌘K or ⌘F hit
+      // inside the second fold type would land on a block nobody could see.
+      if (SPEC.get(owner.type)?.container === 'fold' && !owner.open) { owner.open = true; changed = true }
       cur = owner
     }
     // a fold opened to show a search hit is a VIEW change, not an edit: it is

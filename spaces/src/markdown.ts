@@ -80,8 +80,17 @@ export function inlineHtml(src: string): string {
   s = s.replace(/\\([\\`*_{}[\]()#+\-.!~>|=])/g, (_m, ch: string) => hold(esc(ch)))
 
   // <https://…> before the raw-tag sweep, which would otherwise eat it
+  // DISPLAY TEXT IS NOT ESCAPED HERE.
+  //
+  // Everything a hold() placeholder protects is final markup and must carry its
+  // own escaping. Everything OUTSIDE a placeholder is ordinary text, and the
+  // single esc(s) at the end of this function escapes all of it exactly once.
+  // Escaping display text here too ran it through twice: `[Q&A](…)` was written
+  // into the file as `Q&amp;amp;A`, and the reader saw the entity. Bold, italic
+  // and code were never affected — their text stays outside any placeholder —
+  // which is why a spot-check of "inline formatting survived" passed.
   s = s.replace(/<((?:https?|mailto):[^>\s]+)>/gi, (_m, url: string) =>
-    hold(`<a href="${esc(url)}">`) + esc(url) + hold('</a>'))
+    hold(`<a href="${esc(url)}">`) + url + hold('</a>'))
 
   // Raw inline html. A `</a>` is only kept when an `<a>` was kept: dropping a
   // link whose href we refuse (javascript:, obsidian:) must not leave its
@@ -101,15 +110,15 @@ export function inlineHtml(src: string): string {
   s = s.replace(/!?\[\[([^\]]+)\]\]/g, (_m, inner: string) => {
     const [target, alias] = splitOnce(inner, '|')
     return hold(`<a href="${WIKI_SCHEME}${encodeURIComponent(target.trim())}">`) +
-      esc((alias ?? target).trim()) + hold('</a>')
+      (alias ?? target).trim() + hold('</a>')
   })
 
   // an inline image cannot be a block, and the model has no inline <img>: keep
   // the alt text, and keep the address as a link when there is one to follow
   s = s.replace(/!\[([^\]]*)\]\(\s*<?([^\s)>]*)>?(?:\s+"[^"]*")?\s*\)/g,
     (_m, alt: string, url: string) => /^(https?:|data:)/i.test(url)
-      ? hold(`<a href="${esc(url)}">`) + esc(alt || url) + hold('</a>')
-      : esc(alt || url))
+      ? hold(`<a href="${esc(url)}">`) + (alt || url) + hold('</a>')
+      : (alt || url))
 
   // A link whose address the model cannot keep (relative paths, `obsidian://`,
   // `file:`) is left as the markdown the author wrote, address and all. The
@@ -118,8 +127,8 @@ export function inlineHtml(src: string): string {
   s = s.replace(/\[([^\]]*)\]\(\s*<?([^\s)>]*)>?(?:\s+"[^"]*")?\s*\)/g,
     (m: string, text: string, url: string) =>
       /^(https?:|mailto:)/i.test(url)
-        ? hold(`<a href="${esc(url)}">`) + esc(text) + hold('</a>')
-        : esc(m))
+        ? hold(`<a href="${esc(url)}">`) + text + hold('</a>')
+        : m)
 
   s = s.replace(/~~([\s\S]+?)~~/g, (_m, x: string) => hold('<s>') + x + hold('</s>'))
   s = s.replace(/==([\s\S]+?)==/g, (_m, x: string) => hold('<mark>') + x + hold('</mark>'))
@@ -235,7 +244,7 @@ export function parseNote(text: string, fileTitle: string): ParsedNote {
 
   const ownerFor = (indent: number): string | undefined => {
     while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop()
-    return stack[stack.length - 1]?.id
+    return stack[stack.length - 1]?.id || undefined
   }
   const add = (b: Block, parent?: string): Block => {
     if (parent) b.parent = parent
@@ -337,8 +346,22 @@ export function parseNote(text: string, fileTitle: string): ParsedNote {
         : pic
           ? imageBlock(pic.ref, pic.alt, pic.caption, owner)
           : add(mk(/^\d/.test(item[1]) ? 'number' : 'bullet', { html: inlineHtml(text) }), owner)
-      stack.push({ indent, id: block.id })
-      para = block
+      // An IMAGE is not a container and holds no text, so it is neither a
+      // continuation target nor a parent.
+      //
+      // It was both. A continuation line did `${para.html}<br>${text}` against a
+      // block with no html, writing the literal string "undefined" into the
+      // document and hiding the author's line — invisible in the editor, the
+      // reading view, print and the markdown export, but there in the saved
+      // file and findable by search. `- ![[pic.png]]` with an indented caption
+      // is an ordinary Obsidian shape.
+      //
+      // Pushing the image's OWNER (not the image) keeps the caption a SIBLING
+      // of the image, under the same list item. Parenting it to the image would
+      // leave the model saying nested while the renderer, which only opens a
+      // body for a registered container, draws it at root.
+      stack.push({ indent, id: pic ? (owner ?? '') : block.id })
+      para = pic ? null : block
       continue
     }
 
@@ -544,6 +567,21 @@ export function planImport(
       stats.dangling += r.dangling
     }
   }
+
+  // NO PAGE ARRIVES WITH ZERO BLOCKS.
+  //
+  // A folder without a folder note, an empty .md, and the invented root all
+  // produced one — and the importer then navigates to plan.pages[0], which in a
+  // real vault IS a folder page. A zero-block page has no editable host, no
+  // gutter and no `/` menu, so the first thing you saw after importing a vault
+  // was a page you could not put a caret in, permanently: nothing ever adds a
+  // block to a folder page.
+  //
+  // The editor cannot produce this state (mergeBack refuses to remove the last
+  // block) and validate() grades it `error`. DECISIONS.md recorded the
+  // invariant against the editor; the importer landed in the same tree and
+  // broke it, which is exactly the kind of gap parallel work opens.
+  for (const p of pages) if (!p.blocks.length) p.blocks.push(mk('p', { html: '' }))
 
   for (const p of pages) stats.blocks += p.blocks.length
   stats.pages = pages.length

@@ -1354,6 +1354,14 @@ slides. What is NOT allowed is discovering the breach at release time — the
 ceiling is checked per feature from here, and the next one has 5KB, not 5KB and
 a shrug.
 
+*Corrected 2026-08-04, same day.* That sentence shipped with NO MECHANISM
+behind it, and a reviewer found the gap by reading the number rather than the
+build failing. It is real now: `scripts/size-budgets.json` holds the ceiling,
+`scripts/test-spaces-size.mjs` enforces it, and CI runs it. Raising the ceiling
+is expected; raising it SILENTLY is what the check stops — the budget moves in
+the commit that spends the bytes, where a reviewer can see it. Recording an
+intention and calling it a rule is how the 100KB ceiling got missed at all.
+
 ## 2026-08-03 — An encrypted space is never written to disk in the clear
 
 **Decision.** bento/spaces skips the autosave recovery snapshot while a space
@@ -1868,6 +1876,14 @@ in it, and the editor cannot produce one (`mergeBack` refuses at the first
 block). So `newPage` mints a paragraph as `model.newPage` always did,
 `removeBlocks` refills a page it empties, and `validate()` calls a zero-block
 page an ERROR. The old `bento.newPage()` created exactly this page.
+
+*Amended 2026-08-04.* That was measured against the EDITOR, which still
+cannot produce one. The markdown importer landed in the same tree and produced
+them freely — one per folder without a folder note, one per empty file, plus
+the invented root — and then navigated to one, so the first thing a vault
+import showed you was a page you could not put a caret in. An invariant proved
+for one writer is not proved for the next one; `planImport` now guarantees it
+too, at the single point where it returns.
 
 **Cost.** +8,040 bytes on the shipped shell (73,787 → 81,827; compressed
 payload 72KB → 79KB). Most of it is the finding messages, which are the
