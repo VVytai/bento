@@ -28,6 +28,7 @@
 // agent API. That is why this lands at commit one: retrofitting op-minting
 // means rewriting the store.
 
+import { applySheetProps } from './rowcol.ts'
 import type { CellOverride, Column, ColumnData, DashDoc, Measure, Sheet, Step, TableSheet } from './model.ts'
 
 type Listener = () => void
@@ -88,6 +89,29 @@ export type Patch =
   | { op: 'reorderColumns'; sheet: string; order: string[] }
   | { op: 'setMeasure'; name: string; measure?: Measure; dropEmpty?: boolean }
   | { op: 'setTitle'; title: string }
+  /**
+   * Sheet-level properties — conditional formats, frozen panes, the sheet name.
+   *
+   * Needed because nothing else in this union can write above the column: the
+   * row/column helpers had to declare their own patch type for want of one.
+   * Keyed like `setColumn` so the inverse is the displaced values, and a key
+   * whose new value is `undefined` is REMOVED rather than set — the un-hide
+   * hazard, met once already in rowcol.ts.
+   */
+  /**
+   * Sheet-level fields (frozen panes, conditional formats, filters) — the only
+   * op that writes ABOVE the column level.
+   *
+   * Deletes are a LISTED `drop`, never `props: {k: undefined}`, because these
+   * objects are also the collab wire format and `JSON.stringify` drops an
+   * undefined value entirely: the delete would arrive at every other replica as
+   * a no-op, and one editor would be looking at frozen panes nobody else has.
+   * The same trap sits on the INVERSE — undoing a newly-added key has to say
+   * "remove it", which is a `drop`, not a `props` entry that vanishes in
+   * transit. `props: {k: undefined}` is REFUSED rather than treated as a
+   * second spelling of delete.
+   */
+  | { op: 'setSheetProps'; sheet: string; props: Record<string, unknown>; drop?: string[] }
   /**
    * RESERVED. Both need the transform engine, which does not exist yet. They
    * are in the union now because the discriminant cannot be retrofitted once
@@ -369,6 +393,12 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
         touched: {},
       }
     }
+
+    case 'setSheetProps':
+      // The writer lives in rowcol.ts beside `freezeAt`, which is what emits
+      // these, and is covered there. Two copies of one op is how the inverse
+      // and the forward drift apart.
+      return applySheetProps(table(doc, p.sheet), p)
 
     case 'setTitle': {
       const was = doc.title

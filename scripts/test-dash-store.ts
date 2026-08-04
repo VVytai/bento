@@ -94,6 +94,26 @@ roundTrip('setMeasure', {
   measure: { name: 'Revenue', expr: 'SUM(amount)', grain: 'sh1', additive: true },
 })
 roundTrip('setTitle', { op: 'setTitle', title: 'renamed' })
+roundTrip('setSheetProps', {
+  op: 'setSheetProps', sheet: 'sh1',
+  props: { condfmt: { amount: [{ kind: 'dataBar', color: '#F7A600' }] } },
+})
+{
+  // a property whose new value is `undefined` is REMOVED, not set to undefined
+  const s = new Store(fresh())
+  s.commit({ op: 'setSheetProps', sheet: 'sh1', props: { condfmt: { a: 1 } } })
+  ok('condfmt' in (s.doc.sheets[0] as any), 'a sheet property is set')
+  s.commit({ op: 'setSheetProps', sheet: 'sh1', props: {}, drop: ['condfmt'] })
+  ok(!('condfmt' in (s.doc.sheets[0] as any)),
+    'and a listed `drop` REMOVES the key rather than leaving a dead one')
+  let refused = ''
+  try { s.commit({ op: 'setSheetProps', sheet: 'sh1', props: { condfmt: undefined } }) }
+  catch (e) { refused = String(e) }
+  ok(refused.includes('drop'),
+    'while props:{k:undefined} is REFUSED — it evaporates in JSON.stringify, so the delete would never reach another replica')
+  s.undo()
+  ok('condfmt' in (s.doc.sheets[0] as any), 'undo brings it back')
+}
 roundTrip('addColumn', {
   op: 'addColumn', sheet: 'sh1',
   column: { id: 'computed', name: 'Computed', type: 'number', formula: 'amount * 2' },

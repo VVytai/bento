@@ -40,7 +40,12 @@ import { Grid } from './grid.ts'
 import { importDelimited } from './import.ts'
 import { TYPE_LABEL } from './format.ts'
 import { defaultBinding, renderChart, type ChartBinding } from './chart.ts'
+import { readCell } from './store.ts'
+import {
+  insertRowsAt, deleteRowsAt, insertColumn, deleteColumn, resizeColumn,
+  autoFitWidth, setHidden, freezeAt, readFrozen } from './rowcol.ts'
 import { FUNCTIONS } from './formula.ts'
+import { buildScene, defaultViz3d, mountViz3d, type Viz3dBinding, type Viz3dKind } from './viz3d.ts'
 
 configureApp({
   appId: 'bento-dash',
@@ -140,19 +145,26 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     `<span class="dx-dirty" hidden>•</span>` +
     `<button class="dx-btn" data-act="formula">${t('＋ Formula column')}</button>` +
     `<button class="dx-btn" data-act="chart">${t('＋ Chart')}</button>` +
+    `<button class="dx-btn" data-act="viz3d">${t('＋ 3D')}</button>` +
     `<button class="dx-btn" data-act="import">${t('Import CSV…')}</button>` +
     `<button class="dx-btn" data-act="undo">${t('Undo')}</button>` +
     `<button class="dx-btn" data-act="export">${t('Export CSV')}</button>` +
     `<button class="dx-btn" data-act="save">${t('Save')}</button>` +
     `<span class="dx-ver">v${APP_VERSION}</span>` +
     `</header>` +
+    `<div class="dx-formula"><span class="dx-ref">A1</span>` +
+    `<span class="dx-fx-mark">fx</span>` +
+    `<input class="dx-fx-input" spellcheck="false" placeholder="${t('value or = formula')}">` +
+    `</div>` +
     `<div class="dx-findings" hidden></div>` +
     `<div class="dx-body"><div class="dx-grid"></div>` +
     `<div class="dx-chart" hidden><div class="dx-chart-head">` +
     `<span class="dx-chart-title"></span>` +
     `<button class="dx-btn dx-chart-kind">${t('Bar')}</button>` +
     `<button class="dx-btn dx-chart-close" title="${t('Hide chart')}">✕</button>` +
-    `</div><div class="dx-chart-body"></div></div></div>`
+    `</div><div class="dx-chart-body"></div></div></div>` +
+    `<footer class="dx-status"><span class="dx-status-view"></span>` +
+    `<span class="dx-status-sum"></span></footer>`
 
   const titleEl = app.querySelector<HTMLInputElement>('.dx-title')!
   const dirtyEl = app.querySelector<HTMLElement>('.dx-dirty')!
@@ -160,7 +172,42 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   titleEl.value = doc.title
   titleEl.disabled = store.readOnly
 
+  const refEl = app.querySelector<HTMLElement>('.dx-ref')!
+  const fxEl = app.querySelector<HTMLInputElement>('.dx-fx-input')!
+  const sumEl = app.querySelector<HTMLElement>('.dx-status-sum')!
+  const viewEl = app.querySelector<HTMLElement>('.dx-status-view')!
+
   const grid = new Grid({ el: app.querySelector<HTMLElement>('.dx-grid')!, store, sheetId: doc.sheets[0].id })
+
+  // --- the formula bar and the status bar, both driven by the selection
+  grid.onSelectionChange = (summary, ref, value) => {
+    refEl.textContent = ref
+    if (document.activeElement !== fxEl) fxEl.value = value
+    sumEl.textContent = summary
+  }
+  fxEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return
+    grid.setActiveCell(fxEl.value)
+    fxEl.blur()
+  })
+
+  // --- the filter and sort menu, hung off each column header's caret
+  grid.onFilterMenu = (colId, x, y) => openFilterMenu(store, grid, colId, x, y, viewEl)
+  grid.onContextMenu = (row, ci, x, y) => openCellMenu(store, grid, row, ci, x, y)
+
+  // keyboard: the grid owns the key set when nothing else has focus
+  document.addEventListener('keydown', (e) => {
+    const t = e.target as HTMLElement | null
+    if (t && (t.tagName === 'INPUT' || t.isContentEditable)) return
+    // A bare printable key REPLACES the selected cell — the most-used gesture
+    // in a spreadsheet, and the one that makes a grid feel like one. It has to
+    // be tried before keyToAction, which returns null for printable keys
+    // precisely so that typing can reach here.
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
+      if (grid.typeInto(e.key)) { e.preventDefault(); return }
+    }
+    if (grid.handleKey(e)) e.preventDefault()
+  })
   grid.onRetype = (col) => retype(store, col)
   grid.onEditFormula = (col) => editFormula(store, grid, col)
 
@@ -186,20 +233,56 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   }
   store.on('doc', drawChart)
   kindBtn.addEventListener('click', () => {
+    if (viz) {
+      viz.kind = KINDS3D[(KINDS3D.indexOf(viz.kind) + 1) % KINDS3D.length]
+      draw3d()
+      return
+    }
     if (!binding) return
     binding.kind = KINDS[(KINDS.indexOf(binding.kind) + 1) % KINDS.length]
     drawChart()
   })
   app.querySelector('.dx-chart-close')!.addEventListener('click', () => {
-    chartEl.hidden = true; teardown?.(); teardown = null
+    chartEl.hidden = true
+    teardown?.(); teardown = null
+    vizDown?.(); vizDown = null; viz = null
   })
   app.querySelector('[data-act="chart"]')!.addEventListener('click', () => {
+    vizDown?.(); vizDown = null; viz = null
     binding = defaultBinding(grid.sheet)
     if (!binding) { showFindings(findingsEl, [{ message: t('This sheet has no numeric column to chart yet.') }]); return }
     chartEl.hidden = false
     drawChart()
   })
   app.querySelector('[data-act="formula"]')!.addEventListener('click', () => addFormula(store, grid))
+
+  // --- 3D: the same panel, a different renderer. Geometry is derived from the
+  // columns exactly as the 2D chart's series are, so nothing is stored.
+  let viz: Viz3dBinding | null = null
+  let vizDown: (() => void) | null = null
+  const KINDS3D: Viz3dKind[] = ['scatter', 'surface', 'bars', 'globe']
+  const draw3d = () => {
+    if (!viz || chartEl.hidden) return
+    vizDown?.(); teardown?.(); teardown = null
+    const sheet = grid.sheet
+    chartTitle.textContent = `3D ${viz.kind} · ` +
+      [viz.x, viz.y, viz.z, viz.lat, viz.lon].filter(Boolean)
+        .map((id) => sheet.columns.find((c) => c.id === id)?.name ?? id).join(' / ')
+    kindBtn.textContent = viz.kind[0].toUpperCase() + viz.kind.slice(1)
+    const scene = buildScene(sheet, viz, grid.computed as Map<string, unknown[]>)
+    vizDown = mountViz3d(chartBody, scene)
+  }
+  store.on('doc', () => { if (viz) draw3d() })
+  app.querySelector('[data-act="viz3d"]')!.addEventListener('click', () => {
+    viz = defaultViz3d(grid.sheet)
+    if (!viz) {
+      showFindings(findingsEl, [{ message: t('This sheet needs at least three numeric columns, or a latitude and longitude, to plot in 3D.') }])
+      return
+    }
+    binding = null
+    chartEl.hidden = false
+    draw3d()
+  })
 
   const notes: Notice[] = []
   if (frozen) {
@@ -420,5 +503,142 @@ function editFormula(store: Store, grid: Grid, col: Column): void {
   store.commit({
     op: 'setColumn', sheet: grid.sheet.id, col: col.id,
     patch: expr.trim() ? { formula: expr } : { formula: undefined },
+  })
+}
+
+
+// --- menus -------------------------------------------------------------------
+
+/** A small popover, dismissed by the next click anywhere. */
+function popover(x: number, y: number, html: string): HTMLElement {
+  document.querySelector('.dx-pop')?.remove()
+  const el = document.createElement('div')
+  el.className = 'dx-pop'
+  el.style.left = `${Math.min(x, innerWidth - 260)}px`
+  el.style.top = `${Math.min(y, innerHeight - 40)}px`
+  el.innerHTML = html
+  document.body.appendChild(el)
+  setTimeout(() => {
+    const off = (e: MouseEvent) => {
+      if (!el.contains(e.target as Node)) { el.remove(); document.removeEventListener('mousedown', off) }
+    }
+    document.addEventListener('mousedown', off)
+  }, 0)
+  return el
+}
+
+/** Sort and filter for one column — the caret in its header. */
+function openFilterMenu(
+  store: Store, grid: Grid, colId: string, x: number, y: number, viewEl: HTMLElement,
+): void {
+  const col = grid.sheet.columns.find((c) => c.id === colId)
+  if (!col) return
+  const numeric = col.type === 'number' || col.type === 'money' || col.type === 'percent'
+  const el = popover(x, y,
+    `<button data-a="asc">${t('Sort A → Z')}</button>` +
+    `<button data-a="desc">${t('Sort Z → A')}</button>` +
+    `<div class="dx-pop-sep"></div>` +
+    `<label class="dx-pop-row"><span>${numeric ? t('Greater than') : t('Contains')}</span>` +
+    `<input class="dx-pop-in" spellcheck="false"></label>` +
+    `<button data-a="apply">${t('Apply filter')}</button>` +
+    `<button data-a="clear">${t('Clear filters and sorts')}</button>` +
+    `<div class="dx-pop-sep"></div>` +
+    `<button data-a="hide">${t('Hide this column')}</button>` +
+    `<button data-a="fit">${t('Fit width to content')}</button>` +
+    `<div class="dx-pop-sep"></div>` +
+    `<button data-a="freeze">${frozenTo(grid, colId) ? t('Unfreeze columns') : t('Freeze up to this column')}</button>`)
+  const input = el.querySelector<HTMLInputElement>('.dx-pop-in')!
+  const showView = () => {
+    const n = store.order[grid.sheet.id]?.length
+    viewEl.textContent = n === undefined ? ''
+      : t('{n} of {all} rows').replace('{n}', String(n))
+          .replace('{all}', String(grid.sheet.rids.reduce((a, [, c]) => a + c, 0)))
+  }
+  el.querySelectorAll<HTMLElement>('button').forEach((b) => {
+    b.onclick = () => {
+      const a = b.dataset.a
+      if (a === 'asc' || a === 'desc') grid.addSort(colId, a)
+      else if (a === 'apply') {
+        const v = input.value.trim()
+        grid.setFilter(colId, v === '' ? null : {
+          col: colId,
+          pred: numeric
+            ? { op: 'greater', value: Number(v.replace(/[,\s£$€¥%]/g, '')) }
+            : { op: 'contains', value: v },
+        } as never)
+      } else if (a === 'clear') grid.clearView()
+      else if (a === 'hide') store.commit(setHidden(grid.sheet, colId, true))
+      else if (a === 'freeze') {
+        // "up to this column" counts VISIBLE position, which is what the reader
+        // pointed at; a hidden column between them would otherwise freeze one
+        // more column than the menu item named.
+        const at = grid.sheet.columns.filter((c) => !c.hidden).findIndex((c) => c.id === colId)
+        store.commit(freezeAt(grid.sheet, 0, frozenTo(grid, colId) ? 0 : at + 1))
+      }
+      else if (a === 'fit') {
+        const sh = grid.sheet
+        const comp = grid.computed.get(colId)
+        store.commit(resizeColumn(sh, colId,
+          autoFitWidth((row) => comp ? comp[row] : readCellOf(sh, colId, row), col,
+            sh.rids.reduce((n, [, c]) => n + c, 0))))
+      }
+      showView()
+      el.remove()
+    }
+  })
+  input.focus()
+}
+
+/** Is the freeze already exactly at this column? Then the item offers to undo it. */
+const frozenTo = (grid: Grid, colId: string): boolean => {
+  const at = grid.sheet.columns.filter((c) => !c.hidden).findIndex((c) => c.id === colId)
+  return readFrozen(grid.sheet).cols === at + 1
+}
+
+const readCellOf = (sheet: TableSheet, colId: string, row: number): unknown =>
+  readCell(sheet.data[colId], row)
+
+/** Right-click on the grid: the structural operations. */
+function openCellMenu(store: Store, grid: Grid, row: number, ci: number, x: number, y: number): void {
+  const sheet = grid.sheet
+  const col = sheet.columns[ci]
+  const el = popover(x, y,
+    `<button data-a="irow-above">${t('Insert row above')}</button>` +
+    `<button data-a="irow-below">${t('Insert row below')}</button>` +
+    `<button data-a="drow">${t('Delete row')}</button>` +
+    `<div class="dx-pop-sep"></div>` +
+    `<button data-a="icol">${t('Insert column')}</button>` +
+    `<button data-a="dcol">${t('Delete column')}</button>` +
+    `<div class="dx-pop-sep"></div>` +
+    `<button data-a="fill">${t('Fill down')}</button>` +
+    `<button data-a="clear">${t('Clear contents')}</button>` +
+    `<div class="dx-pop-sep"></div>` +
+    `<button data-a="cf-scale">${t('Colour scale')}</button>` +
+    `<button data-a="cf-bar">${t('Data bars')}</button>` +
+    `<button data-a="cf-off">${t('Remove formatting')}</button>`)
+  el.querySelectorAll<HTMLElement>('button').forEach((b) => {
+    b.onclick = () => {
+      const a = b.dataset.a
+      if (a === 'irow-above') store.commit(insertRowsAt(sheet, row, 1))
+      else if (a === 'irow-below') store.commit(insertRowsAt(sheet, row + 1, 1))
+      else if (a === 'drow') store.commit(deleteRowsAt(sheet, row, 1))
+      else if (a === 'icol') {
+        const name = window.prompt(t('Column name'), t('New column')) || t('New column')
+        const id = `c-${Math.floor(Date.now() % 1e8).toString(36)}`
+        store.commit(insertColumn(sheet, ci + 1, { id, name, type: 'text' }))
+      } else if (a === 'dcol' && col) store.commit(deleteColumn(sheet, col.id))
+      else if (a === 'fill') grid.fillDownSelection()
+      else if (a === 'clear') grid.clearSelection()
+      else if (col && (a === 'cf-scale' || a === 'cf-bar' || a === 'cf-off')) {
+        // Conditional formats are DOCUMENT data — they travel with the file —
+        // and live in an additive field, so an older build keeps them.
+        const cf = { ...((sheet as unknown as { condfmt?: Record<string, unknown> }).condfmt ?? {}) }
+        if (a === 'cf-off') delete cf[col.id]
+        else if (a === 'cf-scale') cf[col.id] = [{ kind: 'colorScale', colors: ['#fee2e2', '#fef9c3', '#dcfce7'] }]
+        else cf[col.id] = [{ kind: 'dataBar', color: '#F7A600', negativeColor: '#E1616C' }]
+        store.commit({ op: 'setSheetProps', sheet: sheet.id, props: { condfmt: cf } } as never)
+      }
+      el.remove()
+    }
   })
 }

@@ -228,3 +228,212 @@ html, body {
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* ————— formula bar ————— */
+.dx-formula {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+  flex: 0 0 auto;
+}
+.dx-ref {
+  min-width: 74px;
+  font: 600 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+  text-align: center;
+  flex: 0 0 auto;
+}
+.dx-fx-mark { color: var(--muted); font: italic 600 13px/1 serif; flex: 0 0 auto; }
+.dx-fx-input {
+  flex: 1 1 auto;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 8px;
+  background: transparent;
+  color: inherit;
+  min-width: 0;
+}
+.dx-fx-input:hover { border-color: var(--line); }
+.dx-fx-input:focus { outline: none; border-color: var(--accent); background: #fff; }
+
+/* ————— status bar ————— */
+.dx-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 12px;
+  color: var(--muted);
+  flex: 0 0 auto;
+  min-height: 26px;
+  font-variant-numeric: tabular-nums;
+  padding-bottom: max(4px, env(safe-area-inset-bottom));
+}
+.dx-status-sum { margin-left: auto; }
+
+/* ————— row gutter and column letters ————— */
+.dg-gutter {
+  width: 52px;
+  flex: 0 0 52px;
+  background: var(--panel);
+  color: var(--muted);
+  text-align: right;
+  font-size: 11px;
+  border-right: 1px solid var(--line-strong);
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  cursor: pointer;
+  user-select: none;
+}
+.dg-gutter-on { background: #fdf0d5; color: var(--ink); font-weight: 600; }
+.dg-corner {
+  width: 52px;
+  flex: 0 0 52px;
+  background: var(--panel);
+  border-right: 1px solid var(--line-strong);
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  cursor: pointer;
+}
+.dg-letter {
+  font: 600 10px/1.6 inherit;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+  flex: 0 0 auto;
+  cursor: pointer;
+  padding: 0 3px;
+  border-radius: 4px;
+}
+.dg-letter:hover { background: var(--line); color: var(--ink); }
+
+/* ————— selection ————— */
+.dg-cell.dg-sel { background: var(--sel) !important; }
+.dg-cell.dg-cursor {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  background: #fff !important;
+  z-index: 1;
+}
+.dg-cell { position: relative; }
+.dg-v { position: relative; z-index: 1; }
+
+/* ————— conditional formatting ————— */
+.dg-bar {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  border-radius: 2px;
+  opacity: 0.55;
+  z-index: 0;
+}
+
+/* ————— header controls ————— */
+.dg-filter {
+  color: var(--muted);
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0 2px;
+  font-size: 10px;
+}
+.dg-filter:hover { color: var(--accent); }
+.dg-h.dg-filtered { background: #fdf0d5; }
+.dg-h.dg-filtered .dg-filter { color: var(--accent); }
+.dg-grip {
+  position: absolute;
+  right: -3px;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 5;
+}
+.dg-grip:hover { background: var(--accent); opacity: 0.5; }
+.dg-h { position: relative; }
+
+/* ————— popover menus ————— */
+.dx-pop {
+  position: fixed;
+  z-index: 9999;
+  min-width: 210px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 34px rgba(30, 42, 58, 0.18);
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.dx-pop button {
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: inherit;
+}
+.dx-pop button:hover { background: var(--panel); }
+.dx-pop-sep { height: 1px; background: var(--line); margin: 4px 6px; }
+.dx-pop-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 10px 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.dx-pop-in {
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 4px 7px;
+  color: var(--ink);
+}
+.dx-pop-in:focus { outline: none; border-color: var(--accent); }
+
+/* ————— selection outline and fill handle ————— */
+.dg-outline {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid var(--accent);
+  border-radius: 2px;
+  z-index: 4;
+}
+.dg-handle {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border: 1px solid #fff;
+  border-radius: 1px;
+  cursor: crosshair;
+  pointer-events: auto;
+}
+/* the cursor cell no longer needs its own ring — the outline draws it */
+.dg-cell.dg-cursor { box-shadow: none; background: #fff !important; }
+.dg-scroll:focus { outline: none; }
+
+/* Frozen columns stay put while the rest scrolls under them, so they need an
+   opaque background (the cells behind would show through) and an edge that
+   says where the frozen pane ends. */
+.dg-cell.dg-frozen { background: var(--surface); z-index: 2; }
+.dg-head-row .dg-cell.dg-frozen { z-index: 5; }
+.dg-cell.dg-frozen.dg-freeze-edge { border-right: 2px solid var(--line-strong); }
+.dg-cell.dg-sel.dg-frozen { background: var(--sel-bg, #eef4ff); }
