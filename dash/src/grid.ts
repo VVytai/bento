@@ -30,7 +30,11 @@ import {
 import { buildOrder, type ColumnFilter } from './filter.ts'
 import { evaluateRules, type CellStyle } from './condfmt.ts'
 import { colToLetters } from './a1.ts'
+import { t } from './i18n.ts'
 import { resizeColumn, autoFitWidth, hiddenSet, readFrozen } from './rowcol.ts'
+import {
+  cellKey, isFormula, recalcCells, type CellSource,
+} from './cellformula.ts'
 
 const ROW_H = 30
 const GUTTER_W = 52
@@ -47,6 +51,19 @@ const cols = (s: TableSheet) => {
   return s.columns.filter((c) => !hidden.has(c.id))
 }
 const rowCount = (s: TableSheet) => s.rids.reduce((n, [, c]) => n + c, 0)
+
+/** Shared empty map, so "no cell formulas" costs no allocation on every paint. */
+const EMPTY_CELLS: ReadonlyMap<string, unknown> = new Map()
+
+/** Canonical row index → rid. The inverse of `dataRow`, ignoring the view. */
+function ridForDataRow(sheet: TableSheet, r: number): number {
+  let i = 0
+  for (const [start, count] of sheet.rids) {
+    if (r < i + count) return start + (r - i)
+    i += count
+  }
+  return -1
+}
 
 /** Row index → rid, honouring the view's order vector when one exists. */
 function ridAt(store: Store, sheet: TableSheet, i: number): number {
@@ -82,6 +99,8 @@ export class Grid {
    *  file cannot carry a number that disagrees with its own formula. */
   computed = new Map<string, Vec>()
   cycles: string[] = []
+  /** per-cell formula results, keyed by CANONICAL position (see cellformula.ts) */
+  private cellValues: ReadonlyMap<string, unknown> = EMPTY_CELLS
   /** the selection model — visible positions, never rids (see select.ts) */
   sel!: Selection
   filters: ColumnFilter[] = []
@@ -92,7 +111,7 @@ export class Grid {
   onContextMenu?: (row: number, col: number, x: number, y: number) => void
   onFilterMenu?: (colId: string, x: number, y: number) => void
   /** set by the app so a type change can be routed through one place */
-  onRetype?: (col: Column) => void
+  onRetype?: (col: Column, x: number, y: number) => void
   /** double-clicking a computed cell edits the FORMULA, not the value */
   onEditFormula?: (col: Column) => void
 
@@ -185,12 +204,26 @@ export class Grid {
       const filtered = this.filters.some((f) => f.col === c.id)
       const fz = this.freeze(ci)
       return `<div class="dg-cell dg-h${filtered ? ' dg-filtered' : ''}${fz.cls}" style="${fz.st}width:${c.w ?? 130}px" data-col="${c.id}" data-ci="${ci}">` +
-        `<span class="dg-letter">${colToLetters(ci)}</span>` +
+        // TWO LINES, because one could not hold them: the letter, the name,
+        // the type control, the filter arrow and the resize grip were sharing
+        // 130px and the NAME lost — every column read "A R", "B O", "C :".
+        // A spreadsheet whose column names are unreadable is not a spreadsheet.
+        // The letter goes on its own strip, where Excel puts it and where it is
+        // also the obvious click target for selecting the column.
+        // The TYPE rides on the letter strip, which has room going spare, and
+        // not beside the name, which does not: a full-width `PERCENT` badge is
+        // what clipped `Probability` down to `P.`. It stays a button — the type
+        // being one click away is what makes import's refusal to guess honest.
+        `<span class="dg-hstrip">` +
+        `<span class="dg-letter" title="${esc(t('Select column'))}">${colToLetters(ci)}</span>` +
+        `<button class="dg-type" data-retype="${c.id}" title="${esc(TYPE_LABEL[c.type])} — click to change">${esc(TYPE_LABEL[c.type])}</button>` +
+        `</span>` +
+        `<span class="dg-hmain">` +
         `<span class="dg-name" title="${esc(c.formula ? `= ${c.formula}` : c.name)}">${esc(c.name)}${arrow}</span>` +
         (c.formula ? `<span class="dg-fx" title="${esc('= ' + c.formula)}">fx</span>` : '') +
-        `<button class="dg-type" data-retype="${c.id}" title="${esc(TYPE_LABEL[c.type])} — click to change">${esc(TYPE_LABEL[c.type])}</button>` +
         (c.failed ? `<span class="dg-warn" title="${c.failed} value(s) could not be read as ${esc(TYPE_LABEL[c.type])}">!</span>` : '') +
         `<span class="dg-filter" data-filter="${c.id}" title="Filter and sort">▾</span>` +
+        `</span>` +
         `<span class="dg-grip" data-grip="${c.id}" title="Drag to resize, double-click to fit"></span>` +
         `</div>`
     }).join('')}`
@@ -254,6 +287,19 @@ export class Grid {
       this.cycles = r.cycles
     } else if (this.computed.size) { this.computed = new Map(); this.cycles = [] }
 
+    // Per-cell formulas, over CANONICAL positions.
+    //
+    // A1 addressing counts `s.columns` (every column, hidden included) and the
+    // sheet's own row order — NOT the visible grid. Sorting and filtering are
+    // view state (store.view()), so a formula must not change meaning when a
+    // reader sorts: `=B4*1.2` names a cell in the document, and two people
+    // looking at the same file through different sorts have to see the same
+    // number. Hiding a column is document state but still editorial, and
+    // renumbering every reference behind it would be a silent rewrite.
+    this.cellValues = this.hasCellFormulas()
+      ? recalcCells(this.cellSource(), this.store.doc.modified, this.computed).values
+      : EMPTY_CELLS
+
     // Conditional formats are evaluated over the WHOLE column, not the painted
     // window: a colour scale needs the real min and max, and top-N needs every
     // candidate. Evaluating the ~40 visible rows would rescale the ramp on every
@@ -291,9 +337,11 @@ export class Grid {
         cols(s).map((c, ci) => {
           const over = s.cells?.[`${c.id}:${rid}`]
           const comp = this.computed.get(c.id)
-          const v = comp ? comp[r]
-            : over && 'v' in over ? over.v
-              : readCell(s.data[c.id], r)
+          const fv = this.cellFormulaValue(r, c.id)
+          const v = fv !== undefined ? fv
+            : comp ? comp[r]
+              : over && 'v' in over ? over.v
+                : readCell(s.data[c.id], r)
           const note = over?.note ? ' dg-noted' : ''
           const bad = isErr(v) ? ' dg-err' : ''
           const inSel = this.sel.ranges().some((rg) => contains(rg, i, ci))
@@ -318,15 +366,62 @@ export class Grid {
     this.wire()
   }
 
+  /** The formula stored at a canonical position, if any. */
+  private formulaAtPos(row: number, col: number): string | undefined {
+    const s = this.sheet
+    const c = s.columns[col]
+    if (!c) return undefined
+    const rid = ridForDataRow(s, row)
+    const f = s.cells?.[`${c.id}:${rid}`]?.f
+    return typeof f === 'string' && f !== '' ? f : undefined
+  }
+
+  private hasCellFormulas(): boolean {
+    const cells = this.sheet.cells
+    if (!cells) return false
+    for (const k in cells) if (typeof cells[k]?.f === 'string') return true
+    return false
+  }
+
+  /** The sheet as a plain grid of positions, which is all cellformula.ts wants. */
+  private cellSource(): CellSource {
+    const s = this.sheet
+    return {
+      rows: rowCount(s),
+      cols: s.columns.length,
+      formulaAt: (r, c) => this.formulaAtPos(r, c),
+      valueAt: (r, c) => {
+        const col = s.columns[c]
+        if (!col) return null
+        const rid = ridForDataRow(s, r)
+        const over = s.cells?.[`${col.id}:${rid}`]
+        if (over && 'v' in over) return over.v as never
+        const comp = this.computed.get(col.id)
+        return (comp ? comp[r] : readCell(s.data[col.id], r)) as never
+      },
+    }
+  }
+
+  /** The computed value of a cell formula at a canonical position, if it has one. */
+  private cellFormulaValue(row: number, colId: string): unknown {
+    if (this.cellValues === EMPTY_CELLS) return undefined
+    const ci = this.sheet.columns.findIndex((c) => c.id === colId)
+    if (ci < 0) return undefined
+    const k = cellKey(row, ci)
+    return this.cellValues.has(k) ? this.cellValues.get(k) : undefined
+  }
+
   /** Value at a VISIBLE position — what the clipboard and the status bar read. */
   private valueAt(row: number, ci: number): unknown {
     const s = this.sheet
     const c = cols(s)[ci]
     if (!c) return null
     const rid = ridAt(this.store, s, row)
+    const r = dataRow(s, rid)
+    const fv = this.cellFormulaValue(r, c.id)
+    if (fv !== undefined) return fv
     const over = s.cells?.[`${c.id}:${rid}`]
     if (over && 'v' in over) return over.v
-    const r = dataRow(s, rid)
     const comp = this.computed.get(c.id)
     return comp ? comp[r] : readCell(s.data[c.id], r)
   }
@@ -430,7 +525,16 @@ export class Grid {
         ? `Sum ${fmtNum(nums.reduce((a, x) => a + x, 0))}  ·  Avg ${fmtNum(nums.reduce((a, x) => a + x, 0) / nums.length)}  ·  Count ${nums.length}  ·  Cells ${cells}`
         : `Cells ${cells}`
     }
-    this.onSelectionChange(summary, ref, c?.formula ? `= ${c.formula}` : raw)
+    // The formula bar shows the SOURCE when there is one — a per-cell formula
+    // first, then the column's expression, then the value. A bar that shows the
+    // computed number for a formula cell is the one place a spreadsheet user
+    // looks to find out whether a number was typed or derived.
+    const cellSrc = c
+      ? this.formulaAtPos(dataRow(s, ridAt(this.store, s, cur.row)),
+          s.columns.findIndex((x) => x.id === c.id))
+      : undefined
+    this.onSelectionChange(summary, ref,
+      cellSrc !== undefined ? cellSrc : c?.formula ? `= ${c.formula}` : raw)
   }
 
   /** The full keyboard set, routed through select.ts's typed actions. */
@@ -526,12 +630,20 @@ export class Grid {
       }
     }
     this.head.querySelectorAll<HTMLElement>('.dg-name').forEach((el) => {
-      el.onclick = () => this.toggleSort(el.parentElement!.dataset.col!)
+      el.onclick = () => {
+        const col = el.closest<HTMLElement>('[data-col]')?.dataset.col
+        if (col) this.toggleSort(col)
+      }
     })
     // select a whole column by its letter, the whole sheet by the corner
     this.head.querySelectorAll<HTMLElement>('.dg-letter').forEach((el) => {
       el.onclick = () => {
-        this.sel.selectCol(Number(el.parentElement!.dataset.ci))
+        // `closest`, not `parentElement`: the letter sits inside a strip now,
+        // and reading `ci` off the immediate parent gave NaN the moment the
+        // header grew a second line.
+        const ci = Number(el.closest<HTMLElement>('[data-ci]')?.dataset.ci)
+        if (!Number.isFinite(ci)) return
+        this.sel.selectCol(ci)
         this.paint(); this.announce()
       }
     })
@@ -593,7 +705,8 @@ export class Grid {
       el.onclick = (e) => {
         e.stopPropagation()
         const col = this.sheet.columns.find((c) => c.id === el.dataset.retype)
-        if (col) this.onRetype?.(col)
+        const r = el.getBoundingClientRect()
+        if (col) this.onRetype?.(col, r.left, r.bottom)
       }
     })
     this.table.querySelectorAll<HTMLElement>('.dg-row[data-rid] .dg-cell[data-ci]').forEach((el) => {
@@ -683,7 +796,13 @@ export class Grid {
     const raw = readCell(s.data[colId], r)
     cell.classList.add('dg-editing')
     cell.contentEditable = 'true'
-    cell.textContent = seed !== undefined ? seed : (raw == null ? '' : String(raw))
+    // A formula cell edits its SOURCE. Showing the computed value would make
+    // every edit of a formula silently replace it with its own last result —
+    // the cell would look unchanged and the formula would be gone.
+    const src = this.formulaAtPos(dataRow(s, rid), s.columns.findIndex((c) => c.id === colId))
+    cell.textContent = seed !== undefined ? seed
+      : src !== undefined ? src
+        : (raw == null ? '' : String(raw))
     cell.focus()
     const range = document.createRange()
     range.selectNodeContents(cell)
@@ -701,10 +820,32 @@ export class Grid {
       cell.classList.remove('dg-editing')
       cell.onblur = null
       if (write) {
-        const v = coerceForColumn(text, col.type)
-        this.store.runEdit(`${colId}:${rid}`, {
-          op: 'setCells', sheet: s.id, col: colId, rids: [rid], v: [v],
-        })
+        const key = `${colId}:${rid}`
+        const had = s.cells?.[key]
+        if (isFormula(text)) {
+          // A formula rides on the cell OVERRIDE (`CellOverride.f`), which the
+          // format reserved for exactly this. The stored value is left alone:
+          // the document holds the expression and the number is derived, so a
+          // file can never carry a result that disagrees with its own formula.
+          this.store.runEdit(key, {
+            op: 'setOverrides', sheet: s.id, keys: [key], v: [{ ...had, f: text }],
+          })
+        } else {
+          const v = coerceForColumn(text, col.type)
+          const patches: Patch[] = [
+            { op: 'setCells', sheet: s.id, col: colId, rids: [rid], v: [v] },
+          ]
+          // Typing over a formula REMOVES it. Leaving `f` in place would show
+          // the typed number for one paint and then quietly recompute over it.
+          if (had?.f !== undefined) {
+            const { f: _f, ...rest } = had
+            patches.push({
+              op: 'setOverrides', sheet: s.id, keys: [key],
+              v: [Object.keys(rest).length ? rest : null], dropEmpty: true,
+            })
+          }
+          this.store.runEdit(key, patches)
+        }
         this.store.endRun()
       }
       // COMMIT AND MOVE. Enter goes down, Tab goes right — a spreadsheet that

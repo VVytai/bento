@@ -437,3 +437,51 @@ html, body {
 .dg-head-row .dg-cell.dg-frozen { z-index: 5; }
 .dg-cell.dg-frozen.dg-freeze-edge { border-right: 2px solid var(--line-strong); }
 .dg-cell.dg-sel.dg-frozen { background: var(--sel-bg, #eef4ff); }
+
+/* ————— two-line column header —————
+   The letter strip on top (Excel's position, and the click target for
+   selecting the column), the name and its controls below. One line could not
+   hold both: the name was being clipped to a single character. */
+.dg-head-row { height: calc(var(--row-h) + 20px); }
+.dg-head-row .dg-cell { height: calc(var(--row-h) + 20px); line-height: normal; padding: 0; }
+.dg-h { flex-direction: column; align-items: stretch; gap: 0; }
+.dg-hstrip {
+  position: relative;
+  display: block;
+  height: 19px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+.dg-h .dg-letter {
+  display: block;
+  height: 19px;
+  line-height: 19px;
+  text-align: center;
+  border-radius: 0;
+  padding: 0;
+}
+/* absolute, so the letter stays centred on the COLUMN rather than on whatever
+   space the badge leaves it */
+.dg-hstrip .dg-type {
+  position: absolute;
+  right: 3px;
+  top: 0;
+  height: 19px;
+  line-height: 17px;
+  border: 0;
+  background: transparent;
+  font-size: 9px;
+  padding: 0 2px;
+  opacity: 0.75;
+}
+.dg-hstrip .dg-type:hover { opacity: 1; color: var(--accent); }
+.dg-hmain {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 8px;
+}
+.dg-head-row .dg-corner { padding: 0; }
+.dx-pop-on { color: var(--accent); font-weight: 600; }

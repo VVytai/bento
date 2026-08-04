@@ -78,6 +78,21 @@ function roundTrip(name: string, patches: Patch | Patch[]) {
   ok(content(s.doc) !== afterUndo, `${name}: redo re-applies it`)
 }
 
+// an override delete has to survive a JSON round trip: the patch is also the
+// collab wire format, and an array cannot carry `undefined`
+{
+  const s = new Store(fresh())
+  s.commit({ op: 'setOverrides', sheet: 'sh1', keys: ['amount:2'], v: [{ note: 'x' }] })
+  ok(!!(s.doc.sheets[0] as any).cells['amount:2'], 'an override is set')
+  const del = { op: 'setOverrides', sheet: 'sh1', keys: ['amount:2'], v: [undefined] } as Patch
+  const overWire = JSON.parse(JSON.stringify(del)) as Patch
+  ok(JSON.stringify(overWire).includes('null'),
+    'a delete sent over the wire arrives as null, because JSON has no undefined in an array')
+  s.commit(overWire)
+  ok(!('amount:2' in ((s.doc.sheets[0] as any).cells ?? {})),
+    'and it still DELETES rather than writing a null override the other replica would not have')
+}
+
 // ------------------------------------------------------------ round trips
 roundTrip('setCells (raw)', { op: 'setCells', sheet: 'sh1', col: 'amount', rids: [2, 3], v: [99, 98] })
 roundTrip('setCells (dict)', { op: 'setCells', sheet: 'sh1', col: 'region', rids: [1], v: ['East'] })
@@ -170,6 +185,59 @@ roundTrip('a multi-patch commit', [
   ok((s.doc.sheets[0] as any).columns.find((c: any) => c.id === 'amount').unit === undefined &&
      readCell((s.doc.sheets[0] as any).data.amount, 0) === 7,
     'a structural commit closes the run first — text and structure never merge')
+}
+
+// A single EDIT may be several patches — the grid writes a value and clears the
+// formula it replaced — and they have to undo as ONE step, in reverse.
+{
+  const s = new Store(fresh())
+  const before = content(s.doc)
+  s.commit({ op: 'setOverrides', sheet: 'sh1', keys: ['amount:1'], v: [{ f: '=A1*2' }] })
+  const withFormula = content(s.doc)
+  s.runEdit('amount:1', [
+    { op: 'setCells', sheet: 'sh1', col: 'amount', rids: [1], v: [42] },
+    { op: 'setOverrides', sheet: 'sh1', keys: ['amount:1'], v: [null], dropEmpty: true },
+  ])
+  s.endRun()
+  ok(readCell((s.doc.sheets[0] as any).data.amount, 0) === 42 &&
+     !((s.doc.sheets[0] as any).cells?.['amount:1']),
+    'typing over a formula writes the value AND removes the formula')
+  s.undo()
+  ok(content(s.doc) === withFormula,
+    'and ONE undo restores both — the value and the formula, which only works if the inverses replay in reverse')
+  s.undo()
+  ok(content(s.doc) === before, 'the step before that is still there')
+}
+{
+  // AND THE ORDER HAS TO BE REVERSED, which the check above cannot show: those
+  // two patches write different structures, so their inverses commute and a
+  // forward replay passes by luck. These two write the SAME key, so replaying
+  // the inverses forward re-creates what the first one deleted.
+  const s = new Store(fresh())
+  const before = content(s.doc)
+  s.runEdit('amount:1', [
+    { op: 'setOverrides', sheet: 'sh1', keys: ['amount:1'], v: [{ note: 'a' }] },
+    { op: 'setOverrides', sheet: 'sh1', keys: ['amount:1'], v: [{ note: 'b' }] },
+  ])
+  s.endRun()
+  ok((s.doc.sheets[0] as any).cells['amount:1'].note === 'b', 'the last write wins going forward')
+  s.undo()
+  ok(content(s.doc) === before,
+    'and undo leaves NO override — replaying the inverses forward would restore the first one instead')
+}
+{
+  // the multi-patch run must still collapse repeated typing into one step
+  const s = new Store(fresh())
+  const before = content(s.doc)
+  for (let i = 0; i < 5; i++) {
+    s.runEdit('amount:1', [
+      { op: 'setCells', sheet: 'sh1', col: 'amount', rids: [1], v: [i] },
+      { op: 'setColumn', sheet: 'sh1', col: 'amount', patch: { unit: `U${i}` } },
+    ])
+  }
+  s.endRun()
+  s.undo()
+  ok(content(s.doc) === before, 'five multi-patch edits in one cell are still ONE undo step')
 }
 
 // ------------------------------------------ history costs the EDIT, not the doc

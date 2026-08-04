@@ -62,7 +62,8 @@ export type Patch =
    *  apply-then-undo that leaves `"cells": {}` behind is not a round trip. */
   | {
       op: 'setOverrides'; sheet: string; keys: string[]
-      v: Array<CellOverride | undefined>; dropEmpty?: boolean
+      /** `null` and `undefined` both DELETE; null is the one that survives JSON. */
+      v: Array<CellOverride | null | undefined>; dropEmpty?: boolean
     }
   /**
    * `at[i]` is the row POSITION rids[i] takes; omitted means append.
@@ -259,7 +260,13 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       p.keys.forEach((k, i) => {
         was.push(sheet.cells![k])
         const v = p.v[i]
-        if (v === undefined) delete sheet.cells![k]
+        // `null` deletes as well as `undefined`, and it is the spelling that
+        // SURVIVES: this is an array, and `JSON.stringify([undefined])` is
+        // `[null]`, so a delete sent over collab arrives as a null. Checking
+        // only for undefined would write that null in as an override — junk in
+        // the file, `dropEmpty` never firing, and the two replicas disagreeing
+        // about whether the cell has one.
+        if (v === undefined || v === null) delete sheet.cells![k]
         else sheet.cells![k] = v
       })
       if (p.dropEmpty && Object.keys(sheet.cells).length === 0) delete sheet.cells
@@ -477,23 +484,36 @@ export class Store {
    * every later one extends it in place, so a cell typed into forty times is
    * one undo step carrying one inverse — not forty.
    */
-  runEdit(cellKey: string, patch: Patch): void {
+  runEdit(cellKey: string, patch: Patch | Patch[]): void {
     if (this.readOnly) return
     if (this.runCell !== cellKey) {
       this.endRun()
       this.runCell = cellKey
       this.pending = { inverse: [], touched: {}, bytes: 0 }
     }
-    const r = applyPatch(this.doc, patch)
-    // keep only the FIRST inverse for this cell: it holds the value the run
-    // started from, which is what undo must restore
-    if (this.pending!.inverse.length === 0) {
-      this.pending!.inverse.push(r.inverse)
-      this.pending!.bytes = patchBytes(r.inverse)
+    // Keep only the FIRST edit's inverse for this cell: it holds the value the
+    // run started from, which is what undo must restore. Forty keystrokes are
+    // one step back to where the typing began.
+    const first = this.pending!.inverse.length === 0
+    // One EDIT may be several patches — writing a value and clearing the
+    // formula it replaced is two, and they have to undo as ONE step. Their
+    // inverses go on REVERSED, because `invert` replays the list forward.
+    const list = Array.isArray(patch) ? patch : [patch]
+    const inverses: Patch[] = []
+    const r = { touched: {} as Touched }
+    for (const p of list) {
+      const one = applyPatch(this.doc, p)
+      if (first) inverses.push(one.inverse)
+      merge(r.touched, one.touched)
+      this.lastTouched = one.touched
+    }
+    if (first) {
+      inverses.reverse()
+      this.pending!.inverse.push(...inverses)
+      this.pending!.bytes = inverses.reduce((n, p) => n + patchBytes(p), 0)
     }
     merge(this.pending!.touched, r.touched)
     this.touch()
-    this.lastTouched = r.touched
     this.emit('doc')
     clearTimeout(this.runTimer)
     this.runTimer = setTimeout(() => this.endRun(), RUN_IDLE_MS)

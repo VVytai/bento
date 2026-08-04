@@ -214,6 +214,17 @@ const isDigit = (c: string): boolean => c >= '0' && c <= '9'
 /** The identifier body formula.ts's lexer accepts, so words break identically. */
 const isWord = (c: string): boolean => isAlpha(c) || isDigit(c) || c === '_' || c === '.'
 
+/**
+ * Walk `src` and hand every reference to `map`, splicing its return in place.
+ *
+ * Exported because cellformula.ts substitutes references for bound names using
+ * the SAME walk the shifting rewrites use. A second scanner would be a second
+ * definition of what counts as a reference, and the two would disagree about a
+ * quoted string or a `[bracketed name]` on some Tuesday.
+ */
+export function mapRefs(src: string, map: MapUnit): string { return rewrite(src, map) }
+export type { Unit as RefUnit }
+
 function rewrite(src: string, map: MapUnit): string {
   const n = src.length
   const skipSpace = (j: number): number => {

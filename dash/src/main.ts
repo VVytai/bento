@@ -208,7 +208,7 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     }
     if (grid.handleKey(e)) e.preventDefault()
   })
-  grid.onRetype = (col) => retype(store, col)
+  grid.onRetype = (col, x, y) => retype(store, col, x, y)
   grid.onEditFormula = (col) => editFormula(store, grid, col)
 
   // --- chart: bound to columns, derived at render, never stored
@@ -428,18 +428,29 @@ function showFindings(host: HTMLElement, findings: Notice[]): void {
 }
 
 /** The correctable half of the type row: import guesses, you settle it. */
-function retype(store: Store, col: Column): void {
+/**
+ * Pick a column's type.
+ *
+ * A POPOVER, not `window.prompt`. Import refuses to guess a type it cannot
+ * decide and says so, and that refusal is only honest if fixing it is one
+ * click — which it was not when the click opened a native dialog asking the
+ * reader to type the NUMBER of the type they wanted from a list.
+ */
+function retype(store: Store, col: Column, x: number, y: number): void {
   const types: ColumnType[] = ['text', 'number', 'money', 'percent', 'date', 'bool']
-  const list = types.map((tp, i) => `${i + 1}. ${TYPE_LABEL[tp]}`).join('\n')
-  const pick = window.prompt(`${t('Column type for')} "${col.name}"\n\n${list}`,
-    String(types.indexOf(col.type) + 1))
-  if (!pick) return
-  const next = types[Number(pick) - 1]
-  if (!next || next === col.type) return
+  const el = popover(x, y, types.map((tp) =>
+    `<button data-t="${tp}"${tp === col.type ? ' class="dx-pop-on"' : ''}>` +
+    `${esc(TYPE_LABEL[tp])}${tp === col.type ? ' ✓' : ''}</button>`).join(''))
   const sheet = store.doc.sheets.find((s) =>
     s.kind === 'table' && s.columns.some((c) => c.id === col.id)) as TableSheet | undefined
-  if (!sheet) return
-  store.commit({ op: 'setColumn', sheet: sheet.id, col: col.id, patch: { type: next } })
+  el.querySelectorAll<HTMLElement>('button').forEach((b) => {
+    b.onclick = () => {
+      const next = b.dataset.t as ColumnType
+      el.remove()
+      if (!sheet || next === col.type) return
+      store.commit({ op: 'setColumn', sheet: sheet.id, col: col.id, patch: { type: next } })
+    }
+  })
 }
 
 // --- export -----------------------------------------------------------------
