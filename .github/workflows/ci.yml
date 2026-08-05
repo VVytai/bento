@@ -117,6 +117,20 @@ jobs:
         # build rather than shipping a half-translated interface.
         run: node scripts/build-spaces-i18n.mjs --check
 
+      - name: Spaces undo rig
+        # Every checkpoint used to stringify the WHOLE document: measured on a
+        # 200-page, 2.5 MB handbook, fifty edits left an undo depth of NINE,
+        # because nine snapshots exhaust the 24 MB budget. A typing run now
+        # records only its PAGE. That is fast and deep — and it is only correct
+        # while the mutation touched nothing else, so `doc` stays the default
+        # and this rig covers the cases where a wrong scope silently loses
+        # work: mixed scopes, interleaved undo/redo, and two pages edited in
+        # turn. (Bundled: store.ts imports './model' extensionless.)
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-spaces-undo.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-spaces-undo.mjs"
+          node "$RUNNER_TEMP/test-spaces-undo.mjs"
+
       - name: Spaces agent-surface rig
         # agent.ts is ~900 lines and shipped with no coverage at all: two of the
         # five defects an adversarial review found in round 2 lived here,

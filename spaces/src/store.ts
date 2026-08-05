@@ -11,6 +11,8 @@
 // closes on idle, on the caret leaving the block, on any structural change, on
 // save, and on replaceDoc. One run = one undo entry = later, one text batch.
 
+type Scope = 'doc' | 'page'
+
 import { type SpacesDoc, type Page, type Block, buildIndex, type SpaceIndex, homePage } from './model'
 
 type Listener = () => void
@@ -22,11 +24,26 @@ const RUN_IDLE_MS = 600
  *  snapshots retain tens of MB. Assets are excluded from snapshots entirely. */
 const UNDO_BUDGET = 24 * 1024 * 1024
 
-interface Entry {
-  json: string
-  /** page in view when the entry was taken, so undo restores the view too */
-  pageId: string
-}
+/**
+ * One undoable step.
+ *
+ * A `page` entry holds ONE page's JSON; a `doc` entry holds the whole document
+ * minus its assets. The distinction is the difference between an undo history
+ * that survives a real document and one that does not: measured on a 200-page,
+ * 2.5 MB handbook, whole-document entries gave a depth of NINE — fifty edits,
+ * and you can take back the last nine — because every checkpoint stringified
+ * 2.5 MB against a 24 MB budget. The same budget holds hundreds of page
+ * entries, and a page entry costs ~12 KB rather than 2.5 MB to take.
+ *
+ * DOC IS THE DEFAULT, and page scope is opted into. A page entry restores one
+ * page by id and leaves the rest of the document alone, so it is only correct
+ * when the mutation touched nothing else — the caller knows that and the store
+ * cannot cheaply check it. Defaulting the other way would corrupt undo for any
+ * caller that forgot.
+ */
+type Entry =
+  | { kind: 'doc'; json: string; viewId: string }
+  | { kind: 'page'; pageId: string; json: string; viewId: string }
 
 export class Store {
   doc: SpacesDoc
@@ -94,10 +111,10 @@ export class Store {
    * A structural change: one undoable step. Closes any open typing run first,
    * so the run's text and the structural edit never merge into one entry.
    */
-  commit(mutate: () => void, opts: { structure?: boolean } = {}): void {
+  commit(mutate: () => void, opts: { structure?: boolean; scope?: Scope } = {}): void {
     if (this.readOnly) return
     this.endRun()
-    this.checkpoint()
+    this.checkpoint(opts.scope ?? 'doc')
     mutate()
     this.dirty = true
     this.reindex()
@@ -113,7 +130,9 @@ export class Store {
     if (this.readOnly) return
     if (this.runBlock !== blockId) {
       this.endRun()
-      this.checkpoint()
+      // A typing run is one block in the page in view, by definition — the
+      // cheapest and by far the most common checkpoint there is.
+      this.checkpoint('page')
       this.runBlock = blockId
     }
     mutate()
@@ -159,9 +178,20 @@ export class Store {
     return JSON.stringify(rest)
   }
 
-  checkpoint(): void {
+  /** An entry for the state as it is NOW, at the requested scope. */
+  private entry(scope: Scope): Entry {
+    if (scope === 'page') {
+      const page = this.index.page.get(this.pageId)
+      // no page in view is not a page-scoped edit — fall back rather than
+      // record an entry that restores nothing
+      if (page) return { kind: 'page', pageId: page.id, json: JSON.stringify(page), viewId: this.pageId }
+    }
+    return { kind: 'doc', json: this.snapshot(), viewId: this.pageId }
+  }
+
+  checkpoint(scope: Scope = 'doc'): void {
     if (this.readOnly) return
-    this.undoStack.push({ json: this.snapshot(), pageId: this.pageId })
+    this.undoStack.push(this.entry(scope))
     this.redoStack.length = 0
     let bytes = 0
     for (let i = this.undoStack.length - 1; i >= 0; i--) {
@@ -172,9 +202,18 @@ export class Store {
 
   private restore(entry: Entry): void {
     this.dirty = true
-    const assets = this.doc.assets
-    this.doc = { ...(JSON.parse(entry.json) as SpacesDoc), ...(assets ? { assets } : {}) }
-    this.pageId = entry.pageId
+    if (entry.kind === 'page') {
+      const at = this.doc.pages.findIndex((p) => p.id === entry.pageId)
+      // The page can be gone if a later doc-level step removed it. Undo runs in
+      // order, so the step that removed it is undone FIRST and the page is back
+      // by the time this entry is reached — but a hand-built history could
+      // reach here, and dropping the entry is better than throwing.
+      if (at >= 0) this.doc.pages[at] = JSON.parse(entry.json) as Page
+    } else {
+      const assets = this.doc.assets
+      this.doc = { ...(JSON.parse(entry.json) as SpacesDoc), ...(assets ? { assets } : {}) }
+    }
+    this.pageId = entry.viewId
     this.reindex()
     this.emit('doc')
     this.emit('tree')
@@ -186,7 +225,9 @@ export class Store {
     this.endRun()
     const entry = this.undoStack.pop()
     if (!entry) return
-    this.redoStack.push({ json: this.snapshot(), pageId: this.pageId })
+    // the inverse entry is taken at the SAME scope, or redo would restore a
+    // whole document over a one-page change
+    this.redoStack.push(this.entry(entry.kind))
     this.restore(entry)
   }
 
@@ -195,7 +236,7 @@ export class Store {
     this.endRun()
     const entry = this.redoStack.pop()
     if (!entry) return
-    this.undoStack.push({ json: this.snapshot(), pageId: this.pageId })
+    this.undoStack.push(this.entry(entry.kind))
     this.restore(entry)
   }
 
