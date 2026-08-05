@@ -19,6 +19,14 @@
 // reviewer can see and argue with. What it stops is the drift nobody chose —
 // forty commits each costing 300 bytes.
 //
+// THE NUMBER IS ENVIRONMENT-SENSITIVE, and CI's is the one that counts.
+// Most of the shell is a zlib-deflated block, and zlib's output differs
+// slightly between node versions: measured on one commit, node 26 locally
+// produced 130,095 B where CI's node 24 produced 131,246 B — 1.1 KB apart for
+// identical input. So a ceiling set tight against a local build fails in CI for
+// reasons that have nothing to do with the change. Leave a few KB of headroom,
+// and when the two disagree, believe CI.
+//
 // Spaces ships in ONE file that people mail to each other, and every byte is
 // paid on every open, on every phone, forever. Slides is 560KB because it grew
 // for a year without one of these.

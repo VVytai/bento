@@ -3,8 +3,8 @@
   "shells": {
     "spaces": {
       "path": "spaces/dist-single/Bento_Spaces.bento.html",
-      "max": 131072,
-      "//": "128 KiB. Raised from 125 KiB at 127502 B on 2026-08-05 for the working board: drag a card between columns (and within one, which reorders the pages), a status button on every card because a phone cannot drag, and view filters stored on the view block. 3268 B, of which ~900 is six new strings across nine languages. Previously: raised from 118 KiB at 122898 B for the tracker itself — typed fields (fields.ts), the prop and view block types, and the board. An issue tracker in the same file as the notes is the thing neither Linear nor a wiki can do, and it is worth its bytes; the ceiling moves in the commit that spends them."
+      "max": 135168,
+      "//": "132 KiB. The tracker took spaces from 73 KB. Headroom is deliberate: the shell is mostly a zlib block and zlib differs across node versions \u2014 the same commit measured 130,095 B on node 26 locally and 131,246 B on CI node 24, so a tight ceiling fails in CI for no reason. CI is the number that counts."
     }
   }
 }
