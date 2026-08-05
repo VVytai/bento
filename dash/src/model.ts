@@ -254,7 +254,11 @@ export interface Measure {
 }
 
 export interface Tile {
-  kind: 'chart' | 'kpi' | 'slice' | 'text' | 'gl'
+  /** Stable per-tile identity — a cross-filter click is attributed to its tile
+   *  so a tile never filters ITSELF into a single bar. */
+  id?: string
+  title?: string
+  kind: 'chart' | 'kpi' | 'slice' | 'text' | 'gl' | 'table'
   x: number
   y: number
   w: number
@@ -265,8 +269,16 @@ export interface Tile {
    *  does not double the file. */
   bind?: {
     sheet: string; x?: string; by?: string; series?: string[]
+    /** a single column, for a KPI or a one-column table */
+    col?: string
+    /** several, for a table tile */
+    cols?: string[]
     measure?: string; agg?: string
   }
+  /** chart kind for a chart tile — bar/line/pie, as chart.ts spells them */
+  chart?: string
+  /** what a KPI compares against: the whole sheet, its own column, or nothing */
+  compare?: 'all' | 'column' | null
   option?: Record<string, unknown>
   /** REQUIRED on `kind:'gl'`: what to draw where WebGL is unavailable. */
   fallback?: 'heatmap' | 'scatter2d' | 'table'
@@ -276,6 +288,9 @@ export interface Tile {
 export interface View {
   id: string
   name: string
+  /** GRID UNITS — columns and rows of the tile grid, never pixels. A pixel
+   *  layout would lay out differently on every reader's screen, which is the
+   *  one thing a shared document must not do. */
   w: number
   h: number
   tiles: Tile[]

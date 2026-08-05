@@ -29,7 +29,7 @@
 // means rewriting the store.
 
 import { applySheetProps } from './rowcol.ts'
-import type { CellOverride, Column, ColumnData, DashDoc, Measure, Sheet, Step, TableSheet } from './model.ts'
+import type { CellOverride, View, Column, ColumnData, DashDoc, Measure, Sheet, Step, TableSheet } from './model.ts'
 
 type Listener = () => void
 export type StoreEvent = 'doc' | 'view' | 'selection'
@@ -123,6 +123,16 @@ export type Patch =
    * would reach no other replica.
    */
   | { op: 'setDocProps'; props: Record<string, unknown>; drop?: string[] }
+  /**
+   * One dashboard view, by id. `view: undefined` removes it.
+   *
+   * Per-view rather than a whole-`views` write, so editing one tile carries an
+   * inverse the size of one view instead of every dashboard in the workbook —
+   * the same argument the byte-capped history makes everywhere else. `views` is
+   * an ARRAY (order is the tab order and readers must agree on it), so a
+   * replacement keeps its position and only a genuinely new id appends.
+   */
+  | { op: 'setView'; id: string; view?: View; at?: number; dropEmpty?: boolean }
   /**
    * RESERVED. Both need the transform engine, which does not exist yet. They
    * are in the union now because the discriminant cannot be retrofitted once
@@ -417,6 +427,27 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       return {
         inverse: { op: 'setMeasure', name: p.name, measure: was, dropEmpty: !existed },
         touched: {},
+      }
+    }
+
+    case 'setView': {
+      const existed = doc.views !== undefined
+      doc.views ??= []
+      const at = doc.views.findIndex((v) => v.id === p.id)
+      const was = at < 0 ? undefined : doc.views[at]
+      if (p.view === undefined) { if (at >= 0) doc.views.splice(at, 1) }
+      else if (at >= 0) doc.views[at] = p.view
+      // `at` on the way IN is how the inverse of a removal restores POSITION.
+      // Without it undo appended the view to the end, so undoing the deletion
+      // of the first dashboard silently reordered the tabs — a change nobody
+      // asked for, arriving inside the operation meant to undo one.
+      else if (typeof p.at === 'number' && p.at >= 0 && p.at <= doc.views.length) {
+        doc.views.splice(p.at, 0, p.view)
+      } else doc.views.push(p.view)
+      if (p.dropEmpty && doc.views.length === 0) delete doc.views
+      return {
+        inverse: { op: 'setView', id: p.id, view: was, at: at < 0 ? undefined : at, dropEmpty: !existed },
+        touched: { all: true },
       }
     }
 

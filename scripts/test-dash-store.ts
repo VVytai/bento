@@ -129,6 +129,27 @@ roundTrip('setSheetProps', {
   s.undo()
   ok('condfmt' in (s.doc.sheets[0] as any), 'undo brings it back')
 }
+roundTrip('setView', {
+  op: 'setView', id: 'v1',
+  view: { id: 'v1', name: 'Overview', w: 12, h: 8, tiles: [] },
+})
+{
+  // views is an ARRAY — order is the tab order, so a replacement must keep its
+  // place rather than moving to the end
+  const s = new Store(fresh())
+  const mk = (id: string, name: string) => ({ id, name, w: 12, h: 8, tiles: [] })
+  s.commit({ op: 'setView', id: 'a', view: mk('a', 'A') })
+  s.commit({ op: 'setView', id: 'b', view: mk('b', 'B') })
+  s.commit({ op: 'setView', id: 'a', view: mk('a', 'A2') })
+  ok(JSON.stringify(s.doc.views?.map((v) => v.id)) === JSON.stringify(['a', 'b']),
+    'replacing a view keeps its position, rather than moving it to the end')
+  ok(s.doc.views?.[0].name === 'A2', 'and it is the new one')
+  s.commit({ op: 'setView', id: 'a', view: undefined })
+  ok(JSON.stringify(s.doc.views?.map((v) => v.id)) === JSON.stringify(['b']), 'undefined removes it')
+  s.undo()
+  ok(s.doc.views?.[0].id === 'a', 'and undo puts it back where it was')
+}
+
 roundTrip('setDocProps', { op: 'setDocProps', props: { story: { steps: [] } } })
 {
   // the document-level twin of setSheetProps, with the same wire discipline
