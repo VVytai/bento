@@ -432,10 +432,14 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
         t('This sheet needs a category column and a numeric column to pivot.') } as never])
       return
     }
-    const doc = store.doc
+    // A PATCH, not replaceDoc: creating a pivot used to clear the undo stack,
+    // so every edit you could previously take back vanished the moment you
+    // asked for a summary of them.
     const id = `pivot-${Math.floor(Date.now() % 1e8).toString(36)}`
-    doc.sheets.push(newPivotSheet(id, `${grid.sheet.name} — ${t('pivot')}`, spec))
-    store.replaceDoc(doc)
+    store.commit({
+      op: 'setSheet', id,
+      sheet: newPivotSheet(id, `${grid.sheet.name} — ${t('pivot')}`, spec),
+    } as never)
     binding = null; viz = null; vizDown?.(); vizDown = null
     pivotSpec = spec
     chartEl.hidden = false

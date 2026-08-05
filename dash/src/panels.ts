@@ -453,20 +453,19 @@ export function mountPanels(host: PanelsHost): Panels {
   }
 
   /**
-   * Add a sheet.
+   * Add a sheet — a PATCH, so it is undoable.
    *
-   * Through `replaceDoc`, because no `Patch` op writes `doc.sheets` — the same
-   * route `applyImport` takes in main.ts. The cost is the undo stack, which
-   * `replaceDoc` clears, so this is the ONE place in the panel where an action
-   * is not undoable. Adding is recoverable by deleting; deleting is not, which
-   * is why only the delete asks.
+   * This used to go through `replaceDoc`, which clears the undo stack: adding a
+   * sheet silently threw away every edit you could previously take back.
    */
   function addSheet(): void {
     if (ro()) return
     const doc = store.doc
     const id = mintSheetId(doc)
-    doc.sheets.push(blankSheet(id, mintSheetName(doc, t('Sheet')), new Date().toISOString()))
-    store.replaceDoc(doc)
+    store.commit({
+      op: 'setSheet', id,
+      sheet: blankSheet(id, mintSheetName(doc, t('Sheet')), new Date().toISOString()),
+    } as never)
     grid.setSheet(id)
   }
 
@@ -477,17 +476,15 @@ export function mountPanels(host: PanelsHost): Panels {
       window.alert(t('A workbook needs at least one sheet.'))
       return
     }
-    // `replaceDoc` clears the history, so ⌘Z cannot bring this back. Say so
-    // rather than discovering it: the rows are in the file until the next save
-    // and then they are not.
+    // Undoable now, so the warning no longer has to say otherwise — but a
+    // sheet is a lot of rows to remove on one click, so it still asks.
     const rows = rowsOf(sheet)
-    const msg = t('Delete "{name}" and its {n} rows? This cannot be undone.')
+    const msg = t('Delete "{name}" and its {n} rows?')
       .replace('{name}', sheet.name)
       .replace('{n}', String(rows))
     if (!window.confirm(msg)) return
     const cur = currentSheet()
-    doc.sheets = doc.sheets.filter((s) => s.id !== sheet.id)
-    store.replaceDoc(doc)
+    store.commit({ op: 'setSheet', id: sheet.id, sheet: undefined } as never)
     if (cur && cur.id === sheet.id) {
       const next = doc.sheets.find(isTable)
       if (next) grid.setSheet(next.id)

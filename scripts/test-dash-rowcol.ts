@@ -220,13 +220,20 @@ roundTrip('insertRowsAt', (s) => insertRowsAt(s, 2, 3))
     'the override attached to a deleted row goes with it, and the empty container goes too')
 }
 {
-  // the same delete through the raw patch — the behaviour deleteRowsAt exists
-  // to correct. If this check ever passes as "undefined", the helper is
-  // redundant and this rig is asserting nothing.
+  // The same delete through the RAW patch. This check has flipped: it used to
+  // assert that a bare `deleteRows` stranded the override — the ghost
+  // `deleteRowsAt` existed to sweep up — and that stranding was a real
+  // divergence, because `insertRows`' own inverse is a bare `deleteRows`, so
+  // undoing an insert took the raw path and left the orphan behind on the
+  // undoing replica only. applyPatch takes the overrides with the row now, and
+  // hands them to the inverse, so both routes agree.
   const st = new Store(fresh())
   st.commit({ op: 'deleteRows', sheet: 'sh1', rids: [2, 3] })
+  ok(sheetOf(st.doc).cells?.['amount:2'] === undefined,
+    'a bare deleteRows patch takes the override with it too — both routes agree now')
+  st.undo()
   ok(sheetOf(st.doc).cells?.['amount:2']?.v === 21,
-    'a bare deleteRows patch leaves the override behind — the ghost this module clears')
+    'and undoing it brings the override back, not just the values')
 }
 {
   const st = new Store(fresh())

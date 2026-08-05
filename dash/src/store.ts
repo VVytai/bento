@@ -69,6 +69,10 @@ export type Patch =
    * `at[i]` is the row POSITION rids[i] takes; omitted means append.
    * `values` is colId → one value per rid.
    *
+   * `overrides` puts a deleted row's `cells` entries back with it. Without it
+   * the inverse of a delete restored the row's VALUES and dropped every hand
+   * correction, note and per-cell formula attached to it.
+   *
    * Both exist because this is the inverse of a delete, and a delete has to be
    * undoable exactly. Without `values` the rows come back EMPTY; without `at`
    * they come back at the END — and in a spreadsheet, order is data. Measured
@@ -78,6 +82,14 @@ export type Patch =
   | {
       op: 'insertRows'; sheet: string; rids: number[]
       at?: number[]; values?: Record<string, unknown[]>
+      /**
+       * A deleted row's `cells` entries, put back with it. Without this the
+       * inverse of a delete restored the row's VALUES and silently dropped
+       * every hand correction, note and per-cell formula attached to it.
+       */
+      overrides?: Record<string, CellOverride>
+      /** the sheet had no `cells` container before; do not leave one behind */
+      dropEmptyCells?: boolean
     }
   | { op: 'deleteRows'; sheet: string; rids: number[] }
   | { op: 'setColumn'; sheet: string; col: string; patch: Record<string, unknown> }
@@ -133,6 +145,18 @@ export type Patch =
    * replacement keeps its position and only a genuinely new id appends.
    */
   | { op: 'setView'; id: string; view?: View; at?: number; dropEmpty?: boolean }
+  /**
+   * Add or remove a whole sheet. `sheet: undefined` removes the one named.
+   *
+   * Adding and deleting a sheet used to go through `replaceDoc`, because
+   * nothing in this union reached the sheet LIST — and `replaceDoc` CLEARS THE
+   * UNDO STACK. So creating a pivot, or importing a CSV, silently threw away
+   * every edit you could previously take back, and deleting a sheet could not
+   * be undone at all. It is a whole-sheet assignment either way, so the inverse
+   * carries the sheet and its POSITION: sheet order is the tab order, and
+   * readers must agree on it.
+   */
+  | { op: 'setSheet'; id: string; sheet?: Sheet; at?: number }
   /**
    * RESERVED. Both need the transform engine, which does not exist yet. They
    * are in the union now because the discriminant cannot be retrofitted once
@@ -317,7 +341,13 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       return {
         inverse: {
           op: 'setOverrides', sheet: p.sheet, keys: p.keys, v: was,
-          dropEmpty: !existed,
+          // `dropEmpty` BOTH WAYS. Undoing the removal of the last override used
+          // to leave `cells: {}` behind on the undoing replica, while every peer
+          // received the change through a path that drops the container. Twelve
+          // bytes in the file, and a document that no longer matches its own
+          // collaborators — the engine normalised it afterwards, but the store
+          // should not create the divergence in the first place.
+          dropEmpty: !existed || p.dropEmpty === true,
         },
         touched: {
           sheet: p.sheet,
@@ -357,6 +387,11 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       }
       sheet.rids = compressRids(flat)
       raiseWatermark(sheet, p.rids)
+      // put back whatever the delete took with it
+      if (p.overrides) {
+        sheet.cells ??= {}
+        for (const [k, v] of Object.entries(p.overrides)) sheet.cells[k] = v
+      }
       return {
         inverse: { op: 'deleteRows', sheet: p.sheet, rids: p.rids },
         touched: { sheet: p.sheet, rids: p.rids, structural: true },
@@ -391,10 +426,36 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
         }
       }
       sheet.rids = compressRids(flat)
+
+      // TAKE THE ROW'S OVERRIDES WITH IT, and hand them to the inverse.
+      //
+      // A deleted row's `cells` entries used to be left behind — orphaned, keyed
+      // to a rid that no longer names anything, and resurrected on top of
+      // whatever came back. rowcol.deleteRowsAt clears them, so the UI path was
+      // safe; but `insertRows`' own inverse is a BARE deleteRows, so undoing an
+      // insert went through here and stranded any override added to that row in
+      // the meantime — on the undoing replica only, since the sync engine strips
+      // them everywhere else. That is a divergence, and it is invisible.
+      const doomed = new Set(taken.map((r) => r.rid))
+      const overKeys: string[] = []
+      const overWas: Array<CellOverride | null> = []
+      for (const k of Object.keys(sheet.cells ?? {})) {
+        const i = k.indexOf(':')
+        if (i < 0 || !doomed.has(Number(k.slice(i + 1)))) continue
+        overKeys.push(k)
+        overWas.push(sheet.cells![k])
+        delete sheet.cells![k]
+      }
+      const hadCells = sheet.cells !== undefined
+      if (sheet.cells && !Object.keys(sheet.cells).length) delete sheet.cells
+
+      const overrides: Record<string, CellOverride> = {}
+      overKeys.forEach((k, i) => { const v = overWas[i]; if (v) overrides[k] = v })
       return {
         inverse: {
           op: 'insertRows', sheet: p.sheet,
           rids: taken.map((r) => r.rid), at: taken.map((r) => r.at), values: restore,
+          ...(overKeys.length ? { overrides, dropEmptyCells: !hadCells } : {}),
         },
         touched: { sheet: p.sheet, rids: p.rids, structural: true },
       }
@@ -460,6 +521,20 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       return {
         inverse: { op: 'setMeasure', name: p.name, measure: was, dropEmpty: !existed },
         touched: {},
+      }
+    }
+
+    case 'setSheet': {
+      const at = doc.sheets.findIndex((sh) => sh.id === p.id)
+      const was = at < 0 ? undefined : doc.sheets[at]
+      if (p.sheet === undefined) { if (at >= 0) doc.sheets.splice(at, 1) }
+      else if (at >= 0) doc.sheets[at] = p.sheet
+      else if (typeof p.at === 'number' && p.at >= 0 && p.at <= doc.sheets.length) {
+        doc.sheets.splice(p.at, 0, p.sheet)
+      } else doc.sheets.push(p.sheet)
+      return {
+        inverse: { op: 'setSheet', id: p.id, sheet: was, at: at < 0 ? undefined : at },
+        touched: { all: true },
       }
     }
 
@@ -560,6 +635,27 @@ export class Store {
 
   private emit(ev: StoreEvent): void {
     for (const fn of this.listeners.get(ev) ?? []) fn()
+  }
+
+  /**
+   * The document changed UNDERNEATH this store — a collaborator's edit applied
+   * surgically, not an edit made here.
+   *
+   * It is deliberately not `commit`: somebody else's change is not an entry in
+   * your undo history, and routing it through the undo stack would let you
+   * "undo" a keystroke you never made. But every listener still has to repaint,
+   * so this stamps `modified`, invalidates everything and emits the same events
+   * an edit does.
+   *
+   * The alternative, which is what the sync session did before this existed,
+   * was to reach through `unknown` and call the PRIVATE `emit`. That works
+   * until the day the event names change, and nothing tells you.
+   */
+  changedRemotely(touched: Touched = { all: true }): void {
+    this.doc.modified = new Date().toISOString()
+    this.lastTouched = touched
+    this.emit('doc')
+    this.emit('view')
   }
 
   /** The last invalidation, for a listener that wants to repaint precisely. */

@@ -364,16 +364,20 @@ export class SyncSession {
    * not an entry in your undo history.
    */
   private afterRemoteChange() {
-    // `emit` is PRIVATE on the Store — the public surface has no "something
-    // changed underneath you" verb yet — so this reaches through `unknown`
-    // rather than an intersection, which TypeScript collapses to `never`.
-    const store = this.store as unknown as {
+    // `store.changedRemotely()` is the public verb for exactly this: stamp
+    // modified, invalidate everything, emit what an edit emits — without
+    // touching the undo stack, because a collaborator's change is not an entry
+    // in your history. This used to reach through `unknown` for the PRIVATE
+    // `emit`, which works right up until the event names change.
+    const store = this.store as Store & { changedRemotely?: (t?: unknown) => void }
+    if (typeof store.changedRemotely === 'function') { store.changedRemotely(); return }
+    const legacy = this.store as unknown as {
       doc: DashDoc; lastTouched: unknown; emit?: (ev: string) => void
     }
-    store.doc.modified = new Date().toISOString()
-    store.lastTouched = { all: true }
-    store.emit?.('doc')
-    store.emit?.('view')
+    legacy.doc.modified = new Date().toISOString()
+    legacy.lastTouched = { all: true }
+    legacy.emit?.('doc')
+    legacy.emit?.('view')
   }
 
   // --- presence -------------------------------------------------------------

@@ -440,17 +440,17 @@ real hole rather than a stylistic one.
    a hole and a column longer than the sheet has rows. It was reachable without
    collab too — `window.bento.commit` is a public API.
 
-3. **`deleteRows` should take the row's overrides with it**, as
+3. ~~**`deleteRows` should take the row's overrides with it**~~ **DONE.**, as
    `rowcol.deleteRowsAt` does. The inverse of `insertRows` is a bare
    `deleteRows`, so undoing an insert orphans any override added to the row in
    the meantime — on the undoing replica only, since the engine strips them
    everywhere else.
-4. **`setOverrides`' inverse should carry `dropEmpty`.** Undoing the removal of
+4. ~~**`setOverrides`' inverse should carry `dropEmpty`.**~~ **DONE.** Undoing the removal of
    the last override leaves `cells: {}` behind on the undoing replica while
    every peer receives it through a path that drops the container. Twelve bytes
    in the file, and a diverged document. The engine normalises it; the store
    should not create it.
-5. **A public "changed underneath you" event.** Remote ops are applied
+5. ~~**A public "changed underneath you" event.**~~ **DONE** — `store.changedRemotely()`. Remote ops are applied
    surgically and must not enter undo history, so the session cannot use
    `commit`; it currently calls the private `emit`.
 

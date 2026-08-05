@@ -161,6 +161,34 @@ roundTrip('setSheetProps', {
   s.undo()
   ok('condfmt' in (s.doc.sheets[0] as any), 'undo brings it back')
 }
+// SHEETS ARE PATCHES NOW, so adding or deleting one is undoable. Both used to
+// go through `replaceDoc`, which CLEARS the undo stack — so creating a pivot or
+// importing a CSV silently threw away every edit you could previously take back.
+{
+  const s = new Store(fresh())
+  const blank = { id: 'sh2', name: 'Second', kind: 'table', rids: [], columns: [], data: {}, steps: [] }
+  s.commit({ op: 'setCells', sheet: 'sh1', col: 'amount', rids: [1], v: [111] })
+  s.commit({ op: 'setSheet', id: 'sh2', sheet: blank as never })
+  ok(s.doc.sheets.length === 2, 'a sheet can be added by patch')
+  s.undo()
+  ok(s.doc.sheets.length === 1, 'and removed again by undo')
+  ok(s.canUndo, 'AND the edit before it is still on the stack — replaceDoc would have cleared it')
+  s.undo()
+  ok(readCell((s.doc.sheets[0] as any).data.amount, 0) === 10,
+    'so the earlier edit is still reachable')
+
+  // position, because sheet order is the tab order
+  const t = new Store(fresh())
+  const mk = (id: string) => ({ id, name: id, kind: 'table', rids: [], columns: [], data: {}, steps: [] })
+  t.commit({ op: 'setSheet', id: 'a', sheet: mk('a') as never })
+  t.commit({ op: 'setSheet', id: 'b', sheet: mk('b') as never })
+  t.commit({ op: 'setSheet', id: 'a', sheet: undefined })
+  ok(JSON.stringify(t.doc.sheets.map((x) => x.id)) === JSON.stringify(['sh1', 'b']), 'deleting removes it')
+  t.undo()
+  ok(JSON.stringify(t.doc.sheets.map((x) => x.id)) === JSON.stringify(['sh1', 'a', 'b']),
+    'and undo puts it back WHERE IT WAS, not at the end — sheet order is the tab order')
+}
+
 roundTrip('setView', {
   op: 'setView', id: 'v1',
   view: { id: 'v1', name: 'Overview', w: 12, h: 8, tiles: [] },
