@@ -18,7 +18,7 @@
   position: fixed;
   inset: 0;
   z-index: 10000; /* above .dx-pop (9999): a popover left open must not sit on top */
-  background: rgba(20, 30, 45, 0.42);
+  background: var(--scrim);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -28,7 +28,7 @@
 }
 
 .dx-about {
-  background: var(--bg);
+  background: var(--surface);
   color: var(--ink);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-dialog);
@@ -83,7 +83,7 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   padding: 4px 7px;
-  background: #fff;
+  background: var(--surface);
   color: inherit;
   width: 100%;
 }
@@ -107,7 +107,7 @@
   border-radius: var(--radius);
   padding: 8px;
   resize: vertical;
-  background: #fff;
+  background: var(--surface);
   color: inherit;
 }
 .dx-about-paste:focus { outline: none; border-color: var(--accent); }
@@ -136,7 +136,7 @@
   padding: 5px 8px;
   cursor: pointer;
 }
-.dx-about-ver:hover { background: var(--panel); }
+.dx-about-ver:hover { background: var(--hover); }
 .dx-about-ver span:first-child { flex: 1 1 auto; font-variant-numeric: tabular-nums; }
 .dx-about-ver span:last-child { color: var(--accent); }
 

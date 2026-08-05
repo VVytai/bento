@@ -2,15 +2,108 @@
    Copyright (c) 2026 The Bento authors
    bento/dash — the whole interface. One stylesheet; it ships deflated. */
 
+/* ————— THE PALETTE, AND THE THEME SWITCH —————
+   Two grounds, one set of names. Every colour in dash — here, in panels.css,
+   pivot.css, dashboard.css, story.css, saveui.css and about.css — resolves
+   through a token below, and no component file states a colour inside a media
+   query. Adding a surface means reaching for a token; if none fits, add one
+   HERE with both of its values rather than writing a hex where it is used.
+
+   THE THEME IS A VIEWER PREFERENCE AND NEVER ENTERS THE WORKBOOK — the same
+   rule as the interface language and reduced motion (PLATFORM §8). Two people
+   opening one file may sit in different themes exactly as they may read it in
+   different languages. `doc.theme` in model.ts is a DIFFERENT thing: that is
+   the document's own palette, it travels in the file, and it colours the
+   charts and the static preview. Do not conflate them; nothing here is ever
+   read from or written to the document.
+
+   HOW THE SWITCH WORKS. `light-dark()` resolves against the element's used
+   `color-scheme`, so a token's two values sit on ONE line where they can be
+   compared — and there is no second copy of the palette inside a
+   `prefers-color-scheme` block to fall out of step with the first. The default
+   `light dark` follows the OS; an explicit choice pins `color-scheme` through
+   a single rule about.ts injects, and it wins in BOTH directions (a reader on
+   a dark desktop who wants a light sheet is as real a case as the reverse).
+
+   `color-scheme` is also what turns the scrollbars, the caret, the native
+   selects and the resize grippers dark, and it is declared HERE rather than in
+   index.html's <meta name="color-scheme"> because a CSS declaration on the
+   root element beats that meta — verified in the browser, both directions.
+
+   WHICH TOKENS VARY: exactly the ones written as a `light-dark()` pair. The
+   plain values — the brand amber, the radii, the type scale, the row height —
+   are the same object on both grounds and are deliberately NOT paired. The
+   amber is the interesting one: it reads ON the dark ground at 9.25:1, so the
+   accent does not change when the lights go out. It is 2.02:1 on white, which
+   is why it is only ever a border, a badge or a mark there and never body
+   text — that was already true and the dark ground does not change it. */
 :root {
-  --ink: #1e2a3a;
-  --muted: #64748b;
-  --line: #e3e8ef;
-  --line-strong: #cbd5e1;
+  color-scheme: light dark;
+
+  /* ————— ground and chrome ————— */
+  --bg: light-dark(#ffffff, #0e1319);          /* the page, and the sheet itself */
+  --panel: light-dark(#f8fafc, #161c24);       /* chrome bands: top bar, status bar */
+  /* Raised opaque surfaces — menus, dialogs, popovers, inputs, buttons, the
+     side panels. On white it IS the page colour; on dark it has to lift off
+     the page or a menu floating over the grid has no edge but its shadow, and
+     shadows barely read on a dark ground. */
+  --surface: light-dark(#ffffff, #1b222c);
+  --hover: light-dark(#f1f5f9, #26303d);       /* menu rows, buttons, list items */
+  /* A wash for hover states drawn OVER unknown content (a chart band, a table
+     row that may already be tinted). Alpha, not a colour, for that reason. */
+  --wash: light-dark(rgb(0 0 0 / 0.04), rgb(255 255 255 / 0.07));
+  --line: light-dark(#e3e8ef, #1f2731);
+  --line-strong: light-dark(#cbd5e1, #2f3a49);
+  --ink: light-dark(#1e2a3a, #d6dee9);
+  --muted: light-dark(#64748b, #93a0b2);
   --accent: #f7a600;
-  --bg: #ffffff;
-  --panel: #f8fafc;
-  --sel: #fdf0d6;
+  --slash: #ff9e8a;                            /* the wordmark's peach */
+  --scrim: light-dark(rgb(20 30 45 / 0.42), rgb(2 5 9 / 0.66));
+  --shadow-pop: light-dark(0 12px 32px rgb(15 23 42 / 0.16), 0 12px 32px rgb(0 0 0 / 0.55));
+  --shadow-dialog: light-dark(0 24px 64px rgb(15 23 42 / 0.34), 0 24px 64px rgb(0 0 0 / 0.7));
+
+  /* ————— semantic ————— */
+  --warn-bg: light-dark(#fffbeb, #221b0d);     /* the findings strip */
+  --warn-ink: light-dark(#b45309, #f0b357);
+  --warn-chip: light-dark(#fef3c7, #3a2e10);
+  --err-ink: light-dark(#b91c1c, #ff9b8f);
+  --err-bg: light-dark(#fef2f2, #2b1618);
+  --up-ink: light-dark(#1f8a5b, #4fbf8b);
+  --down-ink: light-dark(#c0503c, #f08a78);
+  /* The toast inverts against the app on light and merely lifts on dark:
+     a white slab on a dark sheet is a flashbulb, not a status line. */
+  --toast-bg: light-dark(#1e2a3a, #2b3543);
+  --toast-ink: light-dark(#ffffff, #e8edf5);
+  /* Accent-tinted surfaces — the active sheet, a filter chip. Distinct from
+     --sel: this one means "this is the chosen one", not "this is selected
+     data", and the two stopped being the same colour when selection went
+     blue. */
+  --accent-wash: light-dark(#fdf0d6, #38290c);
+  /* NOT theme-varying, deliberately: the ink that goes over a cell the
+     DOCUMENT has coloured. See the conditional-formatting section below. */
+  --ink-on-fill: #1e2a3a;
+  /* How much of the sheet a data bar lets through. MEASURED: at 0.55 the
+     default amber bar over #0e1319 comes to rgb(142,100,11) and the sheet's
+     own ink on top of it is 3.9:1 — under AA on the one figure a data bar
+     exists to draw attention to. At 0.45 the same bar is 5.0:1 and still reads
+     as the same bar. (A rule may name any colour it likes, so this makes the
+     DEFAULT safe; it cannot promise anything about an arbitrary one.)
+
+     WRITTEN THE LONG WAY, and it is the only token that is: `light-dark()` is
+     a <color> function and nothing else. Fed a number it does not fail
+     loudly — the declaration is simply invalid, `opacity` falls back to its
+     initial 1, and the bar goes fully opaque. That is exactly what happened
+     here, and the audit caught it at 1.49:1. Any future NON-COLOUR token that
+     varies by theme needs this shape too. */
+  --bar-opacity: 0.55;
+  /* Chart text. charts-lite (kernel/src/charts.ts) bakes a literal #6B7280
+     into every axis label, legend entry and pie label unless the OPTION says
+     otherwise, and dash's chart.ts does not say otherwise — so on the dark
+     ground the labels came out at 3.6:1 and the axis was unreadable. The light
+     value here IS the kernel's default, so light-theme charts are untouched;
+     see the rule near .dx-chart-body for why CSS can reach them at all. */
+  --chart-ink: light-dark(#6b7280, #a7b3c4);
+
   /* COUPLED TO grid.ts `ROW_H`, and there is no mechanism keeping them honest.
      The body is virtualised: JS positions every row at `top: i * ROW_H` as an
      inline style, so this variable only sizes the cell that lands there.
@@ -24,16 +117,39 @@
 
   /* ————— the grid's own greys —————
      Split out from --line because they answer a different question. --line is
-     chrome: the edge of a panel, where one surface stops. These two are the
-     GRID, and a spreadsheet's gridlines are the strongest signal that what you
-     are looking at is a spreadsheet and not a table on a web page. At #e3e8ef
+     chrome: the edge of a panel, where one surface stops. These are the GRID,
+     and a spreadsheet's gridlines are the strongest signal that what you are
+     looking at is a spreadsheet and not a table on a web page. At #e3e8ef
      dash's grid had vertical rules only, no horizontal ones at all, and read as
      a web table with zebra striping — which is what it was. Excel and Sheets
-     both draw both axes at roughly this weight (Sheets' is #e0e0e0 on white)
-     and neither stripes. */
-  --grid-line: #d8dee7;
-  --grid-head: #eef1f6;   /* the header/gutter band — must read as a BAND */
-  --grid-head-on: #f6dfae; /* …and a selected row/column header, as a lit one */
+     both rule both axes and neither stripes.
+
+     THE WEIGHT CAME DOWN. A full 1px lattice at #d8dee7 on both axes is the
+     look of a spreadsheet from 2006: at that contrast the rules compete with
+     the figures, and a screen of numbers reads as a screen of boxes. Measured
+     against the paper, the rule drops from 1.35:1 to 1.14:1 — still a lattice
+     at any zoom, no longer a cage. The header band
+     came down with it: hierarchy in the header is carried by TYPE (11.5px
+     semibold, tracked, darker ink) rather than by a grey fill, which is the
+     one change that dates a spreadsheet fastest.
+
+     On the dark ground the pair invert about the sheet: lines slightly ABOVE
+     the page, the header band slightly above the lines. Ruling a dark sheet
+     with a darker line would work, but every scrolled seam then disappears
+     into the background the moment a shadow lands on it. */
+  --grid-line: light-dark(#edf0f4, #212a35);
+  --grid-head: light-dark(#fbfcfd, #151c25); /* the header/gutter band */
+  --grid-head-ink: light-dark(#4a5568, #a9b6c7);
+  --grid-head-on: light-dark(#dbe7fb, #1d3050); /* a selected row/column header */
+
+  /* ————— selection —————
+     Cool, and deliberately NOT the brand amber. The amber tint used to sit on
+     top of amber conditional-format data bars, so a selected cell and a cell
+     the document had coloured were the same warm smear; the two things are
+     unrelated and now cannot be confused. --sel-ring is the cursor cell's ring
+     and the range outline; --sel is the range fill. */
+  --sel: light-dark(#eef4ff, #16243c);
+  --sel-ring: light-dark(#2563eb, #3b82f6);
 
   /* ————— one scale, five surfaces —————
      The pivot, the dashboard, the story editor, the save menu and the About
@@ -43,11 +159,25 @@
   --radius: 7px;         /* controls: buttons, inputs, chips */
   --radius-lg: 10px;     /* floating surfaces: menus, popovers, cards */
   --radius-xl: 14px;     /* dialogs */
-  --shadow-pop: 0 12px 32px rgb(15 23 42 / 0.16);
-  --shadow-dialog: 0 24px 64px rgb(15 23 42 / 0.34);
+  /* the two shadows are theme-varying and live in the palette block above */
   --fs-ui: 13px;         /* control and menu text */
   --fs-small: 11.5px;    /* captions, sub-labels, meta */
   --fs-micro: 11px;      /* section headers, badges */
+}
+
+/* THE EXPLICIT OVERRIDE IS NOT IN THIS FILE, and that is not an oversight.
+   It is a `:root:root{color-scheme:…}` rule injected at boot by about.ts
+   inside a `data-bento-transient` <style>, because the natural version — an
+   attribute on <html> plus `:root[data-theme=…]` rules here — is CLONED INTO
+   EVERY SAVED FILE by capturePristine() and would force one reader's
+   preference on everyone who opened the workbook afterwards. The whole story
+   is in about.ts; what matters here is that flipping `color-scheme` is all an
+   override does, and every `light-dark()` pair above follows it.
+
+   What DOES belong here is the OS default for the one token light-dark()
+   cannot carry. */
+@media (prefers-color-scheme: dark) {
+  :root { --bar-opacity: 0.45; }
 }
 
 * { box-sizing: border-box; }
@@ -82,7 +212,7 @@ html, body {
   white-space: nowrap;
   flex: 0 0 auto;
 }
-.dx-slash { color: #ff9e8a; }
+.dx-slash { color: var(--slash); }
 .dx-title {
   font: inherit;
   font-weight: 600;
@@ -98,7 +228,7 @@ html, body {
   color: inherit;
 }
 .dx-title:hover { border-color: var(--line-strong); }
-.dx-title:focus { outline: none; border-color: var(--accent); background: #fff; }
+.dx-title:focus { outline: none; border-color: var(--accent); background: var(--surface); }
 
 .dx-group { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 /* everything after the insert group is pushed to the far end */
@@ -113,13 +243,13 @@ html, body {
   padding: 5px 10px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: #fff;
+  background: var(--surface);
   color: inherit;
   cursor: pointer;
   white-space: nowrap;
   flex: 0 0 auto;
 }
-.dx-btn:hover { background: var(--panel); border-color: var(--muted); }
+.dx-btn:hover { background: var(--hover); border-color: var(--muted); }
 .dx-btn:active { transform: translateY(0.5px); }
 .dx-btn[disabled] { opacity: 0.45; cursor: default; }
 .dx-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -170,7 +300,7 @@ html, body {
   flex-direction: column;
   gap: 1px;
   padding: 5px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
@@ -183,7 +313,7 @@ html, body {
   background: transparent;
   padding: 6px 9px;
 }
-.dx-menu .dx-btn:hover { background: var(--panel); }
+.dx-menu .dx-btn:hover { background: var(--hover); }
 .dx-menu .dx-i { color: var(--muted); }
 /* Labels ALWAYS show inside an OPEN menu panel. The narrow-window rule below
    strips them from bar buttons, and the first pass stripped them here too —
@@ -224,10 +354,10 @@ html, body {
 .dx-insert-dd > .dx-menu > .dx-btn {
   width: auto;
   border: 1px solid var(--line-strong);
-  background: #fff;
+  background: var(--surface);
   padding: 5px 10px;
 }
-.dx-insert-dd > .dx-menu > .dx-btn:hover { background: var(--panel); border-color: var(--muted); }
+.dx-insert-dd > .dx-menu > .dx-btn:hover { background: var(--hover); border-color: var(--muted); }
 .dx-insert-dd > .dx-menu .dx-i { color: inherit; }
 
 /* 1280, not slides' 1200. MEASURED: with every label showing, the insert group
@@ -261,7 +391,7 @@ html, body {
     min-width: 200px;
     padding: 5px;
     border: 1px solid var(--line-strong);
-    background: #fff;
+    background: var(--surface);
     box-shadow: var(--shadow-pop);
   }
   .dx-insert-dd.open > .dx-menu { display: flex; }
@@ -311,7 +441,7 @@ html, body {
 .dx-findings {
   flex: 0 0 auto;
   border-bottom: 1px solid var(--line);
-  background: #fffbeb;
+  background: var(--warn-bg);
   padding: 8px 12px;
   font-size: 13px;
   display: grid;
@@ -333,7 +463,7 @@ html, body {
   border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  background: #fff;
+  background: var(--bg);
   min-width: 0;
 }
 .dx-chart[hidden] { display: none; }
@@ -369,6 +499,18 @@ html, body {
 }
 .dx-chart-body > * { flex: 1 1 auto; min-height: 0; }
 .dx-chart-body svg { display: block; width: 100%; height: 100%; }
+/* CHART TEXT IS REACHABLE FROM CSS, and this is the only reason the dark theme
+   did not need a change inside the chart engine: charts-lite writes its label
+   colour as the `fill` PRESENTATION ATTRIBUTE, and any author rule beats a
+   presentation attribute. Every piece of text in a charts-lite plot takes the
+   same colour (axis labels, legend, pie labels all default to one grey), so a
+   blanket rule cannot recolour something that was meant to differ. Marks are
+   `rect`/`path`/`circle` and are never touched — the series palette is
+   DOCUMENT data and must not move with the viewer's theme.
+   The proper fix lives in dash/src/chart.ts, which owns the option and should
+   set axisLabel/legend.textStyle colours; this rule is the half that fits in a
+   stylesheet. */
+.dx-chart-body svg text { fill: var(--chart-ink); }
 
 /* stack on a phone rather than squeezing both */
 @media (max-width: 760px) {
@@ -376,12 +518,13 @@ html, body {
   .dx-chart { flex: 0 0 45%; border-left: 0; border-top: 1px solid var(--line); }
 }
 .dg-scroll { position: absolute; inset: 0; overflow: auto; }
-/* 13px, not the 14px the rest of the UI runs at. A grid is read a hundred
+/* 12.5px, not the 14px the rest of the UI runs at. A grid is read a hundred
    cells at a time and a spreadsheet's type is always a step smaller than its
    chrome's — Excel's default is 11pt against a 12pt UI, Sheets' 10pt against
    13px. At 14px in a 30px row the type filled the row and the grid read as
-   prose; a step down gives the figures air on both sides. */
-.dg-table { position: relative; min-width: max-content; font-size: 13px; }
+   prose; at 12.5 in a 20px row the figures have air on both sides, which is
+   what makes a dense grid legible rather than merely small. */
+.dg-table { position: relative; min-width: max-content; font-size: 12.5px; }
 /* the sizer is the ONLY absolutely-positioned region: header and totals stay in
    flow so `position: sticky` resolves against the scroller */
 .dg-sizer { position: relative; }
@@ -421,7 +564,7 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 .dg-cell.dg-editing {
-  background: #fff;
+  background: var(--bg);
   box-shadow: inset 0 0 0 2px var(--accent);
   overflow: visible;
   cursor: text;
@@ -436,7 +579,7 @@ html, body {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 5px;
   padding: 0 5px;
@@ -445,8 +588,8 @@ html, body {
 }
 .dg-type:hover { border-color: var(--accent); color: var(--ink); }
 .dg-warn {
-  color: #b45309;
-  background: #fef3c7;
+  color: var(--warn-ink);
+  background: var(--warn-chip);
   border-radius: 50%;
   width: 15px;
   height: 15px;
@@ -455,7 +598,7 @@ html, body {
   flex: 0 0 auto;
   cursor: help;
 }
-.dg-err { color: #b91c1c; background: #fef2f2; font-weight: 600; }
+.dg-err { color: var(--err-ink); background: var(--err-bg); font-weight: 600; }
 .dg-fx {
   font: 600 9px/1.6 inherit;
   color: var(--accent);
@@ -504,7 +647,7 @@ html, body {
   gap: 0;
   padding: 4px 10px;
   border-bottom: 1px solid var(--line-strong);
-  background: #fff;
+  background: var(--bg);
   flex: 0 0 auto;
   min-height: 32px;
 }
@@ -544,7 +687,7 @@ html, body {
   align-self: center;
 }
 .dx-fx-input:hover { border-color: var(--line); }
-.dx-fx-input:focus { outline: none; border-color: var(--accent); background: #fff; }
+.dx-fx-input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
 
 /* ————— status bar —————
    Excel's reads left: what you are looking at; right: what the selection adds
@@ -576,17 +719,20 @@ html, body {
 .dx-status-sum:empty { border: 0; padding: 0; }
 
 /* ————— row gutter and column letters ————— */
-/* Row numbers and the corner: one BAND, and it has to look like one. Both
-   Excel and Sheets tint the headers distinctly from the sheet and rule them
-   off with a heavier edge — that band is what tells you where the data starts.
-   --panel (#f8fafc, two shades off white) did not. */
+/* Row numbers and the corner: one band, but a QUIET one. A grey header slab is
+   the second thing that dated this grid — Excel 2007 painted one and every
+   spreadsheet since has been walking it back. What has to be true is that the
+   header reads as not-data; a fill two shades off the sheet plus a heavier
+   bottom edge does that, and the rest of the separation is carried by type
+   (see .dg-hmain below). Row numbers are 10.5px: they are a coordinate, and
+   a coordinate should never out-weigh the figure it is pointing at. */
 .dg-gutter {
   width: 52px;
   flex: 0 0 52px;
   background: var(--grid-head);
-  color: var(--muted);
+  color: var(--grid-head-ink);
   text-align: right;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 500;
   border-right: 2px solid var(--line-strong);
   position: sticky;
@@ -595,7 +741,7 @@ html, body {
   cursor: pointer;
   user-select: none;
 }
-.dg-gutter:hover { background: #e4e9f1; color: var(--ink); }
+.dg-gutter:hover { background: var(--hover); color: var(--ink); }
 .dg-gutter-on { background: var(--grid-head-on); color: var(--ink); font-weight: 700; }
 .dg-corner {
   width: 52px;
@@ -609,32 +755,67 @@ html, body {
 }
 .dg-letter {
   font: 600 10px/1.6 inherit;
-  color: var(--muted);
+  color: var(--grid-head-ink);
   letter-spacing: 0.05em;
   flex: 0 0 auto;
   cursor: pointer;
   padding: 0 3px;
   border-radius: 4px;
 }
-.dg-letter:hover { background: var(--line-strong); color: var(--ink); }
+.dg-letter:hover { background: var(--hover); color: var(--ink); }
 
-/* ————— selection ————— */
+/* ————— selection —————
+   COOL, not the brand amber. The old amber tint landed on top of amber
+   conditional-format data bars — two unrelated meanings in one warm smear, and
+   the reader had no way to tell "I selected this" from "the document coloured
+   this". Selection is chrome; conditional formatting is data; they no longer
+   share a hue.
+
+   `!important` on the fill because a conditional-format background is written
+   INLINE by grid.ts, and an inline style beats any selector. Selection has to
+   win: a selected cell that does not look selected is a lost cursor. */
 .dg-cell.dg-sel { background: var(--sel) !important; }
 .dg-cell.dg-cursor {
-  box-shadow: inset 0 0 0 2px var(--accent);
-  background: #fff !important;
+  box-shadow: inset 0 0 0 2px var(--sel-ring);
+  background: var(--bg) !important;
   z-index: 1;
 }
 .dg-cell { position: relative; }
 .dg-v { position: relative; z-index: 1; }
 
-/* ————— conditional formatting ————— */
+/* ————— conditional formatting —————
+   THESE COLOURS ARE DATA, NOT CHROME. A colour scale and a data bar are
+   computed from the numbers by condfmt.ts and travel in the file, so the theme
+   does NOT recolour them: two people looking at one workbook have to be
+   looking at the same encoding, or the colours stop meaning anything that can
+   be discussed. What the theme changes is the INK ON TOP of them.
+
+   A data bar is drawn behind the figure at 55% over whatever ground the sheet
+   has, so it tints rather than replaces and the sheet's own ink still reads.
+   The bar therefore needs nothing here. A colour-SCALE fill does: it is an
+   opaque wash written inline onto the cell, and the fills a scale produces are
+   pale by construction (they interpolate between two or three chosen colours,
+   and every preset picks light ones for a white sheet). Light ink on a pale
+   green cell is invisible, so a cell carrying a data-driven fill takes the
+   LIGHT theme's ink on both themes — which also means one cell reads the same
+   in both, and that is the right answer for a cell whose colour is data.
+
+   `[style*='background']` is how a cell announces one: grid.ts appends
+   `;background:<colour>` to the inline style for exactly this case and for
+   nothing else (a frozen column gets position/left, every cell gets a width).
+   A rule that also sets an explicit text colour still wins — it is written
+   inline too, and the author meant it. Selection replaces the fill with the
+   selection tint, so a selected cell opts back out and takes the theme's ink
+   again. */
+.dg-cell[style*='background'] { color: var(--ink-on-fill); }
+.dg-cell.dg-sel[style*='background'] { color: var(--ink); }
+
 .dg-bar {
   position: absolute;
   top: 5px;
   bottom: 5px;
   border-radius: 2px;
-  opacity: 0.55;
+  opacity: var(--bar-opacity);
   z-index: 0;
 }
 
@@ -647,8 +828,30 @@ html, body {
   font-size: 10px;
 }
 .dg-filter:hover { color: var(--accent); }
-.dg-h.dg-filtered { background: var(--grid-head-on); }
+/* A filtered column is amber and a SELECTED one is blue — the two states are
+   unrelated and used to share --grid-head-on, so a filter looked like a
+   selection that would not go away. */
+.dg-h.dg-filtered { background: var(--accent-wash); }
 .dg-h.dg-filtered .dg-filter { color: var(--accent); }
+/* THE SELECTED COLUMN'S HEADER — the counterpart to .dg-gutter-on, and
+   deliberately the SAME strength: same band colour, same step up to full ink.
+   Two headers marking one selection have to look like one gesture; a column
+   header lit differently from the row gutter reads as a second, competing
+   thing being selected.
+
+   The `.dg-hstrip` rule is not optional. The header is two stacked boxes and
+   the letter strip paints its OWN --grid-head background, so tinting only
+   .dg-h lights the name row and leaves the letter — the part the eye actually
+   tracks a column by — sitting on the unselected band.
+
+   It also outranks .dg-filtered above (later, same specificity), which is the
+   right way round: the filter is a persistent state and the selection is the
+   one the hand is on. Nothing is lost by yielding — the filter caret keeps its
+   amber, and that is the mark that says a filter exists. */
+.dg-h.dg-h-on,
+.dg-h.dg-h-on .dg-hstrip { background: var(--grid-head-on); }
+.dg-h.dg-h-on .dg-letter,
+.dg-h.dg-h-on .dg-name { color: var(--ink); }
 .dg-grip {
   position: absolute;
   right: -3px;
@@ -669,7 +872,7 @@ html, body {
   position: fixed;
   z-index: 9999;
   min-width: 210px;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
@@ -689,7 +892,7 @@ html, body {
   cursor: pointer;
   color: inherit;
 }
-.dx-pop button:hover { background: var(--panel); }
+.dx-pop button:hover { background: var(--hover); }
 .dx-pop-sep { height: 1px; background: var(--line); margin: 4px 6px; }
 .dx-pop-row {
   display: flex;
@@ -713,7 +916,7 @@ html, body {
 .dg-outline {
   position: absolute;
   pointer-events: none;
-  border: 2px solid var(--accent);
+  border: 2px solid var(--sel-ring);
   border-radius: 2px;
   z-index: 4;
 }
@@ -723,14 +926,14 @@ html, body {
   bottom: -4px;
   width: 8px;
   height: 8px;
-  background: var(--accent);
-  border: 1px solid #fff;
+  background: var(--sel-ring);
+  border: 1px solid var(--bg);
   border-radius: 1px;
   cursor: crosshair;
   pointer-events: auto;
 }
 /* the cursor cell no longer needs its own ring — the outline draws it */
-.dg-cell.dg-cursor { box-shadow: none; background: #fff !important; }
+.dg-cell.dg-cursor { box-shadow: none; background: var(--bg) !important; }
 .dg-scroll:focus { outline: none; }
 
 /* Frozen columns stay put while the rest scrolls under them, so they need an
@@ -744,6 +947,11 @@ html, body {
 .dg-cell.dg-frozen { background: var(--bg); z-index: 2; }
 .dg-head-row .dg-cell.dg-frozen { background: var(--grid-head); }
 .dg-head-row .dg-cell.dg-frozen { z-index: 5; }
+/* …and it still lights with the selection. This rule exists only to out-rank
+   the one above it, which is more specific than the .dg-h-on pair and would
+   otherwise leave the frozen columns as the one place a selected header stays
+   grey. */
+.dg-head-row .dg-cell.dg-frozen.dg-h-on { background: var(--grid-head-on); }
 .dg-cell.dg-frozen.dg-freeze-edge { border-right: 2px solid var(--line-strong); }
 .dg-cell.dg-sel.dg-frozen { background: var(--sel); }
 
@@ -754,11 +962,13 @@ html, body {
 .dg-head-row { height: calc(var(--row-h) + 20px); }
 .dg-head-row .dg-cell { height: calc(var(--row-h) + 20px); line-height: normal; padding: 0; }
 .dg-h { flex-direction: column; align-items: stretch; gap: 0; }
+/* --line, not --line-strong: this is a seam INSIDE the header, and at the
+   heavier weight the two-line header read as two stacked bands. */
 .dg-hstrip {
   position: relative;
   display: block;
   height: 19px;
-  border-bottom: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line);
   background: var(--grid-head);
 }
 .dg-h .dg-letter {
@@ -784,6 +994,12 @@ html, body {
   opacity: 0.75;
 }
 .dg-hstrip .dg-type:hover { opacity: 1; color: var(--accent); }
+/* HIERARCHY FROM TYPE, NOT FROM FILL. The column name is the one piece of
+   furniture that has to out-rank the data without a heavy band under it:
+   11.5px (a step below the 12.5px figures), semibold, tracked slightly open,
+   and a darker ink than the muted grey the rest of the header runs at. Tracking
+   is what makes a smaller, quieter label still read as a heading — it is the
+   move that separates a 2024 spreadsheet from a 2006 one. */
 .dg-hmain {
   display: flex;
   align-items: center;
@@ -791,6 +1007,10 @@ html, body {
   flex: 1 1 auto;
   min-width: 0;
   padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--grid-head-ink);
 }
 .dg-head-row .dg-corner { padding: 0; }
 .dx-pop-on { color: var(--accent); font-weight: 600; }

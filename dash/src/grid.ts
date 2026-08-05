@@ -283,7 +283,14 @@ export class Grid {
       const arrow = this.sort?.col === c.id ? (this.sort.dir === 'asc' ? ' ▲' : ' ▼') : ''
       const filtered = this.filters.some((f) => f.col === c.id)
       const fz = this.freeze(ci)
-      return `<div class="dg-cell dg-h${filtered ? ' dg-filtered' : ''}${fz.cls}" style="${fz.st}width:${c.w ?? 130}px" data-col="${c.id}" data-ci="${ci}">` +
+      // The COLUMN header lights with the selection, as the row gutter already
+      // did. Excel and Sheets both mark the selected row AND column headers,
+      // and with only one of the two the eye keeps losing which column it is
+      // in on a wide sheet — the header is the only thing still on screen once
+      // the cursor has scrolled away.
+      const box = this.sel.bounds()
+      const on = ci >= box.left && ci <= box.right ? ' dg-h-on' : ''
+      return `<div class="dg-cell dg-h${filtered ? ' dg-filtered' : ''}${on}${fz.cls}" style="${fz.st}width:${c.w ?? 130}px" data-col="${c.id}" data-ci="${ci}">` +
         // TWO LINES, because one could not hold them: the letter, the name,
         // the type control, the filter arrow and the resize grip were sharing
         // 130px and the NAME lost — every column read "A R", "B O", "C :".

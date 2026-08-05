@@ -121,7 +121,7 @@
 .dxp-c[tabindex]:hover,
 .dxp-c[tabindex]:focus-visible {
   background: var(--sel);
-  outline: 1px solid var(--accent);
+  outline: 1px solid var(--sel-ring);
   outline-offset: -1px;
 }
 
@@ -132,7 +132,7 @@
    me? Two different treatments for one idea is how a suite stops reading as one. */
 .dxp-findings {
   border-left: 3px solid var(--accent);
-  background: #fffbeb;
+  background: var(--warn-bg);
   border-radius: 0 var(--radius) var(--radius) 0;
   padding: 6px 10px;
   margin: 0 0 6px;

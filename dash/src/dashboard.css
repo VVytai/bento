@@ -45,7 +45,7 @@
   min-height: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  background: var(--bg);
+  background: var(--surface);
   overflow: hidden;
 }
 
@@ -123,7 +123,7 @@
   padding: 3px 9px;
   border: 1px solid var(--accent);
   border-radius: 999px;
-  background: var(--sel);
+  background: var(--accent-wash);
   color: var(--ink);
   cursor: pointer;
 }
@@ -133,9 +133,21 @@
 /* ————— KPI ————— */
 .dbx-kpi .dbx-body { justify-content: center; }
 .dbx-value {
-  font-size: clamp(20px, 3.4vw, 30px);
+  /* Sized to the BOX, not to taste. The tile is a fixed-height grid cell with
+     `overflow: hidden`, so a figure that wants more than its share is simply
+     cut — measured at 30px/33px: the value needed 34px of height in a 20px box
+     and 166px of width in 125px, and "£97,050.00" rendered as "£97,05" with
+     the descenders sliced off. A KPI tile that truncates its own number is
+     worse than one with smaller type, because the reader cannot tell it
+     happened.
+     `flex: 0 0 auto` stops the column squashing the line box below its own
+     line-height; `min-width: 0` is what lets the ellipsis actually engage
+     inside a flex child. */
+  flex: 0 0 auto;
+  min-width: 0;
+  font-size: clamp(18px, 2.2vw, 26px);
   font-weight: 650;
-  line-height: 1.1;
+  line-height: 1.2;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -145,8 +157,8 @@
 .dbx-sub { font-size: var(--fs-small); color: var(--muted); padding-top: 2px; }
 /* Direction is a hue AND a sign in the text, never hue alone — a colour-blind
    reader gets the same answer. */
-.dbx-up { color: #1f8a5b; }
-.dbx-down { color: #c0503c; }
+.dbx-up { color: var(--up-ink); }
+.dbx-down { color: var(--down-ink); }
 
 /* ————— charts ————— */
 .dbx-svg { flex: 1 1 auto; min-height: 0; width: 100%; overflow: visible; }
@@ -159,7 +171,7 @@
 /* The pick target is the whole band, so a category with no bar — a null, which
    is a gap and not a zero — can still be clicked. Invisible, never absent. */
 .dbx-hit { fill: transparent; cursor: pointer; }
-.dbx-hit:hover { fill: rgb(0 0 0 / 4%); }
+.dbx-hit:hover { fill: var(--wash); }
 .dbx-band-on { fill: var(--sel); }
 .dbx-bar, .dbx-slice, .dbx-dot, .dbx-key { cursor: pointer; }
 /* Cross-highlight: what is NOT selected fades, rather than vanishing. A tile
@@ -209,7 +221,7 @@
   max-width: 220px;
 }
 .dbx-table tr[data-tile] { cursor: pointer; }
-.dbx-table tr[data-tile]:hover td { background: rgb(0 0 0 / 3%); }
+.dbx-table tr[data-tile]:hover td { background: var(--wash); }
 .dbx-row-on td { background: var(--sel); }
 
 /* Toggled from the topbar. `.dbx` sets no `display`, so the UA default for

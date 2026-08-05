@@ -2,10 +2,17 @@
    Copyright (c) 2026 The Bento authors
    Data story mode — the present overlay and the little authoring panel.
 
-   The overlay is DARK and dash is light, deliberately: the moment the room
-   dims, a white 1400px rectangle is the brightest object in it. slides' present
-   overlay makes the same call, and the two surfaces share this palette so a
-   deck and a workbook presented back to back do not flash at the audience.
+   The overlay is DARK on BOTH themes, deliberately: the moment the room dims, a
+   white 1400px rectangle is the brightest object in it. slides' present overlay
+   makes the same call, and the two surfaces share this palette so a deck and a
+   workbook presented back to back do not flash at the audience. So the values
+   below are literal rather than tokens — this surface does not follow the
+   viewer's theme, it follows the room, and a `light-dark()` here would make a
+   presenter's light-theme preference reach the audience's screen.
+
+   The AUTHORING panel at the bottom of the file is the opposite: it belongs to
+   the editor, never to the show, so it is tokens throughout and it does follow
+   the theme.
 
    Everything here is `position: fixed` and mounted on <body>, so it is immune
    to the app's flex layout — and it carries `direction: ltr` because it renders
@@ -35,6 +42,11 @@
   overflow: hidden;
 }
 .ds-stage > svg { width: 100%; height: 100%; display: block; }
+/* The stage is dark in every theme, and charts-lite defaults its label colour
+   to a mid grey sized for white paper — 3.3:1 against #0e1420. `fill` is a
+   presentation attribute, so this rule wins; the marks keep the document's own
+   palette. Literal, like everything else on this surface. */
+.ds-stage svg text { fill: #b9c4d3; }
 
 .ds-empty {
   display: grid;
@@ -95,7 +107,7 @@
   transition: background 0.18s, transform 0.18s;
 }
 .ds-dot:hover { background: rgba(255, 255, 255, 0.45); }
-.ds-dot.on { background: var(--accent, #f7a600); transform: scale(1.35); }
+.ds-dot.on { background: var(--accent); transform: scale(1.35); }
 .ds-count { font-variant-numeric: tabular-nums; color: #8c99ad; font-size: var(--fs-small); }
 
 /* Same metrics as .dx-btn in styles.css — padding, radius, type size — and a
@@ -140,9 +152,9 @@
   max-height: min(60vh, 560px);
   display: flex;
   flex-direction: column;
-  background: var(--bg, #fff);
-  color: var(--ink, #1e2a3a);
-  border: 1px solid var(--line-strong, #cbd5e1);
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
   font-size: var(--fs-ui);
@@ -152,19 +164,19 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--line, #e3e8ef);
+  border-bottom: 1px solid var(--line);
 }
 .ds-ed-head .ds-btn,
 .ds-ed-foot .ds-btn,
 .ds-step .ds-btn {
-  background: #fff;
+  background: var(--surface);
   color: inherit;
-  border-color: var(--line-strong, #cbd5e1);
+  border-color: var(--line-strong);
 }
 .ds-ed-head .ds-btn:hover,
 .ds-ed-foot .ds-btn:hover,
-.ds-step .ds-btn:hover { background: var(--panel, #f8fafc); }
-.ds-primary { border-color: var(--accent, #f7a600) !important; }
+.ds-step .ds-btn:hover { background: var(--hover); }
+.ds-primary { border-color: var(--accent) !important; }
 
 .ds-steps {
   list-style: none;
@@ -180,12 +192,12 @@
   padding: 5px 6px;
   border-radius: var(--radius);
 }
-.ds-step:hover { background: var(--panel, #f8fafc); }
+.ds-step:hover { background: var(--hover); }
 .ds-n {
   flex: 0 0 auto;
   width: 20px;
   text-align: right;
-  color: var(--muted, #64748b);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 .ds-fields { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -198,14 +210,14 @@
   background: transparent;
   color: inherit;
 }
-.ds-cap-in:hover { border-color: var(--line-strong, #cbd5e1); }
-.ds-cap-in:focus { outline: none; border-color: var(--accent, #f7a600); background: #fff; }
-.ds-meta { font-size: var(--fs-micro); color: var(--muted, #64748b); padding-left: 6px; }
-.ds-warn { color: #b91c1c; font-weight: 600; }
-.ds-hint { margin: 0; padding: 14px 14px 6px; color: var(--muted, #64748b); }
+.ds-cap-in:hover { border-color: var(--line-strong); }
+.ds-cap-in:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.ds-meta { font-size: var(--fs-micro); color: var(--muted); padding-left: 6px; }
+.ds-warn { color: var(--err-ink); font-weight: 600; }
+.ds-hint { margin: 0; padding: 14px 14px 6px; color: var(--muted); }
 .ds-ed-foot {
   display: flex;
   gap: 8px;
   padding: 10px 12px;
-  border-top: 1px solid var(--line, #e3e8ef);
+  border-top: 1px solid var(--line);
 }
