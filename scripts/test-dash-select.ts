@@ -28,6 +28,7 @@
 //      repeats. Continuing a non-series invents data, and repeating a series is
 //      the thing people notice within one second of dragging.
 
+import { readFileSync } from 'node:fs'
 import {
   Selection, normalize, contains, size, rangeOf, keyToAction, applyMotion,
   tsvFromRange, parseTsv, fillDown, fillSeries,
@@ -424,6 +425,30 @@ const at = (s: Selection): [number, number] => [s.cursor.row, s.cursor.col]
   eq(fillSeries([true, false], 3), [true, false, true], 'booleans repeat')
   eq(fillSeries([null, null], 3), [null, null, null], 'blanks repeat')
   eq(fillSeries([1, 2, 3], 2), [1, 2], 'a series target shorter than the seeds truncates too')
+}
+
+// ROW HEIGHT IS DECLARED TWICE and the two must agree.
+//
+// grid.ts positions every virtualised row at `top: i * ROW_H` while its height
+// comes from the stylesheet's `--row-h`. When they disagree the grid
+// PERFORATES — cells shrink, row boxes do not — and that is what stopped the
+// Excel-density change the first time it was attempted. The grid writes the
+// property from the constant when it mounts, so the running app cannot drift;
+// this guards the stylesheet FALLBACK, which is what renders in the moment
+// before the grid exists.
+{
+  const src = readFileSync(new URL('../dash/src/grid.ts', import.meta.url), 'utf8')
+  const css = readFileSync(new URL('../dash/src/styles.css', import.meta.url), 'utf8')
+  const fromTs = Number(src.match(/^const ROW_H = (\d+)$/m)?.[1])
+  const fromCss = Number(css.match(/--row-h:\s*(\d+)px/)?.[1])
+  ok(Number.isFinite(fromTs), `grid.ts declares ROW_H (${fromTs})`)
+  ok(Number.isFinite(fromCss), `styles.css declares --row-h (${fromCss})`)
+  ok(fromTs === fromCss,
+    `and they AGREE (${fromTs} vs ${fromCss}) — disagreement perforates the grid`)
+  ok(fromTs <= 26,
+    `row height is spreadsheet density, not web-table density (${fromTs}px; Excel is 20, Sheets 21)`)
+  ok(src.includes("setProperty('--row-h'"),
+    'and grid.ts WRITES the property from the constant, so the running app cannot drift at all')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

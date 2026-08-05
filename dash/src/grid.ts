@@ -37,7 +37,24 @@ import {
   type CellSource,
 } from './cellformula.ts'
 
-const ROW_H = 30
+/**
+ * Row height, in px — SPREADSHEET density, not web-table density.
+ *
+ * Excel's default row is 20px at 96dpi and Google Sheets' is 21px, both with a
+ * ~13px face. dash sat at 30, which is why the grid read as a table on a web
+ * page: a third fewer rows on screen, and the eye has to travel further for
+ * every comparison a spreadsheet exists to make.
+ *
+ * THIS CONSTANT AND THE `--row-h` CUSTOM PROPERTY MUST AGREE. They are two
+ * declarations of one number — the rows are absolutely positioned at
+ * `top: i * ROW_H` from here while their height comes from the stylesheet — so
+ * a change to one alone perforates the grid: the cells shrink and the row
+ * boxes do not. That drift is not hypothetical; it is what stopped the density
+ * fix the first time it was tried. So the grid WRITES the property from this
+ * constant at build time, and the value in styles.css is only a fallback for
+ * anything that renders before the grid mounts.
+ */
+const ROW_H = 22
 const GUTTER_W = 52
 const OVERSCAN = 8
 
@@ -219,6 +236,8 @@ export class Grid {
       '<div class="dg-sizer"></div>' +
       '<div class="dg-foot-row"></div>' +
       '</div></div>'
+    // One number, written where the stylesheet can see it. See ROW_H.
+    this.host.style.setProperty('--row-h', `${ROW_H}px`)
     this.scroller = this.host.querySelector('.dg-scroll')!
     this.table = this.host.querySelector('.dg-sizer')!
     this.head = this.host.querySelector('.dg-head-row')!

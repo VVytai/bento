@@ -17,7 +17,10 @@
      Setting it to 26 to get Excel's density left the rows 30px apart with a
      4px transparent band between them — the gridlines stopped meeting and the
      grid looked perforated. Change one and you must change the other. */
-  --row-h: 30px;
+  /* FALLBACK ONLY — grid.ts writes this from its ROW_H constant when it
+     mounts, because the row boxes are positioned from that constant and the
+     two must never disagree. Editing it here alone changes nothing. */
+  --row-h: 22px;
 
   /* ————— the grid's own greys —————
      Split out from --line because they answer a different question. --line is
