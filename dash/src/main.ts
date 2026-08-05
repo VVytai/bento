@@ -25,12 +25,14 @@ import { configureApp, appConfig } from '../../kernel/src/app.ts'
 import {
   capturePristine, readEmbeddedDoc, serializeFile, serializeAuto, saveFile,
   parseEnvelope, decryptEnvelope, setEncryptionPassword, isEncryptionActive,
-  canWriteInPlace, downloadFile, suggestedFileName, openedFileName,
+  canWriteInPlace, downloadFile, suggestedFileName, openedFileName, registerPreview,
 } from '../../kernel/src/save.ts'
 import { putRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
 import { mountAbout, rememberVersion } from './about.ts'
 import { mountPanels } from './panels.ts'
+import { buildSheetPreview } from './preview.ts'
+import { installSaveMenu, adoptOpenedDoc } from './saveui.ts'
 import { dismissSplash, dismissSplashNow } from './splash.ts'
 import { t } from './i18n.ts'
 import {
@@ -57,6 +59,11 @@ configureApp({
 })
 
 capturePristine()
+
+// The file-manager thumbnail. Registered BEFORE any save can happen: a save
+// that ran first would write a shell with no preview in it, and the next
+// thumbnail request would show the boot splash again.
+registerPreview(buildSheetPreview)
 
 // --- boot -------------------------------------------------------------------
 
@@ -139,6 +146,9 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
 
   const store = new Store(doc)
   if (frozen) store.readOnly = true
+  // A template mints a fresh docId on open; a read-only copy locks the store
+  // (and with it the title field, which reads store.readOnly below).
+  adoptOpenedDoc(doc, store)
 
   const app = document.getElementById('app')!
   app.innerHTML =
@@ -343,6 +353,11 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
 
   // --- actions
   app.querySelector('[data-act="save"]')!.addEventListener('click', () => { void doSave() })
+  installSaveMenu({
+    button: app.querySelector<HTMLElement>('[data-act="save"]')!,
+    store,
+    save: doSave,
+  })
   app.querySelector('[data-act="undo"]')!.addEventListener('click', () => { store.undo() })
   app.querySelector('[data-act="export"]')!.addEventListener('click', () => exportCsv(store))
   app.querySelector('[data-act="import"]')!.addEventListener('click', () => {
