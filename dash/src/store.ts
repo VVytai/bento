@@ -152,6 +152,21 @@ const STRUCTURAL_DOC_KEYS = new Set([
 ])
 
 /**
+ * Raise a sheet's rid watermark past every rid in `rids`.
+ *
+ * MONOTONIC, and never lowered — not by undo either. A rid that has existed
+ * must never be minted again, because everything that attaches to one
+ * (overrides, comments, a peer's CRDT node) assumes it names one row forever.
+ * This is why insert and delete are the ops whose apply→undo is not
+ * byte-identical: the watermark is precisely the part that must survive.
+ */
+function raiseWatermark(sheet: TableSheet, rids: number[]): void {
+  const hi = rids.reduce((m, r) => Math.max(m, r), 0) + 1
+  const cur = (sheet as { nextRid?: number }).nextRid
+  if (typeof cur !== 'number' || !Number.isFinite(cur) || cur < hi) sheet.nextRid = hi
+}
+
+/**
  * What a patch touched, so undo can invalidate precisely.
  *
  * If undo emitted a document-wide invalidation the patch log's entire win would
@@ -315,8 +330,19 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
     case 'insertRows': {
       const sheet = table(doc, p.sheet)
       const flat = expandRids(sheet)
-      // ascending, so each splice index stays valid as earlier ones land
-      const order = p.rids.map((rid, i) => ({ rid, at: p.at?.[i] ?? flat.length + i, i }))
+      // ascending, so each splice index stays valid as earlier ones land.
+      //
+      // CLAMPED, and it has to be. `splice` past the end APPENDS, but the
+      // `writeCell` below writes at the literal index — so an `at` beyond the
+      // sheet put the row at position 3 and its value at position 10, leaving
+      // the column longer than the sheet has rows with a hole of nulls
+      // between. Measured on a 3-row sheet: rids said 4 rows, the column held
+      // 11 entries. rowcol.ts clamps before it builds the patch, so the UI
+      // never produced this — but `window.bento.commit` is a public API and a
+      // remote op is another producer, and applyPatch is where the invariant
+      // has to hold.
+      const order = p.rids
+        .map((rid, i) => ({ rid, at: Math.max(0, Math.min(p.at?.[i] ?? flat.length + i, flat.length + i)), i }))
         .sort((a, b) => a.at - b.at)
       for (const { rid, at, i } of order) {
         flat.splice(at, 0, rid)
@@ -330,6 +356,7 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
         }
       }
       sheet.rids = compressRids(flat)
+      raiseWatermark(sheet, p.rids)
       return {
         inverse: { op: 'deleteRows', sheet: p.sheet, rids: p.rids },
         touched: { sheet: p.sheet, rids: p.rids, structural: true },
@@ -338,6 +365,12 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
 
     case 'deleteRows': {
       const sheet = table(doc, p.sheet)
+      // ON DELETE TOO — this is the half that matters. Raising the mark only on
+      // insert leaves nothing remembering that a DELETED rid ever existed, so
+      // the floor (derived from the current maximum) drops back and the next
+      // insert mints it again. Measured before this line: rid 3 deleted, then
+      // minted for a different row.
+      raiseWatermark(sheet, p.rids)
       // capture position AND value before anything moves — the inverse has to
       // put each row back exactly where it was, because order is data
       const taken = p.rids

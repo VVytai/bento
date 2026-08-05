@@ -112,16 +112,33 @@ const throws = (fn: () => unknown): boolean => {
   try { fn(); return false } catch { return true }
 }
 
+/**
+ * The rid watermark is the one field undo may NOT restore: a rid that has
+ * existed must never be minted again, because overrides, comments and a peer's
+ * CRDT node all assume a rid names one row forever. Comparing it would assert
+ * the opposite of what the format requires, so it is excluded here and checked
+ * directly in the store rig instead. Everything else is compared byte for byte.
+ */
+const noMark = (d: DashDoc): string => {
+  const { modified: _m, ...rest } = d
+  // through `canon`, like `content` — key ORDER changes freely when a delete's
+  // inverse re-inserts a property, and comparing raw JSON would fail on that
+  // rather than on anything anybody could observe.
+  return JSON.stringify(canon(rest), (k, v) => (k === 'nextRid' ? undefined : v))
+}
+
 /** mint → commit → undo → is the document semantically where it started? */
 function roundTrip(name: string, make: (s: TableSheet) => Patch | Patch[]) {
   const st = new Store(fresh())
   const before = content(st.doc)
+  const beforeMark = noMark(st.doc)
   const patches = make(sheetOf(st.doc))
   st.commit(patches)
   const changed = content(st.doc) !== before
   const undone = st.undo()
   ok(changed, `${name}: the patch actually changed something`)
-  ok(undone && content(st.doc) === before, `${name}: undo restores the document exactly`)
+  ok(undone && noMark(st.doc) === beforeMark,
+    `${name}: undo restores the document exactly (bar the monotonic rid watermark)`)
 }
 
 // ============================================================ INSERT ROWS

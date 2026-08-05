@@ -198,6 +198,22 @@ export interface TableSheet {
    * attach to.
    */
   rids: Array<[number, number]>
+  /**
+   * The rid watermark: the next rid this sheet may mint.
+   *
+   * MONOTONIC, and deliberately not restored by undo. Without it the floor is
+   * derived from the current maximum, so deleting the last row lowers it and
+   * the next insert REUSES that rid — measured: rid 3 deleted, then minted
+   * again for a different row. The header above says rids are never reused,
+   * and everything that attaches to one (overrides, comments, CRDT nodes)
+   * assumes it. Under collaboration it stops being untidy and becomes a
+   * correctness precondition: two replicas would mint the same rid for two
+   * different rows and merge them into one.
+   *
+   * Optional because files written before it exists have none; `nextRidFloor`
+   * falls back to deriving it, which is the old behaviour.
+   */
+  nextRid?: number
   columns: Column[]
   /** colId → encoded column. */
   data: Record<string, ColumnData>

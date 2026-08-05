@@ -64,15 +64,31 @@ const content = (d: DashDoc): string => {
   return JSON.stringify(rest)
 }
 
+/**
+ * The rid watermark is the ONE field undo may not restore.
+ *
+ * A rid that has existed must never be minted again — overrides, comments and
+ * a peer's CRDT node all assume a rid names one row forever. So insert and
+ * delete leave `nextRid` raised, deliberately, and comparing it would assert
+ * the opposite of what the format requires. Everything else in the sheet is
+ * still compared byte for byte.
+ */
+const withoutWatermark = (d: DashDoc): string => {
+  const { modified: _m, ...rest } = d
+  return JSON.stringify(rest, (k, v) => (k === 'nextRid' ? undefined : v))
+}
+
 /** apply → undo → is the document exactly where it started? */
 function roundTrip(name: string, patches: Patch | Patch[]) {
   const s = new Store(fresh())
   const before = content(s.doc)
+  const beforeW = withoutWatermark(s.doc)
   s.commit(patches)
   const changed = content(s.doc) !== before
   const undone = s.undo()
   ok(changed, `${name}: the patch actually changed something`)
-  ok(undone && content(s.doc) === before, `${name}: undo restores the document exactly`)
+  ok(undone && withoutWatermark(s.doc) === beforeW,
+    `${name}: undo restores the document exactly (bar the monotonic rid watermark)`)
   const afterUndo = content(s.doc)
   s.redo()
   ok(content(s.doc) !== afterUndo, `${name}: redo re-applies it`)
@@ -91,6 +107,22 @@ function roundTrip(name: string, patches: Patch | Patch[]) {
   s.commit(overWire)
   ok(!('amount:2' in ((s.doc.sheets[0] as any).cells ?? {})),
     'and it still DELETES rather than writing a null override the other replica would not have')
+}
+
+// THE WATERMARK ITSELF: a rid must never be minted twice, and undo must not
+// hand one back. This is the precondition collaboration needs — two replicas
+// minting the same rid for two different rows merge them into one row.
+{
+  const s = new Store(fresh())
+  const sheet = () => s.doc.sheets[0] as any
+  s.commit({ op: 'deleteRows', sheet: 'sh1', rids: [4] })
+  ok(sheet().nextRid === 5, 'deleting the last row RAISES the watermark past it')
+  s.commit({ op: 'insertRows', sheet: 'sh1', rids: [5] })
+  ok(!sheet().rids.some(([st, c]: [number, number]) => 4 >= st && 4 < st + c),
+    'so the next insert does not mint the deleted rid again')
+  s.undo(); s.undo()
+  ok(sheet().nextRid >= 5,
+    'and undo does NOT hand the rid back — a peer may already have attached to it')
 }
 
 // ------------------------------------------------------------ round trips
