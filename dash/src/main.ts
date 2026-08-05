@@ -29,6 +29,8 @@ import {
 } from '../../kernel/src/save.ts'
 import { putRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
+import { mountAbout, rememberVersion } from './about.ts'
+import { dismissSplash, dismissSplashNow } from './splash.ts'
 import { t } from './i18n.ts'
 import {
   parseDoc, docBytes, docBudget, rowCount, DOC_BUDGET_FSA, DOC_BUDGET_DOWNLOAD,
@@ -75,7 +77,7 @@ if (envelope) {
 
 /** An encrypted workbook: ask, then take the same boot path. */
 async function passwordGate(raw: string): Promise<void> {
-  document.getElementById('bento-splash')?.remove()
+  dismissSplashNow()
   document.body.innerHTML =
     `<div class="dx-gate"><h1>${t('This file is encrypted.')}</h1>` +
     `<p>${t('Enter the password to open this workbook.')}</p>` +
@@ -105,7 +107,7 @@ async function passwordGate(raw: string): Promise<void> {
  * subscription are constructed, and none of them exist on this path.
  */
 function refuse(res: Extract<ParseResult, { ok: false }>): void {
-  document.getElementById('bento-splash')?.remove()
+  dismissSplashNow()
   const why = res.err === 'empty' ? '' : 'detail' in res ? res.detail : ''
   const found = 'found' in res && res.found ? ` (${res.found})` : ''
   document.body.innerHTML =
@@ -132,7 +134,7 @@ function refuse(res: Extract<ParseResult, { ok: false }>): void {
 
 function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): void {
   document.title = `${doc.title} — ${appConfig().appName}`
-  document.getElementById('bento-splash')?.remove()
+  dismissSplash()
 
   const store = new Store(doc)
   if (frozen) store.readOnly = true
@@ -308,10 +310,24 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
       // NEVER write an encrypted workbook's plaintext to IndexedDB. The kernel
       // states the rule in its own header and enforces it in neither place, so
       // every app has to remember — and the second one did not.
-      if (!isEncryptionActive()) void putRecovery(store.doc)
+      if (!isEncryptionActive()) {
+        void putRecovery(store.doc)
+        // the timeline the About dialog restores from — throttled inside, and
+        // it refuses an encrypted workbook for the same reason putRecovery does
+        void rememberVersion(store.doc)
+      }
     }, 2500)
   }
   store.on('doc', markDirty)
+
+  // The wordmark and the version chip open About. Mounted AFTER markDirty
+  // exists — it takes it as the dirty signal for the edits it makes itself.
+  mountAbout(app, {
+    store,
+    showingSheet: () => grid.sheet.id,
+    showSheet: (id) => grid.setSheet(id),
+    onDirty: markDirty,
+  })
   void pruneOld()
 
   titleEl.addEventListener('input', () => {

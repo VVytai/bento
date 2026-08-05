@@ -358,7 +358,7 @@ export const docBudget = (canWriteInPlace: boolean): number =>
 // --- Parsing -------------------------------------------------------------
 
 export interface Repair {
-  what: 'sheet-id' | 'column-id' | 'duplicate-id' | 'missing-id'
+  what: 'sheet-id' | 'column-id' | 'duplicate-id' | 'missing-id' | 'doc-id'
   id: string
   became: string
 }
@@ -385,6 +385,15 @@ export interface Repair {
  * loss this type exists to prevent. The boot site decides it, because only the
  * boot site can still see the DOM.
  */
+/**
+ * A fresh document identity. Never derived from anything in the document —
+ * two workbooks made from the same template must not collide.
+ */
+export const newDocId = (): string =>
+  typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `d-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+
 export type ParseResult =
   | { ok: true; doc: DashDoc; repairs: Repair[]; frozen?: 'policy' | 'version' }
   | { ok: false; err: 'empty' }
@@ -540,7 +549,16 @@ export function parseDoc(json: string): ParseResult {
     } as unknown as TableSheet
   })
 
-  const doc = { ...raw, format: FORMAT, version, sheets } as unknown as DashDoc
+  // MINT A docId IF THE FILE HAS NONE. The field is declared required and was
+  // not enforced, so a document block without one parsed happily and booted
+  // with `docId: undefined` — and everything that keys off it (autosave
+  // recovery, the version timeline, every future merge) then shares ONE slot
+  // named "undefined" across every such workbook. Slides mints it here for the
+  // same reason. It persists from the next save on, so a file gains an
+  // identity once and keeps it.
+  const docId = typeof raw.docId === 'string' && raw.docId ? raw.docId : newDocId()
+  if (docId !== raw.docId) repairs.push({ what: 'doc-id', id: '', became: docId })
+  const doc = { ...raw, format: FORMAT, version, docId, sheets } as unknown as DashDoc
   return frozen ? { ok: true, doc, repairs, frozen } : { ok: true, doc, repairs }
 }
 
