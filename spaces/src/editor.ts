@@ -14,7 +14,7 @@ import { renderPage, toneLabel, paintCode } from './render'
 import { CODE_LANGS, langLabel, normLang } from './highlight'
 import { canonicalize, escText, sanitizeInline, textOf } from './sanitize'
 import { MENU_SPECS, MD_SPECS, SPEC, CALLOUT_TONES } from './blocks'
-import { fieldByKey, fieldsOf, propHtml, propBlock, isIssue } from './fields'
+import { fieldByKey, fieldsOf, propHtml, propBlock, isIssue, ISSUE_FIELDS } from './fields'
 import { planImport, type SourceFile } from './markdown'
 import { countOutsideTags, replaceOutsideTags } from './findreplace'
 import { t } from './i18n'
@@ -818,7 +818,7 @@ export class Editor {
     const page = pageId ? s.index.page.get(pageId) : s.page
     if (!page || s.readOnly) return
     if (isIssue(page)) { this.status(t('Already an issue')); return }
-    const fields = fieldsOf(s.doc).filter((f) => ['status', 'priority', 'assignee', 'estimate'].includes(f.key))
+    const fields = fieldsOf(s.doc).filter((f) => ISSUE_FIELDS.includes(f.key))
     s.commit(() => {
       page.blocks.unshift(...fields.map((f) => propBlock(f, f.def ?? '', newBlock('prop').id)))
     })
@@ -831,7 +831,7 @@ export class Editor {
     const s = this.store
     if (s.readOnly) return
     const page = newPage(t('New issue'))
-    const fields = fieldsOf(s.doc).filter((f) => ['status', 'priority', 'assignee', 'estimate'].includes(f.key))
+    const fields = fieldsOf(s.doc).filter((f) => ISSUE_FIELDS.includes(f.key))
     page.blocks = [
       ...fields.map((f) => propBlock(f, f.def ?? '', newBlock('prop').id)),
       newBlock('p'),

@@ -77,6 +77,8 @@ unique ids the first time.
 | `divider` | — | `<hr>` |
 | `image` | `src` (see below), `alt`, `caption`, `width` (10–100 **%**), `w`/`h` (intrinsic px) | `<figure>` |
 | `pagelink` | `page` | a card linking to another page |
+| `prop` | `key`, `value`, `html` | one field value — see **The issue tracker** |
+| `view` | `layout`, `groupBy`, `html` | a board or list of this space's issues |
 
 `type` is a **string**, not a closed set: an unknown type survives a round trip
 and renders its `html` as a fallback. Properties are **flat on the block** —
@@ -177,6 +179,72 @@ Links are same-document fragments:
 
 `href` must match `^(https?:|mailto:|#p/)`. Anything else is stripped.
 
+## The issue tracker
+
+**An issue is a page.** There is no issue type and no flag: a page carrying a
+`status` field is an issue, and a page that loses its status is a document again
+with everything else about it intact.
+
+**A field VALUE is a `prop` block** on that page. **The SCHEMA is
+document-level** — `doc.fields`, absent means the built-in seven.
+
+```jsonc
+{
+  "fields": [                                   // document-level, optional
+    { "key": "status", "label": "Status", "vt": "select", "def": "todo",
+      "options": [
+        { "id": "backlog",   "label": "Backlog",     "color": "#8B95A5", "group": "unstarted" },
+        { "id": "todo",      "label": "Todo",        "color": "#5B8DEF", "group": "unstarted" },
+        { "id": "doing",     "label": "In progress", "color": "#F7A600", "group": "started"   },
+        { "id": "review",    "label": "In review",   "color": "#A97BE0", "group": "started"   },
+        { "id": "done",      "label": "Done",        "color": "#2FA37C", "group": "done"      },
+        { "id": "cancelled", "label": "Cancelled",   "color": "#98A2B3", "group": "cancelled" }
+      ] },
+    { "key": "priority", "label": "Priority", "vt": "select", "def": "none",
+      "options": [ { "id": "urgent", "label": "Urgent" }, { "id": "high", "label": "High" },
+                   { "id": "medium", "label": "Medium" }, { "id": "low", "label": "Low" },
+                   { "id": "none", "label": "No priority" } ] },   // every option needs a label
+    { "key": "assignee", "label": "Assignee", "vt": "person" },
+    { "key": "estimate", "label": "Estimate", "vt": "number" },
+    { "key": "labels",   "label": "Labels",   "vt": "labels" },
+    { "key": "due",      "label": "Due",      "vt": "date"   },
+    { "key": "project",  "label": "Project",  "vt": "text"   }
+  ],
+  "pages": [{ "id": "i-42", "title": "Search drops a keystroke", "blocks": [
+    { "id": "b1", "type": "prop", "key": "status",   "value": "doing", "html": "Status: In progress" },
+    { "id": "b2", "type": "prop", "key": "assignee", "value": "ana",   "html": "Assignee: ana" },
+    { "id": "b3", "type": "p", "html": "Only on iOS, and only when typing fast." }
+  ] }]
+}
+```
+
+**`value` is the option `id`; `html` is the readable form, and you write BOTH.**
+`html` is what an older build, a file-manager thumbnail, a `grep` and the
+markdown export see, and it is *all* they see — a value written without it is
+invisible to every one of them. The form is exactly `<Label>: <shown>`, where
+`shown` is the option's **label** for a select, the values joined by `, ` for
+`labels`, the value as text otherwise, and `—` when it is unset. Use
+`bento.setField()` and this is not something you can get wrong; hand-editing the
+file, it is the thing to get right. `bento.validate()` reports a mismatch as
+`prop-html-stale`.
+
+**Fields render as a header strip by POSITION**: the `prop` blocks *before* the
+first non-prop block are drawn as one row under the title. There is no flag —
+put them first.
+
+**Unknown values and unknown keys are kept, never corrected.** A status this
+build cannot name is shown verbatim and grouped as `unknown`; a field key that
+is in no schema keeps rendering its own `html`. That is how a document written
+by a newer build survives an older one, so never "fix" one by blanking it.
+
+A board or list is a `view` block, and it stores a **query, never a membership
+list**: `{ "type": "view", "layout": "board", "groupBy": "status",
+"html": "Issues by status" }`. Put it on a page of its own — a page carrying a
+view is laid out wide.
+
+**Not in this format, deliberately**: teams, per-user permissions,
+notifications, automation. The file is the team boundary and the capability.
+
 ## What makes a space good rather than merely correct
 
 | When the material is… | Reach for | Why |
@@ -207,6 +275,12 @@ bento.validate()                           // what is wrong or suspect
 bento.stats()                              // pages, blocks, words, bytes, biggest assets
 
 // write — each one is ONE undoable step
+bento.fields()                             // the field schema in force
+bento.issues(query?)                       // the backlog, as data
+
+// write — each one is ONE undoable step
+bento.setField(pageId, key, value)         // → {ok:true, …, warning?} | {ok:false, err}
+bento.newIssue({title, ...fields})         // → {ok:true, id, blocks, warnings?}
 bento.newPage(title, parent?)              // → new page id, or null
 bento.insertBlocks(pageId, afterId, [...]) // → new block ids, or null
 bento.updateBlock(id, patch)               // → {ok:true, id, page} | {ok:false, err}
@@ -233,7 +307,8 @@ empty step for someone to undo.
 
 The verbs added after 0.1.0 return `{ok: true, …}` or `{ok: false, err, detail}`
 rather than `null`. `err` is one of `readonly`, `no-such-block`, `no-such-page`,
-`bad-patch`, `immutable`, `not-serializable`, `cycle`, `last-page`.
+`no-such-field`, `bad-patch`, `immutable`, `not-serializable`, `cycle`,
+`last-page`.
 `insertBlocks` and `newPage` keep their original shapes (ids, or `null`),
 because files and scripts already depend on them.
 
@@ -256,6 +331,14 @@ one way a page becomes unreachable), parents naming nothing, `#p/` links and
 markup inside inline `html` (and markup that is dropped whole), hrefs outside the
 allowlist, images with no `alt`, no size, a missing `asset:` or a remote `src`,
 a `home` naming nothing, pages with no blocks, and assets nothing references.
+
+On the tracker it adds: `prop-html-stale` (a value whose readable `html` says
+something else — the check worth running after any hand edit),
+`unknown-field-value` and `unknown-field-key` (**info**, because that is how a
+newer build's data arrives — the value is kept), `duplicate-prop` (two values
+for one field on one page; a reader takes the last), `prop-no-key`, and
+`bad-field-schema` for a `doc.fields` entry with no string `key` and `label`,
+which is an **error**: writing a value for that field throws.
 
 `ok` means no **errors**; warnings and info do not make a document invalid.
 Severity is meant literally, so that a clean document is silent: **`validate()`
@@ -346,6 +429,92 @@ bento.removePage(id, {descendants: false})
 By default the pages inside it move up a level rather than disappearing with it;
 `{descendants: true}` takes the subtree. `links` in the result counts the
 inbound links that just went dead. Removing every page is refused.
+
+### The tracker verbs, exactly
+
+```js
+bento.fields()
+// [{ key: 'status', label: 'Status', vt: 'select', def: 'todo',
+//    options: [{ id: 'todo', label: 'Todo', color: '#5B8DEF', group: 'unstarted' }, …] },
+//  { key: 'assignee', label: 'Assignee', vt: 'person' }, …]
+```
+Call this **first**. A value is set by option **id**, and the ids are not the
+labels: `doing`, not `In progress`. The schema is the document's own
+(`doc.fields`), so a space may declare fields these defaults never had.
+
+```js
+bento.setField(pageId, key, value)
+// {ok:true, pageId, key, value, html, blocks:[id], created, removed, warning?}
+```
+Writes `value` **and** its readable `html` together, which is the only reason
+this verb exists: write a `prop` block yourself through `insertBlocks` and you
+will eventually get that pairing wrong, and then the file says one thing to this
+build and another to every older build, every thumbnailer, every grep and the
+markdown export — silently, forever.
+
+The page need not be an issue: **setting `status` is what makes it one.** A
+value for a field the page does not carry yet is created in the header strip
+(`created: true`). `null` **clears** the field, block and all — clear the status
+and the page is an ordinary document again, body intact.
+
+It refuses `no-such-page`, `no-such-field` (the key is in no schema) and
+`not-serializable`, and returns `err: 'readonly'` on a locked file. A value that
+is not one of a select's options is **written, not refused** — the format is
+permanent and additive, so a status a newer build declared has to survive this
+one — but it comes back with `warning: {code:'unknown-option', options:[…]}`.
+If you see that warning and you did not mean it, you typed a label where an id
+belongs.
+
+```js
+bento.issues({ where, group, archived })
+// [{ id, title, url:'#p/<id>', archived?, group, fields:{status, priority, …} }]
+```
+`where` is field equality: a value, an array for any-of, or `null` for **not
+set** (which covers both an absent field and an empty one). `group` is the
+status **phase** — `unstarted` `started` `done` `cancelled`, plus `unknown` for a
+status no option declares, and **`open`, which means "not finished"** and is the
+one you want. Archived issues are excluded unless you ask for them.
+
+```js
+bento.newIssue({ title, ...fieldValues })   // → {ok:true, id, blocks, warnings?}
+```
+One page, one undoable step, every value written through the same path. `title`
+and `parent` are the page's; every other key is a **field key**, and one that is
+not in the schema is refused rather than parked on the page (an unknown key in
+an argument is a typo, not additivity). It does not navigate — make twenty and
+the person's cursor stays where it was.
+
+### Triage, worked
+
+```js
+const ids = new Set(bento.fields().find(f => f.key === 'status').options.map(o => o.id))
+// → {'backlog','todo','doing','review','done','cancelled'}
+
+// everything open and unassigned, oldest first in page order
+const inbox = bento.issues({ group: 'open', where: { assignee: null } })
+
+for (const it of inbox) {
+  const body = bento.getPage(it.id).blocks.map(b => b.html).join(' ')
+  if (/crash|data loss/i.test(body)) {
+    bento.setField(it.id, 'priority', 'urgent')   // an id, never 'Urgent'
+    bento.setField(it.id, 'assignee', 'ana')
+  }
+}
+
+// a new one, complete, in one call
+const { id } = bento.newIssue({
+  title: 'Search drops the last keystroke on iOS',
+  status: 'todo', priority: 'high', estimate: 2,
+})
+bento.insertBlocks(id, null, [{ type: 'p', html: 'Steps: type fast in ⌘K…' }])
+
+bento.validate().findings.filter(f => f.code.startsWith('prop-') || f.code.includes('field'))
+```
+
+Every `setField` and `newIssue` is its own undo step, so a person watching can
+take back exactly the one they disagree with. Check the `warning`/`warnings` on
+what comes back before you move on: they are how you find out you set something
+nothing will ever group.
 
 ### What you may write
 

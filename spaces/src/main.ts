@@ -19,8 +19,9 @@ import { parseDoc, docContentKey, uid, newPage, type SpacesDoc, type ParseResult
 import {
   validateDoc, outlineDoc, statsDoc,
   planInsertBlocks, planUpdateBlock, planRemoveBlocks, planMoveBlock, planUpdatePage, planRemovePage,
+  fieldsReport, issuesReport, planSetField, planNewIssue,
   plainTitle,
-  type Plan, type PlanError,
+  type Plan, type PlanError, type IssueQuery,
 } from './agent'
 import { starterDoc } from './starter'
 import { textOf } from './sanitize'
@@ -331,6 +332,21 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
     updatePage: (id: string, patch: unknown) => run(planUpdatePage(store.doc, id, patch)),
     removePage: (id: string, opts?: { descendants?: boolean }) =>
       run(planRemovePage(store.doc, id, opts ?? {})),
+
+    // ---- the tracker: an issue is a page ---------------------------------
+    /** the schema in force — the option IDS a value must use */
+    fields: () => fieldsReport(store.doc),
+    /** the backlog as data, filtered by field value or by status phase */
+    issues: (query?: IssueQuery) => issuesReport(store.doc, query ?? {}),
+    /**
+     * One field, one undoable step, `value` and its readable `html` written
+     * TOGETHER — the only supported way to set a value, because a prop block
+     * written by hand through insertBlocks gets that pairing wrong, and it is
+     * the one thing that must never happen.
+     */
+    setField: (pageId: string, key: string, value: unknown) =>
+      run(planSetField(store.doc, pageId, key, value)),
+    newIssue: (spec?: unknown) => run(planNewIssue(store.doc, spec)),
 
     /**
      * A page carries one empty paragraph, exactly as the editor's own New page

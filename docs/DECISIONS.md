@@ -1346,6 +1346,43 @@ hand you the whole tracker as one file that opens offline, forever, with no
 account. That is the feature, and it is the reason the format has to stay
 small enough to keep that promise.
 
+## 2026-08-05 — The tracker's agent surface: written, warned about, never refused
+
+**Decision.** `window.bento` gains `fields()`, `issues(query?)`,
+`setField(pageId, key, value)` and `newIssue({title, ...fields})`, and
+`validate()` learns about fields. Three shapes are settled here because they are
+an API other work will be built on.
+
+**1. A value this build does not know is WRITTEN, and warned about — never
+refused.** The format is permanent and additive: a status a newer build declared
+has to round-trip through an older one, and a verb that refused it would make
+the older build unable to edit a document the newer one wrote. But an agent
+typing `'In progress'` where the option id is `'doing'` has made a mistake and
+silence would leave it confident, so the result carries
+`warning: {code:'unknown-option', options:[…]}` and `validate()` reports
+`unknown-field-value` at **info**. Refuse the shapes JSON cannot carry, warn
+about the vocabulary. The same reasoning makes `unknown-field-key` info, and
+`prop-html-stale` a warning — but that check STANDS DOWN when the value names no
+known option, because then the writer knew a label this build does not and its
+`html` is right where ours would be a guess.
+
+**2. An unknown key in an ARGUMENT is a typo, not additivity.** `newIssue` and
+`setField` refuse a key that is in no schema (`err: 'no-such-field'`). Unknown
+keys in a *document* are how a future build's data survives; unknown keys in a
+*call* are how an agent believes it set a priority it did not set.
+
+**3. "Open" means NOT FINISHED.** `issues({group:'open'})` is one predicate —
+not `done`, not `cancelled` — so a status with no phase and a status this build
+has never heard of both count as work, and a status naming no option reports
+`group:'unknown'` rather than being folded in with the rest. An issue wrongly
+shown in a backlog costs a glance; an issue wrongly hidden from one costs the
+issue.
+
+`setField` is the ONLY supported way to write a value, because it writes `value`
+and `html` together through fields.ts `propHtml()` — the same call the editor's
+own field picker makes, so the two cannot drift. Guarded by
+`scripts/test-spaces-agent.ts`; guide in `docs/spaces-agents.md`.
+
 ## 2026-08-03 — bento/spaces: the format decisions that must precede parallel work
 
 Five independent design reviews of bento/spaces proposed overlapping feature

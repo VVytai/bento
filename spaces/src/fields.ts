@@ -93,6 +93,21 @@ export const DEFAULT_FIELDS: FieldSpec[] = [
   { key: 'project', label: 'Project', vt: 'text' },
 ]
 
+/**
+ * The fields a NEW issue starts with.
+ *
+ * ONE list, because there are now two ways to make an issue — ⌘⇧I in the
+ * editor and `bento.newIssue()` from an agent — and a field seeded by one but
+ * not the other is a field a human then cannot set: `prop` is unlisted in the
+ * / menu (blocks.ts), so the only way a value gets onto a page is that the page
+ * was seeded with it. An agent-made issue missing `assignee` would be an issue
+ * nobody can assign without hand-editing the JSON.
+ *
+ * The rest of the schema (labels, due, project) is set on demand and appears
+ * when it is set — absent means unset, which is what the format already says.
+ */
+export const ISSUE_FIELDS = ['status', 'priority', 'assignee', 'estimate']
+
 /** The schema in force: what the document declares, else the defaults. */
 export function fieldsOf(doc: SpacesDoc): FieldSpec[] {
   const declared = (doc as { fields?: unknown }).fields

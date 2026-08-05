@@ -30,10 +30,13 @@
 // an undo entry that undoes nothing. Planning first also makes the whole write
 // path testable in node, where there is no store and no DOM.
 
-import { type SpacesDoc, type Page, type Block, buildIndex, isRemote, newBlock, uid } from './model.ts'
+import { type SpacesDoc, type Page, type Block, buildIndex, isRemote, newBlock, newPage, uid } from './model.ts'
 import { SPECS, SPEC } from './blocks.ts'
 import { sanitizeInline, textOf, inertBody, esc, UNWRAP } from './sanitize.ts'
 import { orphanAssets, humanBytes } from './assets.ts'
+import {
+  type FieldSpec, ISSUE_FIELDS, fieldsOf, optionOf, propBlock, propHtml, valuesOf, isIssue, headerLength,
+} from './fields.ts'
 
 // ---------------------------------------------------------------------------
 // shared helpers
@@ -238,11 +241,24 @@ export function validateDoc(doc: SpacesDoc): ValidateResult {
       fix: 'Set home to a real page id. Readers land on the first page instead, which may not be the one you wrote to be landed on.' })
   }
 
+  // ---- the field schema ----------------------------------------------------
+  // Only a DECLARED `doc.fields` can be wrong; a document without one gets
+  // DEFAULT_FIELDS, which is code.
+  const fieldOf = new Map<string, FieldSpec>()
+  for (const f of fieldsOf(doc)) {
+    if (f && typeof f.key === 'string' && f.key && typeof f.label === 'string') { fieldOf.set(f.key, f); continue }
+    add({ code: 'bad-field-schema', severity: 'error', path: 'fields',
+      message: `A field in doc.fields has no string key and label (${JSON.stringify(f ?? null).slice(0, 60)}). Writing a value for it THROWS while building its readable form, so the editor's field picker fails on click and the page does not repaint.`,
+      fix: 'Give every entry a string `key`, a string `label`, and a `vt` of select | person | number | date | text | labels.' })
+  }
+
   // ---- pages and blocks ---------------------------------------------------
   const usedAssets = new Set<string>()
   for (const p of pages) {
     const blocks = Array.isArray(p.blocks) ? p.blocks : []
     const own = new Set(blocks.map((b) => b.id))
+    /** field keys already seen on THIS page — one value per field, per page */
+    const propKeys = new Set<string>()
 
     if (!blocks.length) {
       // Not cosmetic: the editor's caret, gutter and / menu all hang off a
@@ -331,6 +347,61 @@ export function validateDoc(doc: SpacesDoc): ValidateResult {
           add({ ...at, code: 'broken-link', severity: 'error', path: 'page',
             message: `A pagelink card points at "${target || '(nothing)'}", which is not a page — it renders as "(missing page)".`,
             fix: 'Set page to a real page id, or remove the block.' })
+        }
+      }
+
+      // ---- field values ----------------------------------------------------
+      // An ISSUE IS A PAGE and its values are `prop` blocks. Everything that
+      // can be wrong here is wrong SILENTLY: the page still renders, the board
+      // still draws, and the file still says something — just not what the
+      // author meant.
+      if (b.type === 'prop') {
+        const key = String((b as { key?: unknown }).key ?? '')
+        const f = fieldOf.get(key)
+        const value = (b as { value?: unknown }).value
+        const unset = value === undefined || value === null || value === ''
+        if (!key) {
+          add({ ...at, code: 'prop-no-key', severity: 'warning', path: 'key',
+            message: 'A prop block has no `key`, so it names no field: nothing reads it, the header strip cannot label it, and a board cannot group by it.',
+            fix: `Set key to one of: ${[...fieldOf.keys()].join(', ')}.` })
+        } else if (!f) {
+          // INFO, not a warning: `doc.fields` is additive, so a key this
+          // schema does not declare is how a NEWER build's field arrives. The
+          // value keeps rendering — the block carries its own html — but this
+          // build cannot label it or edit it.
+          add({ ...at, code: 'unknown-field-key', severity: 'info', path: 'key',
+            message: `"${key}" is not a field in doc.fields, so its value shows only as the text in its html and cannot be edited or grouped by here.`,
+            fix: `Add { "key": "${key}", "label": "…", "vt": "text" } to doc.fields, or use one of: ${[...fieldOf.keys()].join(', ')}.` })
+        } else if (f.vt === 'select' && !unset && !optionOf(f, value)) {
+          // INFO for the same reason: an option a newer build declared must
+          // survive this one untouched. It is still worth saying, because the
+          // OTHER way to get here is typing a label ('In progress') where an
+          // id ('doing') belongs, and then wondering why the board files it
+          // under "Other".
+          add({ ...at, code: 'unknown-field-value', severity: 'info', path: 'value',
+            message: `"${String(value)}" is not one of ${key}'s options, so it is shown verbatim and grouped apart from the rest.`,
+            fix: `Use an option id — ${(f.options ?? []).map((o) => o.id).join(', ')} — or declare this one in doc.fields. The value is kept either way.` })
+        } else if (b.html !== propHtml(f, value)) {
+          // THE ONE THAT MATTERS. `html` is what an older build, a
+          // thumbnailer, a grep and the markdown export see, and it is ALL
+          // they see. A value edited without it says one thing to this build
+          // and another to every one of them, forever, with nothing to notice
+          // it — which is the whole degradation guarantee, broken silently.
+          //
+          // Deliberately NOT checked when the value names no known option
+          // (above): the writer knew a label this build does not, so its html
+          // is RIGHT and ours would be the guess.
+          add({ ...at, code: 'prop-html-stale', severity: 'warning', path: 'html',
+            message: `This value's readable form disagrees with its value: html is ${JSON.stringify(b.html ?? '')} where the value reads "${propHtml(f, value)}". An older build, a thumbnailer, a grep and the markdown export show the html — so they all show the wrong value.`,
+            fix: 'Write both together: bento.setField(page, key, value) does, and so does the editor. Never assign `value` on its own.' })
+        }
+        if (key) {
+          if (propKeys.has(key)) {
+            add({ ...at, code: 'duplicate-prop', severity: 'warning', path: 'key',
+              message: `This page carries more than one value for "${key}". A reader takes the LAST one, so the earlier block is a value that is shown in the header, found by search, and ignored by every query.`,
+              fix: 'Remove the duplicate block. bento.setField writes all of them at once while they exist, so the page at least cannot disagree with itself.' })
+          }
+          propKeys.add(key)
         }
       }
 
@@ -922,5 +993,285 @@ export function planRemovePage(doc: SpacesDoc, id: string, opts: RemovePageOpts 
       doc.pages = doc.pages.filter((p) => !doomed.has(p.id))
       if (doc.home && doomed.has(doc.home)) delete doc.home
     },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// the tracker: the schema, the values, the backlog
+// ---------------------------------------------------------------------------
+//
+// AN ISSUE IS A PAGE (docs/DECISIONS.md, 2026-08-05). Its field values are
+// `prop` BLOCKS; the schema they draw on is `doc.fields`. Nothing here is a
+// page-level key and nothing is a new page type.
+//
+// WHY THESE VERBS EXIST AT ALL. An agent could already write a prop block by
+// hand through insertBlocks — and get the `html` wrong, which is the one thing
+// that must never happen: that string is what an older build, a thumbnailer, a
+// grep and the markdown export see, and it is ALL they see. A value written
+// without it is a value those readers cannot read. So the only supported way to
+// set a value goes through fields.ts propHtml(), exactly as the editor's own
+// field picker does, and the two cannot drift because they are the same call.
+
+/** The schema in force, as data. */
+export function fieldsReport(doc: SpacesDoc): FieldSpec[] {
+  // A COPY. `fieldsOf` hands back DEFAULT_FIELDS itself when the document
+  // declares no schema of its own, and that array is module state shared by
+  // every document opened in this session — one `bento.fields()[0].options.pop()`
+  // would edit the schema of documents that have not been loaded yet.
+  return JSON.parse(JSON.stringify(fieldsOf(doc))) as FieldSpec[]
+}
+
+export interface FieldWarning {
+  code: 'unknown-option'
+  key: string
+  detail: string
+  /** the ids that ARE options, so the caller can correct itself */
+  options: string[]
+}
+
+/**
+ * Is this a value the field's own options know?
+ *
+ * DELIBERATELY A WARNING, NOT A REFUSAL. The format is permanent and additive:
+ * a status a NEWER build declared must round-trip through this one verbatim,
+ * and a verb that refused it would make an older build unable to edit a
+ * document a newer one wrote — the exact failure the additivity rule exists to
+ * prevent. But an agent typing 'In progress' where the option id is 'doing' has
+ * made a mistake, and silence would leave it believing otherwise: the value
+ * would be stored, the board would file it under "Other", and nothing would
+ * have said so. So it is written AND reported, with the ids listed.
+ *
+ * An empty value is "not set", never an unknown option — the editor itself
+ * writes `''` for a select with no default (fields.ts `def`), so flagging it
+ * would fire on documents this build produced.
+ */
+function optionWarning(f: FieldSpec, value: unknown): FieldWarning | undefined {
+  if (f.vt !== 'select' || value === '' || value === null || value === undefined) return undefined
+  if (optionOf(f, value)) return undefined
+  const options = (f.options ?? []).map((o) => o.id)
+  return {
+    code: 'unknown-option', key: f.key, options,
+    detail: `"${String(value)}" is not one of ${f.key}'s options (${options.join(', ')}). It was written unchanged — the format keeps a value a newer build may have declared — but if you meant an existing option, use its id, not its label.`,
+  }
+}
+
+/** ONE refusal, worded once: both write verbs reject the same mistake. */
+const noSuchField = (k: string, schema: FieldSpec[]): PlanError =>
+  fail('no-such-field', `"${k}" is not a field in this space. The schema is doc.fields, which declares: ${schema.map((x) => x.key).join(', ')}. Add the field there first — a value whose field nothing declares cannot be labelled, edited or grouped by.`)
+
+export interface SetFieldResult {
+  pageId: string
+  key: string
+  value: unknown
+  /** the readable form written with it — what an older build shows */
+  html?: string
+  /** the prop blocks that now hold the value (or that were just removed) */
+  blocks: string[]
+  /** the page had no value for this field and one was added to the header */
+  created: boolean
+  /** the value was cleared: those prop blocks are gone */
+  removed: boolean
+  warning?: FieldWarning
+}
+
+/**
+ * Set one field on one page — the ONE undoable step that writes a field value.
+ *
+ * `null` (or `undefined`) CLEARS the field: the prop block goes, which is the
+ * convention the patch verbs already use, and is how a page stops being an
+ * issue (clear its status and it is a document again, body intact). Clearing a
+ * field that is not set is not an error; the call is idempotent.
+ *
+ * The page need not already be an issue. Setting `status` on any page is
+ * precisely what makes it one — there is no flag to set and no type to change.
+ */
+export function planSetField(doc: SpacesDoc, pageId: string, key: unknown, value: unknown): Plan<SetFieldResult> {
+  const page = doc.pages.find((p) => p.id === pageId)
+  if (!page) return fail('no-such-page', String(pageId))
+  const k = String(key ?? '')
+  const schema = fieldsOf(doc)
+  const f = schema.find((x) => x.key === k)
+  if (!f) return noSuchField(k, schema)
+  if (value !== null && value !== undefined && !jsonSafe(value)) {
+    return fail('not-serializable', `the value for "${k}" holds something JSON cannot carry (a function, a DOM node, a Date, a cycle). It would vanish or throw at save time.`)
+  }
+
+  // Normally exactly one. A page carrying TWO prop blocks for one key is a
+  // defect validate() reports as `duplicate-prop` — and while it exists a
+  // reader takes the LAST (fields.ts valuesOf), so writing only the first would
+  // be a set that changes nothing anyone can see, and reports success.
+  const mine = page.blocks.filter((b) => b.type === 'prop' && (b as { key?: unknown }).key === k)
+
+  if (value === null || value === undefined) {
+    return {
+      ok: true, pageId: page.id, key: k, value: null,
+      blocks: mine.map((b) => b.id), created: false, removed: true,
+      apply() { page.blocks = page.blocks.filter((b) => !mine.includes(b)) },
+    }
+  }
+
+  const html = propHtml(f, value)
+  const fresh = mine.length ? null : propBlock(f, value, uid('b'))
+  const warning = optionWarning(f, value)
+  return {
+    ok: true,
+    pageId: page.id, key: k, value, html,
+    blocks: fresh ? [fresh.id] : mine.map((b) => b.id),
+    created: !!fresh, removed: false,
+    ...(warning ? { warning } : {}),
+    apply() {
+      // VALUE AND html TOGETHER, always, through propHtml — the whole reason
+      // this verb exists instead of an insertBlocks the caller writes itself.
+      for (const b of mine) {
+        ;(b as Record<string, unknown>).value = value
+        b.html = html
+      }
+      // A new value joins the HEADER STRIP: prop blocks before the first
+      // non-prop block are the header, by position (render.ts), so appending
+      // one to the end of the page would leave a field stranded under the prose.
+      if (fresh) page.blocks.splice(headerLength(page), 0, fresh)
+    },
+  }
+}
+
+export interface IssueReport {
+  id: string
+  title: string
+  /** the href an inline link would use: `#p/<id>` */
+  url: string
+  archived?: true
+  /**
+   * The PHASE of its status (FieldOption.group) — what makes "open" mean
+   * something without anyone configuring a filter. `'unknown'` when the status
+   * names no option this schema declares: never silently folded in with the
+   * rest, because that is exactly the value a newer build wrote.
+   */
+  group?: string
+  /** every field value on the page, by key */
+  fields: Record<string, unknown>
+}
+
+export interface IssueQuery {
+  /**
+   * Field equality. `{ status: 'todo' }`, an array for any-of
+   * (`{ status: ['backlog', 'todo'] }`), `null` for "not set" — which covers
+   * both an absent prop block and an empty one, because the editor writes `''`
+   * for a field it has seeded and nobody has filled in.
+   */
+  where?: Record<string, unknown>
+  /**
+   * Status phase: 'unstarted' | 'started' | 'done' | 'cancelled' | 'unknown',
+   * an array of those, or 'open'.
+   */
+  group?: string | string[]
+  /** include archived issues too; they are excluded by default */
+  archived?: boolean
+}
+
+const FINISHED = new Set(['done', 'cancelled'])
+
+/** Compared as TEXT, so `3` and `"3"` are the same estimate. This document is
+ *  hand-written JSON as often as not, and a filter that missed on the type of a
+ *  number would look exactly like an empty backlog. */
+function matches(actual: unknown, want: unknown): boolean {
+  if (Array.isArray(want)) return want.some((w) => matches(actual, w))
+  if (want === null || want === undefined) return actual === undefined || actual === null || actual === ''
+  return String(actual ?? '') === String(want)
+}
+
+/**
+ * The backlog, as data.
+ *
+ * One call rather than a page-by-page scan: "everything unstarted and
+ * unassigned" is `issues({ group: 'open', where: { assignee: null } })`.
+ */
+export function issuesReport(doc: SpacesDoc, query: IssueQuery = {}): IssueReport[] {
+  const status = fieldsOf(doc).find((f) => f.key === 'status')
+  const want = query.group == null ? null
+    : (Array.isArray(query.group) ? query.group : [query.group]).map(String)
+  const out: IssueReport[] = []
+
+  for (const page of doc.pages) {
+    if (!isIssue(page)) continue
+    if (page.archived && !query.archived) continue
+    const values = valuesOf(page)
+    const opt = status && optionOf(status, values.get('status'))
+    const group = status && !opt ? 'unknown' : opt?.group
+
+    // OPEN MEANS NOT FINISHED — one predicate, so a status with no group and a
+    // status this build has never heard of both count as work. That is the safe
+    // direction: an issue wrongly shown in a backlog costs a glance, an issue
+    // wrongly hidden from one costs the issue.
+    if (want && !want.some((g) => (g === 'open' ? !(group && FINISHED.has(group)) : g === group))) continue
+
+    let keep = true
+    for (const [k, w] of Object.entries(query.where ?? {})) {
+      if (!matches(values.get(k), w)) { keep = false; break }
+    }
+    if (!keep) continue
+
+    out.push({
+      id: page.id, title: page.title, url: `#p/${page.id}`,
+      ...(page.archived ? { archived: true as const } : {}),
+      ...(group ? { group } : {}),
+      fields: Object.fromEntries(values),
+    })
+  }
+  return out
+}
+
+export interface NewIssueResult {
+  id: string
+  blocks: string[]
+  warnings?: FieldWarning[]
+}
+
+/**
+ * A new issue: one page, its fields already on it, in ONE undoable step.
+ *
+ * `title` and `parent` are the page's; every OTHER key is a field key, and one
+ * that is not in the schema is REFUSED rather than parked on the page. Unknown
+ * keys in a DOCUMENT are a feature — they are how a future build's data
+ * survives this one — but an unknown key in an ARGUMENT is a typo, and an agent
+ * that wrote `{ prioritty: 'high' }` would otherwise be told it had set a
+ * priority it had not set.
+ *
+ * The page ends with an empty paragraph, exactly as ⌘⇧I does: a page whose
+ * every block is a prop has nowhere to put a caret and nowhere to write the
+ * issue down.
+ */
+export function planNewIssue(doc: SpacesDoc, spec: unknown): Plan<NewIssueResult> {
+  if (spec !== undefined && !isPatch(spec)) return fail('bad-patch', 'pass { title?, parent?, ...fieldValues }')
+  const src = (spec ?? {}) as Record<string, unknown>
+  const parent = src.parent == null ? '' : String(src.parent)
+  if (parent && !doc.pages.some((p) => p.id === parent)) return fail('no-such-page', `parent "${parent}"`)
+
+  const schema = fieldsOf(doc)
+  const values: Record<string, unknown> = {}
+  const warnings: FieldWarning[] = []
+  for (const [k, v] of Object.entries(src)) {
+    if (k === 'title' || k === 'parent') continue
+    const f = schema.find((x) => x.key === k)
+    if (!f) return noSuchField(k, schema)
+    if (v !== null && v !== undefined && !jsonSafe(v)) return fail('not-serializable', `the value for "${k}" holds something JSON cannot carry`)
+    values[k] = v ?? ''
+    const w = optionWarning(f, values[k])
+    if (w) warnings.push(w)
+  }
+
+  const page = newPage(plainTitle(src.title) || 'New issue', parent ? { parent } : {})
+  // The SEED LIST is fields.ts's, never a second copy here: a fresh issue from
+  // an agent and a fresh issue from ⌘⇧I must carry the same fields, or one of
+  // them makes an issue a human cannot assign — there is no "add a field"
+  // gesture, because `prop` is unlisted in the / menu on purpose.
+  const props = schema
+    .filter((f) => ISSUE_FIELDS.includes(f.key) || f.key in values)
+    .map((f) => propBlock(f, f.key in values ? values[f.key] : (f.def ?? ''), uid('b')))
+  page.blocks = [...props, newBlock('p')]
+
+  return {
+    ok: true, id: page.id, blocks: page.blocks.map((b) => b.id),
+    ...(warnings.length ? { warnings } : {}),
+    apply() { doc.pages.push(page) },
   }
 }
