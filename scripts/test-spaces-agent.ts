@@ -108,6 +108,72 @@ console.log('bento/spaces agent surface\n')
     'a 500-page space raises no errors')
 }
 
+// ---- the starter space SHOWS the tracker ----------------------------------
+// A feature nothing in the starter demonstrates is a feature nobody finds. The
+// tracker shipped invisible: a fresh space opened on the notes tour, and the
+// board, the fields and ⌘⇧I existed only for someone who already knew to look.
+// Asserted structurally, because the way this regresses is silent — a starter
+// edited for prose, with the demo quietly dropped.
+{
+  const starter = starterDoc() as unknown as SpacesDoc
+  const issues = starter.pages.filter((pg) => isIssue(pg as never))
+  const boards = starter.pages.flatMap((pg) => pg.blocks.filter((bl) => bl.type === 'view'))
+
+  ok(boards.length >= 1, `the starter carries a board (${boards.length} view block(s))`)
+  ok(issues.length >= 3, `…with issues on it (${issues.length})`)
+  ok(new Set(issues.map((pg) => String(valuesOf(pg as never).get('status')))).size >= 3,
+    'the demo issues span several columns — a one-column board demonstrates nothing')
+
+  // every value on them has to be one the schema declares: a starter issue
+  // carrying a status no option matches renders an empty pill and teaches the
+  // format wrong on the one document everybody reads first
+  const opts = new Map(DEFAULT_FIELDS.map((f) => [f.key, new Set((f.options ?? []).map((o) => o.id))]))
+  const strays = issues.flatMap((pg) => [...valuesOf(pg as never)]
+    .filter(([k, v]) => opts.get(k)?.size && v !== '' && !opts.get(k)!.has(String(v)))
+    .map(([k, v]) => `${pg.title}: ${k}=${String(v)}`))
+  ok(strays.length === 0, `every starter value is in the schema (${strays.join('; ') || 'all good'})`)
+
+  // and the readable `html` matches the value — the pairing the whole format
+  // degrades through, generated here rather than typed out
+  const mismatched = issues.flatMap((pg) => pg.blocks
+    .filter((bl) => bl.type === 'prop')
+    .filter((bl) => {
+      const f = DEFAULT_FIELDS.find((x) => x.key === (bl as { key?: string }).key)
+      return !f || bl.html !== propHtml(f, (bl as { value?: unknown }).value)
+    })
+    .map((bl) => `${pg.title}/${(bl as { key?: string }).key}`))
+  ok(mismatched.length === 0, `every starter prop's html matches its value (${mismatched.join(', ') || 'all good'})`)
+
+  // an issue is REACHABLE — a card opens the page, and the sidebar shows it
+  // where the board says it is
+  ok(issues.every((pg) => !!pg.parent && starter.pages.some((q) => q.id === pg.parent)),
+    'every starter issue is nested under a page that exists')
+}
+
+// ---- a title has to BE a title --------------------------------------------
+// `{ title: 'Tracker' }` is the object shape every other verb here takes, so it
+// is the mistake a caller actually makes — and coercion answered it with a page
+// called "[object Object]" and an ok result.
+{
+  const doc = load([p('p1', [b('b1')])])
+  const bad: unknown[] = [{ title: 'x' }, ['x'], 42, true]
+  for (const t of bad) {
+    const made = planNewIssue(doc, { title: t })
+    const set = planUpdatePage(doc, 'p1', { title: t })
+    ok(made.ok === false && (made as { err?: string }).err === 'bad-title',
+      `newIssue refuses a title of type ${Array.isArray(t) ? 'array' : typeof t}`)
+    ok(set.ok === false && (set as { err?: string }).err === 'bad-title',
+      `updatePage refuses a title of type ${Array.isArray(t) ? 'array' : typeof t}`)
+  }
+
+  // …and still accepts the things that ARE titles, including none
+  ok(planNewIssue(doc, { title: 'A real one' }).ok, 'a string title is accepted')
+  ok(planNewIssue(doc, {}).ok, 'no title at all is accepted — it has a default')
+  ok(planNewIssue(doc, { title: null }).ok, 'an explicitly empty title is accepted')
+  ok(planUpdatePage(doc, 'p1', { title: '<b>markup</b> is still flattened' }).ok,
+    'updatePage still takes a string and strips its markup')
+}
+
 // ---- …and specific on documents that are broken ---------------------------
 {
   const broken = load([

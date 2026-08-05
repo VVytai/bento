@@ -437,6 +437,23 @@ export class Editor {
     return window.matchMedia('(max-width: 820px)').matches
   }
 
+  /**
+   * Dismiss the PHONE DRAWER after navigating. On anything wider this does
+   * nothing, deliberately.
+   *
+   * Following a page link used to call `toggleSidebar(false)` directly, which
+   * reads as "close the sidebar" and is right on a phone — the drawer covers
+   * the page you just asked for. But above the drawer breakpoint
+   * `toggleSidebar` delegates to `togglePane`, so on a desktop it collapsed the
+   * page-list COLUMN on every click, and `togglePane` persists that to
+   * localStorage: the list stayed shut on the next open, and on every open
+   * after it. The column is not in the way of anything, and a list you have to
+   * reopen to use twice is not a list.
+   */
+  private closeDrawer(): void {
+    if (this.isDrawer()) this.toggleSidebar(false)
+  }
+
   private toggleSidebar(force?: boolean): void {
     // Below the drawer breakpoint the panel is an overlay, not a column: the
     // page needs the whole width, so collapsing to a 0px column would leave
@@ -486,7 +503,7 @@ export class Editor {
       label.textContent = page.title || t('Untitled')
       a.append(ico, label)
       a.draggable = true
-      a.addEventListener('click', (e) => { e.preventDefault(); s.goToPage(page.id); this.toggleSidebar(false) })
+      a.addEventListener('click', (e) => { e.preventDefault(); s.goToPage(page.id); this.closeDrawer() })
       a.addEventListener('dragstart', (e) => e.dataTransfer?.setData('text/bento-page', page.id))
       a.addEventListener('dragover', (e) => {
         // a sidebar row accepts PAGES; a card dragged over it lit up and
@@ -536,7 +553,7 @@ export class Editor {
         const label = document.createElement('span')
         label.textContent = page.title || t('Untitled')
         a.append(ico, label)
-        a.addEventListener('click', (e) => { e.preventDefault(); s.goToPage(page.id); this.toggleSidebar(false) })
+        a.addEventListener('click', (e) => { e.preventDefault(); s.goToPage(page.id); this.closeDrawer() })
         const un = document.createElement('button')
         un.className = 'sp-rowmore'
         un.type = 'button'

@@ -20,7 +20,7 @@ import {
   validateDoc, outlineDoc, statsDoc,
   planInsertBlocks, planUpdateBlock, planRemoveBlocks, planMoveBlock, planUpdatePage, planRemovePage,
   fieldsReport, issuesReport, planSetField, planNewIssue,
-  plainTitle,
+  plainTitle, badTitle,
   type Plan, type PlanError, type IssueQuery,
 } from './agent'
 import { starterDoc } from './starter'
@@ -356,6 +356,12 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
      */
     newPage: (title: string, parent?: string) => {
       if (store.readOnly) return null
+      // A TITLE, not something that stringifies into one. This takes a string
+      // where the verbs beside it take an object, so `newPage({ title: 'x' })`
+      // is the natural mistake — and it used to make a page called
+      // "[object Object]" and hand back its id, which is the exact failure the
+      // rest of this surface exists to avoid.
+      if (badTitle(title)) return null
       // a parent that names nothing would silently make this a ROOT page; say
       // no instead, so the caller finds out now rather than in the sidebar
       if (parent && !store.doc.pages.some((p) => p.id === parent)) return null

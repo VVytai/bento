@@ -70,6 +70,25 @@ Versions follow `0.MINOR.PATCH` while pre-1.0.
   the API cannot put anything in a file that the app itself could not have
   written.
 
+- **A new space opens with a tracker in it.** The starter space gains a
+  **Tracker** page — a board, and five issues nested under it that explain
+  themselves: open a card and you are in an ordinary page with fields along the
+  top. The tracker shipped invisible last round, findable only by someone who
+  already knew ⌘⇧I existed. The demo issues are meant to be deleted, and say so.
+
+- **Fixed: the page list closed every time you clicked a page.** Following a
+  link in the sidebar dismissed it — right on a phone, where the drawer covers
+  the page you just asked for, and wrong on every larger screen, where it
+  collapsed the column and remembered the collapse. The list stayed shut on the
+  next open, and the one after that. The phone drawer still closes; nothing else
+  does.
+
+- **Fixed: `newPage` accepted things that were not titles.** It takes a string
+  where the verbs beside it take an object, so `bento.newPage({ title: 'x' })`
+  is the mistake a caller actually makes — and it made a page called
+  `[object Object]` and reported success. It now refuses, as does `newIssue` and
+  `updatePage` for the same argument.
+
 ## [0.1.0] — 2026-08-03
 
 First release.

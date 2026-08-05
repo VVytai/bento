@@ -129,6 +129,23 @@ export function normalizeHtml(html: string, type: string): string {
 /** A page title renders as TEXT, so markup in one would show literally. */
 export const plainTitle = (v: unknown): string => textOf(String(v ?? ''))
 
+/**
+ * A title has to BE a string.
+ *
+ * `plainTitle` coerces, and that is right for what it was written for: markup
+ * pasted into a title, a number someone used for a heading. But coercion
+ * applied to the wrong TYPE is not forgiveness, it is a lie —
+ * `newPage({ title: 'Tracker' })`, written in the object shape every other verb
+ * on this surface takes, made a page called "[object Object]" and reported
+ * success. Every other verb here refuses input it cannot honour, and a title is
+ * a poor place to start guessing: the page is created either way, so the caller
+ * finds out by reading the sidebar.
+ *
+ * `null`/absent stays legal — that is "no title", and each caller has its own
+ * default for it.
+ */
+export const badTitle = (v: unknown): boolean => v != null && typeof v !== 'string'
+
 // ---------------------------------------------------------------------------
 // validate()
 // ---------------------------------------------------------------------------
@@ -929,6 +946,7 @@ export function planUpdatePage(doc: SpacesDoc, id: string, patch: unknown): Plan
   const { sets, dels } = split
 
   if ('title' in sets) {
+    if (badTitle(sets.title)) return fail('bad-title', 'title must be a string')
     // the title renders as textContent, so markup in it would show literally
     sets.title = plainTitle(sets.title)
   }
@@ -1275,6 +1293,7 @@ export interface NewIssueResult {
 export function planNewIssue(doc: SpacesDoc, spec: unknown): Plan<NewIssueResult> {
   if (spec !== undefined && !isPatch(spec)) return fail('bad-patch', 'pass { title?, parent?, ...fieldValues }')
   const src = (spec ?? {}) as Record<string, unknown>
+  if (badTitle(src.title)) return fail('bad-title', 'title must be a string')
   const parent = src.parent == null ? '' : String(src.parent)
   if (parent && !doc.pages.some((p) => p.id === parent)) return fail('no-such-page', `parent "${parent}"`)
 
