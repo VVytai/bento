@@ -401,10 +401,17 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     const src = store.doc.sheets.find((sh) => sh.id === pivotSpec!.from)
     if (!src || src.kind !== 'table') return
     chartTitle.textContent = `${t('Pivot')} · ${src.name}`
+    // A pivot has no chart KIND, so the Bar/Line toggle beside the title is a
+    // control that does nothing to what is on screen. Hidden here and restored
+    // by the chart path below.
+    kindBtn.hidden = true
     const computed = grid.computed as Map<string, unknown[]>
     pivotDown = mountPivot(chartBody, runPivot(src, pivotSpec, { computed }), { sheet: src, computed })
   }
-  const clearPivot = (): void => { pivotDown?.(); pivotDown = null; pivotSpec = null }
+  const clearPivot = (): void => {
+    pivotDown?.(); pivotDown = null; pivotSpec = null
+    kindBtn.hidden = false
+  }
   store.on('doc', () => { if (pivotSpec) drawPivot() })
 
   app.querySelector('[data-act="import-xlsx"]')!.addEventListener('click', () => {
