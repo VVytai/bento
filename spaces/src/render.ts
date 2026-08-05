@@ -14,7 +14,10 @@ import { sanitizeInline, inertBody, esc } from './sanitize'
 import { tokenize } from './highlight'
 import { t } from './i18n'
 import { TAG_OF, LIST_OF, SPEC, TONE } from './blocks'
-import { fieldByKey, optionOf, issuesOf, headerLength, type FieldSpec } from './fields'
+import {
+  fieldByKey, optionOf, issuesOf, headerLength, propBlockOf,
+  passesFilter, filterCount, unknownFilterKeys, type FieldSpec,
+} from './fields'
 import { ICONS, type IconName } from './icons'
 
 export interface RenderOpts {
@@ -566,7 +569,9 @@ function renderView(host: HTMLElement, b: Block, doc: SpacesDoc, opts: RenderOpt
   const layout = String((b as { layout?: unknown }).layout ?? 'board')
   const groupKey = String((b as { groupBy?: unknown }).groupBy ?? 'status')
   const field = fieldByKey(doc, groupKey)
-  const rows = issuesOf(doc)
+  const filter = (b as { filter?: unknown }).filter
+  const all = issuesOf(doc)
+  const rows = all.filter((r) => passesFilter(doc, r.values, filter))
 
   const head = document.createElement('div')
   head.className = 'sp-view-head'
@@ -577,34 +582,95 @@ function renderView(host: HTMLElement, b: Block, doc: SpacesDoc, opts: RenderOpt
   count.className = 'sp-view-count'
   count.textContent = String(rows.length)
   head.append(title, count)
+
+  // The controls belong to the EDITOR, like the callout chip and the language
+  // chip: a reader, a printout and a locked space get the view, not the buttons
+  // that change what it holds.
+  if (opts.editable) {
+    const on = !!(filter as { open?: unknown } | undefined)?.open
+    const openB = document.createElement('button')
+    openB.type = 'button'
+    openB.className = 'sp-btn sp-view-btn' + (on ? ' sp-on' : '')
+    openB.dataset.viewOpen = '1'
+    openB.textContent = t('Open only')
+    openB.setAttribute('aria-pressed', String(on))
+    const filterB = document.createElement('button')
+    filterB.type = 'button'
+    filterB.className = 'sp-btn sp-view-btn'
+    filterB.dataset.viewFilter = '1'
+    const n = filterCount(filter)
+    // the count rather than a list of chips: what matters is that the view is
+    // narrowed at all, and the popover says by what
+    filterB.textContent = n ? `${t('Filter')} · ${n}` : t('Filter')
+    head.append(openB, filterB)
+  }
   host.appendChild(head)
+
+  // A rule this build cannot evaluate means the view shows MORE than its author
+  // asked for. Additivity keeps the rule; honesty says so.
+  const unknown = unknownFilterKeys(filter)
+  if (unknown.length) {
+    const note = document.createElement('p')
+    note.className = 'sp-view-empty'
+    note.textContent = t('A filter here is newer than this build and was not applied.')
+    host.appendChild(note)
+  }
 
   if (!rows.length) {
     const empty = document.createElement('p')
     empty.className = 'sp-view-empty'
     // says how to fix it, because an empty board with no explanation reads as
-    // broken rather than as empty
-    empty.textContent = t('No issues yet. Add a status field to any page and it appears here.')
+    // broken rather than as empty — and an empty board with issues behind a
+    // filter is a DIFFERENT thing to fix
+    empty.textContent = all.length
+      ? t('No issues match this filter.')
+      : t('No issues yet. Add a status field to any page and it appears here.')
     host.appendChild(empty)
     return
   }
 
   const card = (page: Page, values: Map<string, unknown>): HTMLElement => {
-    const a = document.createElement(opts.editable === false ? 'div' : 'a')
-    a.className = 'sp-card'
-    if (a instanceof HTMLAnchorElement) a.href = `#p/${page.id}`
-    const t1 = document.createElement('span')
-    t1.className = 'sp-card-title'
+    // A DIV holding a link, not a link holding controls: the card carries a
+    // BUTTON now (the status picker, which is the only way to change a status
+    // with a finger), and interactive content inside an <a> is invalid and
+    // unreachable from the keyboard. The whole card is still one click target —
+    // the title's ::after stretches over it (styles.css).
+    const a = document.createElement('div')
+    a.className = 'sp-issue'
+    a.dataset.issue = page.id
+    const t1 = document.createElement(opts.editable === false ? 'span' : 'a')
+    t1.className = 'sp-issue-title'
+    if (t1 instanceof HTMLAnchorElement) t1.href = `#p/${page.id}`
     t1.textContent = page.title
     a.appendChild(t1)
     const meta = document.createElement('span')
-    meta.className = 'sp-card-meta'
+    meta.className = 'sp-issue-meta'
+
+    // THE STATUS IS A CONTROL, because a phone cannot drag. It is the same
+    // picker and the same writer the issue's own header strip uses — one path,
+    // so `value` and `html` can never fall out of step.
+    const own = opts.editable && field && propBlockOf(page, groupKey)
+    if (own) {
+      const set = document.createElement('button')
+      set.type = 'button'
+      set.className = 'sp-issue-chip sp-issue-set'
+      set.dataset.setField = own.id
+      set.title = t('Change {field}', { field: field!.label })
+      set.setAttribute('aria-label', t('Change {field}', { field: field!.label }))
+      const cur = optionOf(field, values.get(groupKey))
+      const d = document.createElement('span')
+      d.className = 'sp-prop-dot'
+      if (cur?.color) d.style.background = cur.color
+      set.append(d, document.createTextNode(shownValue(field, values.get(groupKey))))
+      meta.appendChild(set)
+    }
+
     for (const k of ['priority', 'assignee', 'estimate']) {
       const v = values.get(k)
       if (v === undefined || v === '' || v === null) continue
       const f2 = fieldByKey(doc, k)
       const chip = document.createElement('span')
-      chip.className = 'sp-card-chip'
+      chip.className = 'sp-issue-chip'
       const o = f2 && optionOf(f2, v)
       if (o?.color) {
         const d = document.createElement('span')
@@ -658,8 +724,13 @@ function renderView(host: HTMLElement, b: Block, doc: SpacesDoc, opts: RenderOpt
     for (const r of mine) col.appendChild(card(r.page, r.values))
     board.appendChild(col)
   }
-  // an issue whose status this build does not know still has to appear, or the
-  // board silently loses work written by a newer build
+  // An issue whose status this build does not know still has to appear, or the
+  // board silently loses work written by a newer build. It carries NO
+  // `data-group`, which is also what makes it a place you can drag OUT of and
+  // not INTO: "Other" is not a value, so there is nothing a drop here could
+  // write, and inventing one would overwrite a newer build's status with a
+  // guess. Dragging a card from here to a real column is how you correct it,
+  // deliberately.
   const orphans = rows.filter((r) => !seen.has(r.page.id))
   if (orphans.length) {
     const col = document.createElement('div')

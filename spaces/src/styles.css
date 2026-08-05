@@ -211,7 +211,7 @@ button.sp-callout-chip:hover { text-decoration: underline; text-underline-offset
 .sp-result-ico.sp-tone-warning, .sp-result-ico.sp-tone-caution { color: var(--tone-ink); }
 
 .sp-tonepop { width: 244px; }
-.sp-toneopt.sp-sel { background: var(--chrome-2); }
+.sp-dditem.sp-sel { background: var(--chrome-2); }
 .sp-tonerow { display: block; padding: 8px 9px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
 .sp-tonelabel { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .sp-toneicon { width: 100%; }
@@ -283,7 +283,6 @@ button.sp-callout-chip:hover { text-decoration: underline; text-underline-offset
 }
 .sp-b-code:hover .sp-langchip, .sp-langchip:focus { opacity: 1; }
 .sp-langpop { width: 190px; }
-.sp-langpop .sp-dditem.sp-sel { background: var(--chrome-2); }
 
 .sp-twist {
   flex: 0 0 auto; border: 0; background: transparent; color: var(--muted);
@@ -821,7 +820,12 @@ button.sp-prop-val:hover { background: #fff; border-color: #b9c3d2; }
 }
 
 .sp-view { margin: 0 0 18px; }
-.sp-view-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.sp-view-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.sp-view-btn { font-size: 12.5px; padding: 4px 9px; }
+.sp-view-btn:first-of-type { margin-inline-start: auto; }
+.sp-view-btn.sp-on { background: var(--chrome-2); border-color: #b9c3d2; color: var(--ink); }
+/* a field's name above its values, in the filter picker */
+.sp-fgroup { display: block; padding: 9px 9px 3px; font-size: 12px; color: var(--muted); }
 .sp-view-title { font-weight: 650; font-size: 15px; }
 .sp-view-count {
   font-size: 12px; color: var(--muted);
@@ -846,18 +850,54 @@ button.sp-prop-val:hover { background: #fff; border-color: #b9c3d2; }
 }
 .sp-col-count { margin-inline-start: auto; color: var(--muted); font-weight: 500; }
 
-.sp-card {
-  display: block; text-decoration: none; color: inherit;
+/* AN ISSUE CARD IS NOT A DIALOG CARD. Both were `.sp-card`, and the dialog's
+   rule (line ~333) sets `width: min(560px, 92vw)` — so every card on the board
+   was 560px wide inside a 232px column and spilled across its neighbours, on
+   every screen, since the board shipped. Measured, not theorised. Its own name
+   is the fix that cannot come back. */
+.sp-issue {
+  display: block; position: relative; color: inherit;
   background: #fff; border: 1px solid var(--line); border-radius: 8px;
   padding: 9px 10px; margin-bottom: 7px;
 }
-a.sp-card:hover { border-color: #b9c3d2; box-shadow: 0 2px 8px rgb(20 30 45 / .07); }
-.sp-card-title { display: block; font-size: 13.5px; line-height: 1.4; }
-.sp-card-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
-.sp-card-chip {
+.sp-issue:hover { border-color: #b9c3d2; box-shadow: 0 2px 8px rgb(20 30 45 / .07); }
+/* `.sp-page a` underlines every link in the reading column and out-specifies a
+   bare class — a card title is a card, not a link in a sentence. */
+.sp-page a.sp-issue-title, .sp-issue-title { display: block; font-size: 13.5px; line-height: 1.4; color: inherit; text-decoration: none; }
+/* THE WHOLE CARD IS THE LINK, and the status button is still a real button.
+   The card cannot BE an <a> any more (interactive content inside a link is
+   invalid and unreachable from the keyboard), so the title's ::after stretches
+   over the card and the button lifts above it. */
+a.sp-issue-title::after { content: ''; position: absolute; inset: 0; }
+.sp-issue-meta { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+.sp-issue-chip {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 11.5px; color: var(--muted);
   background: var(--chrome); border-radius: 5px; padding: 1px 6px;
+}
+button.sp-issue-set {
+  position: relative; z-index: 1; font: inherit; font-size: 11.5px;
+  border: 1px solid var(--line); cursor: pointer;
+  /* a finger's target, not a mouse's */
+  padding: 4px 8px; min-height: 26px;
+}
+button.sp-issue-set:hover { background: var(--chrome-2); border-color: #b9c3d2; }
+/* A FINGER: the status button is the only way to move an issue where HTML5
+   drag does not exist, so on a touch device it gets a target worth aiming at.
+   BOTH predicates — `coarse` is the honest one, and the width is the one a
+   desktop browser at 375px can be measured against (58×29 → 58×34 there). */
+@media (pointer: coarse), (max-width: 700px) {
+  button.sp-issue-set { min-height: 34px; padding: 7px 10px; }
+}
+
+/* dragging a card: what is moving, and exactly where it would land */
+.sp-issue[draggable='true'] { cursor: grab; }
+.sp-issue.sp-dragging { opacity: .4; }
+.sp-col.sp-drop { background: var(--chrome-2); outline: 2px solid var(--accent); outline-offset: -2px; }
+.sp-issue.sp-dropbefore { box-shadow: 0 -7px 0 -5px var(--accent); }
+.sp-col.sp-dropend::after {
+  content: ''; display: block; height: 2px; border-radius: 2px;
+  background: var(--accent); margin: 0 1px;
 }
 .sp-view-list { list-style: none; margin: 0; padding: 0; }
 .sp-view-list li { margin: 0 0 6px; }
@@ -868,6 +908,6 @@ a.sp-card:hover { border-color: #b9c3d2; box-shadow: 0 2px 8px rgb(20 30 45 / .0
 @media print {
   .sp-board { display: block; overflow: visible; }
   .sp-col { break-inside: avoid; margin-bottom: 10px; }
-  .sp-card { box-shadow: none; }
+  .sp-issue { box-shadow: none; }
   .sp-prop-val { background: none; }
 }

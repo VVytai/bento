@@ -166,6 +166,100 @@ export function headerLength(page: Page): number {
   return n
 }
 
+/**
+ * What NARROWS a view. Stored on the `view` block, so it is permanent.
+ *
+ * ABSENT MEANS EVERYTHING, and so does an absent key inside it. That is not a
+ * default, it is the compatibility rule: every view block written before
+ * filters existed carries no `filter`, and must keep showing every issue
+ * forever. The same rule makes the editor DELETE the key rather than store an
+ * empty object, so a view someone filtered and then unfiltered is byte-identical
+ * to one that was never filtered.
+ *
+ * Deliberately two keys. A filter language is a thing that grows without limit
+ * and can never shrink — every operator here is in files on other people's
+ * disks the moment it ships — so this is the smallest pair that answers the two
+ * questions a tracker is actually asked: "show me this label" and "show me what
+ * is still open".
+ */
+export interface ViewFilter {
+  /**
+   * field key → the values that pass. A value THIS BUILD DOES NOT KNOW is
+   * compared literally, so a filter written by a newer build still selects the
+   * issues it meant instead of matching nothing.
+   */
+  is?: Record<string, string[]>
+  /** only issues whose phase is neither done nor cancelled */
+  open?: boolean
+}
+
+/** Filter keys this build can evaluate. */
+const FILTER_KEYS = new Set(['is', 'open'])
+
+/**
+ * Filter keys from a NEWER build.
+ *
+ * They round-trip untouched, but this build cannot apply them, so the view
+ * shows MORE than it should — and a count that is silently too high is exactly
+ * the failure the format's additivity rule trades for. The view says so out
+ * loud instead.
+ */
+export const unknownFilterKeys = (f: unknown): string[] =>
+  f && typeof f === 'object' ? Object.keys(f).filter((k) => !FILTER_KEYS.has(k)) : []
+
+/**
+ * The field whose options declare PHASES — the one "open" is a question about.
+ *
+ * DERIVED FROM THE SCHEMA, never hardcoded to `status`: a document that
+ * declares its own fields names its own phase field, and one that declares none
+ * has no notion of open at all, in which case `open` passes everything rather
+ * than emptying the board.
+ */
+export const phaseField = (doc: SpacesDoc): FieldSpec | undefined =>
+  fieldsOf(doc).find((f) => f.options?.some((o) => o.group))
+
+/**
+ * Is this value a phase that is still going?
+ *
+ * An UNKNOWN value counts as open. A newer build's status must never be hidden
+ * by "open only" — hiding work because this build cannot read its status is a
+ * silent loss, and showing one issue too many is not.
+ */
+export const isOpenPhase = (f: FieldSpec | undefined, value: unknown): boolean => {
+  const g = optionOf(f, value)?.group
+  return g !== 'done' && g !== 'cancelled'
+}
+
+/** Does one issue pass a view's filter? */
+export function passesFilter(doc: SpacesDoc, values: Map<string, unknown>, filter: unknown): boolean {
+  if (!filter || typeof filter !== 'object') return true
+  const f = filter as ViewFilter
+  if (f.open) {
+    const pf = phaseField(doc)
+    if (!isOpenPhase(pf, values.get(pf?.key ?? ''))) return false
+  }
+  const is = f.is
+  if (is && typeof is === 'object') {
+    for (const key of Object.keys(is)) {
+      const want = is[key]
+      // an empty list is NO CONSTRAINT, not "nothing passes" — a stored empty
+      // would empty the board for a reason nobody could see
+      if (!Array.isArray(want) || !want.length) continue
+      const v = values.get(key)
+      const mine = Array.isArray(v) ? v.map(String) : [String(v ?? '')]
+      if (!want.some((w) => mine.includes(String(w)))) return false
+    }
+  }
+  return true
+}
+
+/** How many things a filter narrows by — what the Filter button counts. */
+export const filterCount = (filter: unknown): number => {
+  const f = (filter ?? {}) as ViewFilter
+  const is = f.is && typeof f.is === 'object' ? f.is : {}
+  return (f.open ? 1 : 0) + Object.keys(is).filter((k) => (is[k] ?? []).length).length
+}
+
 export interface IssueRow {
   page: Page
   values: Map<string, unknown>
@@ -180,6 +274,44 @@ export function issuesOf(doc: SpacesDoc): IssueRow[] {
   }
   return out
 }
+
+/** Where a dropped card lands: before a card, or after the last one. */
+export interface DropAim { before?: string; after?: string }
+
+/**
+ * The page order after a card is dropped — or NULL when the drop changes
+ * nothing.
+ *
+ * THE BOARD'S ORDER IS `doc.pages`. There is no per-view order field, and there
+ * must not be one invented by a drag handler: a stored order is permanent, it
+ * has to answer what happens to an issue no view has ever seen, and it can
+ * disagree with the pages themselves. Reordering the pages cannot.
+ *
+ * Pure, and separate from the editor, because this is the arithmetic that is
+ * easy to get wrong: the anchor is a page ID rather than an index precisely
+ * because the index moves under the splice that removes the dragged page. The
+ * null return is what keeps a drag that went nowhere out of the undo stack.
+ */
+export function reorderPages(pages: Page[], pageId: string, aim: DropAim): Page[] | null {
+  const from = pages.findIndex((p) => p.id === pageId)
+  const anchor = aim.before ?? aim.after
+  if (from < 0 || !anchor) return null
+  // already exactly there
+  if (aim.before ? pages[from + 1]?.id === aim.before : pages[from - 1]?.id === aim.after) return null
+  const next = pages.slice()
+  const [moved] = next.splice(from, 1)
+  // The anchor is looked up AFTER the removal, so the index is the one the
+  // insert needs. It also covers dropping a card on itself: the anchor is the
+  // page just removed, so it is not found and nothing moves.
+  const at = next.findIndex((p) => p.id === anchor)
+  if (at < 0) return null
+  next.splice(aim.before ? at : at + 1, 0, moved)
+  return next
+}
+
+/** One page's value block for a field, if it has one. */
+export const propBlockOf = (page: Page, key: string): Block | undefined =>
+  page.blocks.find((b) => b.type === 'prop' && (b as { key?: unknown }).key === key)
 
 /** Build a prop block, with its readable form already in step. */
 export function propBlock(f: FieldSpec, value: unknown, id: string): Block {

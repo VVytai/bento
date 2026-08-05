@@ -14,7 +14,10 @@ import { renderPage, toneLabel, paintCode } from './render'
 import { CODE_LANGS, langLabel, normLang } from './highlight'
 import { canonicalize, escText, sanitizeInline, textOf } from './sanitize'
 import { MENU_SPECS, MD_SPECS, SPEC, CALLOUT_TONES } from './blocks'
-import { fieldByKey, fieldsOf, propHtml, propBlock, isIssue, ISSUE_FIELDS } from './fields'
+import {
+  fieldByKey, fieldsOf, propHtml, propBlock, propBlockOf, isIssue, headerLength,
+  reorderPages, columnMoves, ISSUE_FIELDS, type DropAim, type FieldSpec, type ViewFilter,
+} from './fields'
 import { planImport, type SourceFile } from './markdown'
 import { countOutsideTags, replaceOutsideTags } from './findreplace'
 import { t } from './i18n'
@@ -740,15 +743,32 @@ export class Editor {
    */
   private setField(blockId: string, value: unknown): void {
     const s = this.store
-    const b = s.block(blockId)
-    if (!b) return
-    const f = fieldByKey(s.doc, String((b as { key?: unknown }).key ?? ''))
+    const at = s.index.block.get(blockId)
+    if (!at) return
+    const f = fieldByKey(s.doc, String((at.block as { key?: unknown }).key ?? ''))
     if (!f) return
-    s.commit(() => {
-      ;(b as Record<string, unknown>).value = value
-      b.html = propHtml(f, value)
-    }, { scope: 'page' })
+    // PAGE SCOPE ONLY WHEN THE VALUE IS ON THE PAGE IN VIEW. The store's page
+    // entry snapshots `store.pageId` by definition (store.ts entry()), and a
+    // status changed from a BOARD lives on another page — so a page-scoped
+    // checkpoint would record the board, and undo would restore the board while
+    // leaving the changed status exactly where it was. Cheap when it is right,
+    // silently wrong when it is not.
+    const scope = at.pageId === s.pageId ? 'page' : 'doc'
+    s.commit(() => this.applyField(at.block, f, value), { scope })
     this.paintPage()
+  }
+
+  /**
+   * THE ONE WRITER for a field value. `value` and `html` move together, always,
+   * because the readable form is the only thing an older build, a thumbnailer,
+   * a grep and the markdown export can see. Every path that sets a value —
+   * the header chip, the board's card button, a drag between columns — goes
+   * through here, so there is one place for the two to fall out of step and it
+   * is three lines long.
+   */
+  private applyField(b: Block, f: FieldSpec, value: unknown): void {
+    ;(b as Record<string, unknown>).value = value
+    b.html = propHtml(f, value)
   }
 
   private openFieldPicker(blockId: string, anchor: HTMLElement): void {
@@ -795,6 +815,236 @@ export class Editor {
       pop.append(input)
       afterPaint(() => input.focus())
     }
+
+    this.overlay = pop
+    document.body.append(pop)
+    if (this.isDrawer()) pop.classList.add('sp-sheet-in')
+    else place(pop, anchor)
+    const away = (ev: MouseEvent) => {
+      if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
+    }
+    setTimeout(() => document.addEventListener('mousedown', away), 0)
+  }
+
+  /**
+   * THE BOARD, made to work — with a mouse and with a finger.
+   *
+   * Three affordances over one writer:
+   *   · DRAG a card to another column — that column's option becomes the value.
+   *   · DRAG within a column — the pages move, because the order of the board
+   *     IS the order of `doc.pages`. No stored per-view order: that would be a
+   *     new permanent format field, and a drag handler is not the place to
+   *     settle one (docs/DECISIONS.md, 2026-08-05).
+   *   · TAP the status on a card — a phone cannot drag an HTML5 draggable at
+   *     all, and the board is the tracker's main screen. It opens the SAME
+   *     picker the issue's own header strip opens.
+   *
+   * Everything here is wired only when the document is editable: the renderer
+   * emits no card button in reading view, in a locked space or on paper, and
+   * this is not called there, so there is no half-live board anywhere.
+   */
+  private wireBoard(root: HTMLElement): void {
+    const s = this.store
+    if (s.readOnly || this.reading) return
+    for (const v of root.querySelectorAll<HTMLElement>('.sp-view')) {
+      const vb = s.block(v.dataset.blockId ?? '')
+      const groupKey = String((vb as { groupBy?: unknown } | undefined)?.groupBy ?? 'status')
+
+      v.querySelector<HTMLElement>('[data-view-open]')?.addEventListener('click', () => {
+        this.editViewFilter(v.dataset.blockId!, (f) => { if (f.open) delete f.open; else f.open = true })
+      })
+      const fb = v.querySelector<HTMLElement>('[data-view-filter]')
+      fb?.addEventListener('click', () => this.openViewFilter(v.dataset.blockId!, fb))
+
+      for (const btn of v.querySelectorAll<HTMLElement>('[data-set-field]')) {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault()
+          this.openFieldPicker(btn.dataset.setField!, btn)
+        })
+      }
+
+      // NO BOARD, NO DRAG. A list has cards but no columns, so a draggable card
+      // there is an affordance that promises something nothing can accept.
+      const board = v.querySelector('.sp-board')
+      if (!board) continue
+
+      const marks = () => {
+        for (const n of v.querySelectorAll('.sp-drop, .sp-dropend, .sp-dropbefore')) {
+          n.classList.remove('sp-drop', 'sp-dropend', 'sp-dropbefore')
+        }
+      }
+      for (const card of v.querySelectorAll<HTMLElement>('.sp-issue[data-issue]')) {
+        card.draggable = true
+        // A LINK DRAGS ITSELF, carrying its href, and that gesture would beat
+        // the card's. Told not to, the drag belongs to the nearest draggable
+        // ancestor, which is the card.
+        card.querySelector('a')?.setAttribute('draggable', 'false')
+        card.addEventListener('dragstart', (e) => {
+          e.dataTransfer?.setData('text/bento-issue', card.dataset.issue!)
+          card.classList.add('sp-dragging')
+        })
+        card.addEventListener('dragend', () => { card.classList.remove('sp-dragging'); marks() })
+      }
+
+      // THE COLUMN UNDER THE POINTER, never a guess — cleared on the way DOWN
+      // (capture, on the board) and re-marked on the way up (the column the
+      // pointer is actually inside). So the mark is where the pointer is and
+      // nowhere else, including over the "Other" column, which accepts no drop
+      // and must therefore not leave the last real column looking like a target.
+      //
+      // `dragleave` cannot do this: it bubbles from every child, so moving
+      // across a card inside a column reports leaving the column.
+      board.addEventListener('dragover', (e) => {
+        if ((e as DragEvent).dataTransfer?.types.includes('text/bento-issue')) marks()
+      }, true)
+      for (const col of v.querySelectorAll<HTMLElement>('.sp-col[data-group]')) {
+        col.addEventListener('dragover', (e) => {
+          if (!e.dataTransfer?.types.includes('text/bento-issue')) return
+          e.preventDefault()
+          const aim = this.aimAt(col, e.clientY)
+          col.classList.add('sp-drop')
+          if (aim.before) col.querySelector(`[data-issue="${CSS.escape(aim.before)}"]`)?.classList.add('sp-dropbefore')
+          else col.classList.add('sp-dropend')
+        })
+        col.addEventListener('drop', (e) => {
+          const moved = e.dataTransfer?.getData('text/bento-issue')
+          if (!moved) return
+          e.preventDefault()
+          const aim = this.aimAt(col, e.clientY)
+          marks()
+          this.dropIssue(moved, groupKey, col.dataset.group!, aim)
+        })
+      }
+    }
+  }
+
+  /** Where in this column a drop at `y` lands: before a card, or after the last. */
+  private aimAt(col: HTMLElement, y: number): DropAim {
+    const cards = [...col.querySelectorAll<HTMLElement>('.sp-issue[data-issue]')]
+    for (const c of cards) {
+      const r = c.getBoundingClientRect()
+      if (y < r.top + r.height / 2) return { before: c.dataset.issue }
+    }
+    return { after: cards[cards.length - 1]?.dataset.issue }
+  }
+
+  /**
+   * A card landed. Set its value, move its page, or — if it landed where it
+   * already was — do NOTHING: no commit, no undo entry, no dirty flag. A drag
+   * that changes nothing must not be a step you have to press ⌘Z past.
+   *
+   * Both halves are ONE commit, because one drag is one user action.
+   */
+  private dropIssue(pageId: string, key: string, optId: string, aim: DropAim): void {
+    const s = this.store
+    const page = s.index.page.get(pageId)
+    const f = fieldByKey(s.doc, key)
+    if (!page || !f || s.readOnly) return
+    const own = propBlockOf(page, key)
+    const setting = !own || String((own as { value?: unknown }).value ?? '') !== optId
+    const order = reorderPages(s.doc.pages, pageId, aim)
+    if (!setting && !order) return
+
+    s.commit(() => {
+      if (setting) {
+        if (own) this.applyField(own, f, optId)
+        // A page can reach a column without carrying that field at all (a board
+        // grouped by something an issue never had). It gains the value, in the
+        // header strip where the others are — through propBlock, so the
+        // readable form is written with it.
+        else page.blocks.splice(headerLength(page), 0, propBlock(f, optId, newBlock('prop').id))
+      }
+      if (order) s.doc.pages = order
+    })
+    this.repaint()
+  }
+
+  /**
+   * Narrow a view. The filter lives on the `view` block, so it is saved, shared
+   * and permanent.
+   *
+   * Rules an edit here must not break: unknown keys are a NEWER build's and are
+   * never touched, and a filter that narrows nothing is DELETED rather than
+   * stored empty — so a view someone filtered and unfiltered is byte-identical
+   * to one that never was.
+   */
+  private editViewFilter(blockId: string, edit: (f: ViewFilter) => void): void {
+    const s = this.store
+    const b = s.block(blockId)
+    if (!b || s.readOnly || this.reading) return
+    s.commit(() => {
+      const next = { ...((b as { filter?: ViewFilter }).filter ?? {}) }
+      edit(next)
+      if (Object.keys(next).length) (b as { filter?: ViewFilter }).filter = next
+      else delete (b as { filter?: ViewFilter }).filter
+    }, { scope: 'page' })
+    this.paintPage()
+  }
+
+  /** Toggle one value of one field in a view's filter. */
+  private toggleViewValue(blockId: string, key: string, id: string): void {
+    this.editViewFilter(blockId, (f) => {
+      const is: Record<string, string[]> = { ...(f.is ?? {}) }
+      const had = is[key] ?? []
+      const next = had.filter((v) => v !== id)
+      if (next.length === had.length) next.push(id)
+      if (next.length) is[key] = next
+      else delete is[key]
+      if (Object.keys(is).length) f.is = is
+      else delete f.is
+    })
+  }
+
+  /**
+   * The filter picker: every option of every select field, as toggles.
+   *
+   * Deliberately NOT a query builder — no operators, no and/or, no nesting.
+   * A list of values you can switch on is the whole of what a board needs, it
+   * fits a phone sheet, and it cannot grow a language that then has to be
+   * supported forever.
+   */
+  private openViewFilter(blockId: string, anchor: HTMLElement): void {
+    const s = this.store
+    const b = s.block(blockId)
+    if (!b || s.readOnly || this.reading) return
+    this.closeOverlay()
+    const pop = el('div', this.isDrawer() ? 'sp-pop sp-sheet' : 'sp-pop')
+    pop.setAttribute('role', 'menu')
+    this.trapAndClose(pop)
+    const cur = ((b as { filter?: ViewFilter }).filter ?? {}) as ViewFilter
+
+    for (const f of fieldsOf(s.doc)) {
+      if (!f.options?.length) continue
+      pop.append(el('div', 'sp-fgroup', f.label))
+      for (const o of f.options) {
+        const on = (cur.is?.[f.key] ?? []).includes(o.id)
+        const item = document.createElement('button')
+        item.className = 'sp-dditem' + (on ? ' sp-sel' : '')
+        item.type = 'button'
+        item.setAttribute('aria-pressed', String(on))
+        const dot = el('span', 'sp-prop-dot')
+        if (o.color) dot.style.background = o.color
+        const name = document.createElement('span')
+        name.textContent = o.label
+        item.append(dot, name)
+        // the popover STAYS OPEN: picking three labels is one thought, and
+        // reopening a menu between each is the thing that makes filters
+        // unusable. Each toggle is still its own undo step.
+        item.addEventListener('click', () => {
+          const next = !item.classList.contains('sp-sel')
+          item.classList.toggle('sp-sel', next)
+          item.setAttribute('aria-pressed', String(next))
+          this.toggleViewValue(blockId, f.key, o.id)
+        })
+        pop.append(item)
+      }
+    }
+    const clear = this.menuItem('trash', t('Clear filter'), '', () => {
+      this.closeOverlay()
+      // unknown keys survive: this clears what this build put there
+      this.editViewFilter(blockId, (f) => { delete f.is; delete f.open })
+    })
+    pop.append(clear)
 
     this.overlay = pop
     document.body.append(pop)
@@ -1081,6 +1331,7 @@ export class Editor {
           this.openFieldPicker(id, chip)
         })
       }
+      this.wireBoard(view)
     }
 
     // "Load this image" — the reader's consent to contact one remote host.

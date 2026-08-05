@@ -1275,6 +1275,52 @@ CI-testable, but the registry drifting from the tree is. It pins `appId`
 against each app's own `configureApp()` call and the manifest URL against the
 path the release publishes to.
 
+## 2026-08-05 — The board's order IS the page order, and a view's filter is two keys
+
+**Decision.** Dragging a card between columns sets that issue's field value.
+Dragging it *within* a column reorders `doc.pages`. There is **no per-view
+order field**, and nobody may add one in a drag handler. A view's filter is
+`filter: { is?: {key: string[]}, open?: boolean }` on the `view` block, and
+absent means everything.
+
+**Why order is the page array.** An issue IS a page, and pages are already an
+ordered list — the sidebar renders it, the markdown export walks it, and a
+saved file preserves it. A stored per-view order is a permanent format field
+that has to answer what happens to an issue no view has ever seen, what happens
+when two views disagree, and what a build that predates it does with the
+orphaned key. Reordering the pages answers none of those questions because it
+does not ask them. The consequence is deliberate and worth saying out loud: the
+board's order and the sidebar's order are the same order. `fields.ts
+reorderPages` is the whole mechanism, and it returns null when a drop changes
+nothing, which is what keeps a drag that went nowhere out of the undo stack.
+
+**Why `sort` is NOT implemented.** `sort: [...]` appears in the shape sketched
+in the ruling below. It is still unimplemented, and now it is not free: a
+stored sort and a hand-dragged order contradict each other, and which one wins
+is a format decision, not a rendering detail. Whoever needs sort settles that
+first. Until then a `sort` key round-trips untouched and is ignored.
+
+**Why the filter is two keys.** `is` (a field's values) and `open` (a phase).
+A filter language grows without limit and can never shrink — every operator is
+in files on other people's disks the moment it ships. These two answer the two
+questions a tracker is actually asked. Rules: an absent filter, an absent key
+and an empty value list all mean "no constraint", so every view block written
+before filters keeps working and an empty stored filter is deleted rather than
+kept; a value this build does not know is compared LITERALLY, so a filter a
+newer build wrote still selects what it meant; `open` is derived from
+`FieldOption.group` on the first field whose options declare one (never
+hardcoded to `status`), and an unknown value counts as OPEN, because hiding
+work this build cannot read is a loss and showing one issue too many is not; a
+filter key this build cannot evaluate is kept, is not applied, and the view
+SAYS SO — a count that is silently too high is the failure additivity would
+otherwise trade for.
+
+**Touch.** A phone cannot drag an HTML5 draggable, and the board is the
+tracker's main screen, so every card carries a status BUTTON that opens the
+same picker the issue's own header strip opens, through the same writer
+(`editor.applyField` → `fields.propHtml`). There is exactly one place where
+`value` and `html` are written, and there must stay exactly one.
+
 ## 2026-08-05 — An issue is a page: the tracker format for bento/spaces
 
 **Decision.** bento/spaces gains an opinionated, Linear-shaped issue tracker.

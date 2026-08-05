@@ -4,7 +4,7 @@
     "spaces": {
       "path": "spaces/dist-single/Bento_Spaces.bento.html",
       "max": 131072,
-      "//": "128 KiB. Raised from 125 KiB at 126782 B on 2026-08-05 for the tracker's AGENT surface: fields()/issues()/setField()/newIssue() and six field findings in validate(). Measured cost of that work alone: 2548 B (124234 → 126782), most of it the refusal and finding TEXT, which is the part that makes the surface usable blind and is not worth compressing away. The raise is exactly what this workstream spent, so the headroom the previous entry left for the board work is still there rather than quietly eaten by this. Before: 118 KiB → 125 KiB at 122898 B for the tracker itself (typed fields, the prop and view block types, the board) — an issue tracker in the same file as the notes is the thing neither Linear nor a wiki can do."
+      "//": "128 KiB. Raised from 125 KiB at 127502 B on 2026-08-05 for the working board: drag a card between columns (and within one, which reorders the pages), a status button on every card because a phone cannot drag, and view filters stored on the view block. 3268 B, of which ~900 is six new strings across nine languages. Previously: raised from 118 KiB at 122898 B for the tracker itself — typed fields (fields.ts), the prop and view block types, and the board. An issue tracker in the same file as the notes is the thing neither Linear nor a wiki can do, and it is worth its bytes; the ceiling moves in the commit that spends them."
     }
   }
 }

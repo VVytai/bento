@@ -33,7 +33,8 @@ import {
 import { countOutsideTags, replaceOutsideTags } from '../spaces/src/findreplace.ts'
 import {
   DEFAULT_FIELDS, fieldsOf, fieldByKey, optionOf, propHtml, propBlock,
-  valuesOf, isIssue, issuesOf, headerLength,
+  valuesOf, isIssue, issuesOf, headerLength, propBlockOf,
+  passesFilter, filterCount, unknownFilterKeys, phaseField, isOpenPhase, reorderPages,
 } from '../spaces/src/fields.ts'
 import { inlineHtml, parseNote, planImport } from '../spaces/src/markdown.ts'
 import { planUpdatePage } from '../spaces/src/agent.ts'
@@ -42,7 +43,7 @@ import { escText } from '../spaces/src/sanitize.ts'
 import {
   SPECS, SPEC, MENU_SPECS, MD_SPECS, TAG_OF, LIST_OF, CALLOUT_TONES, mdLayout,
 } from '../spaces/src/blocks.ts'
-import type { Block } from '../spaces/src/model.ts'
+import type { Block, Page } from '../spaces/src/model.ts'
 
 let failures = 0
 let checks = 0
@@ -1198,6 +1199,141 @@ for (const [label, input, err] of [
   ok(fieldByKey({} as never, 'no-such-field') === undefined,
     'an unknown field key resolves to no spec')
   ok(optionOf(undefined, 'x') === undefined, '…and asking for its options is not an error')
+}
+
+// ---- a view can be NARROWED, and a card can be MOVED ----------------------
+// A filter is stored on the view block, so it is as permanent as the board is,
+// and everything here is a thing that fails SILENTLY: a filter shows too few
+// issues and looks like an empty tracker; a filter this build cannot read shows
+// too many and looks like it worked; a drag that lands where it started writes
+// an undo step you have to press ⌘Z past for nothing.
+{
+  const doc = {
+    format: FORMAT, version: 1, docId: 'tk', title: 'T',
+    pages: [], theme: {},
+  } as unknown as SpacesDoc
+  const vals = (o: Record<string, unknown>) => new Map(Object.entries(o))
+
+  // ABSENT MEANS EVERYTHING — the rule that keeps every view block written
+  // before filters existed working unchanged
+  ok(passesFilter(doc, vals({ status: 'done' }), undefined), 'no filter shows everything')
+  ok(passesFilter(doc, vals({ status: 'done' }), {}), '…and neither does an empty one')
+  ok(passesFilter(doc, vals({ status: 'done' }), { is: { status: [] } }),
+    '…nor a field whose value list is empty, which is no constraint rather than "nothing passes"')
+
+  // filter by a value
+  ok(passesFilter(doc, vals({ status: 'todo' }), { is: { status: ['todo', 'doing'] } }),
+    'a value in the list passes')
+  ok(!passesFilter(doc, vals({ status: 'done' }), { is: { status: ['todo', 'doing'] } }),
+    '…and one that is not does not')
+  ok(passesFilter(doc, vals({ labels: ['bug', 'ui'] }), { is: { labels: ['ui'] } }),
+    'a list-valued field passes on any member')
+  ok(!passesFilter(doc, vals({}), { is: { status: ['todo'] } }),
+    'an issue with no value for a filtered field does not pass')
+
+  // A VALUE THIS BUILD DOES NOT KNOW is compared literally — a filter written
+  // by a newer build still selects the issues it meant
+  ok(passesFilter(doc, vals({ status: 'shipped-to-space' }), { is: { status: ['shipped-to-space'] } }),
+    'an unknown value is filtered ON, not dropped')
+
+  // OPEN ONLY, from FieldOption.group
+  ok(phaseField(doc)?.key === 'status',
+    'the phase field is derived from the schema — the first whose options declare a group')
+  ok(phaseField({ fields: [{ key: 'k', label: 'K', vt: 'text' }] } as never) === undefined,
+    '…and a schema that declares no phases has none')
+  ok(passesFilter(doc, vals({ status: 'doing' }), { open: true }), 'a started issue is open')
+  ok(passesFilter(doc, vals({ status: 'backlog' }), { open: true }), 'an unstarted one is open')
+  ok(!passesFilter(doc, vals({ status: 'done' }), { open: true }), 'a done one is not')
+  ok(!passesFilter(doc, vals({ status: 'cancelled' }), { open: true }), 'nor is a cancelled one')
+  ok(isOpenPhase(phaseField(doc), 'shipped-to-space'),
+    'a status this build cannot read counts as OPEN — hiding work is the loss, showing one issue too many is not')
+  ok(passesFilter({ fields: [{ key: 'k', label: 'K', vt: 'text' }] } as never, vals({}), { open: true }),
+    'and "open" over a schema with no phases passes everything rather than emptying the board')
+
+  // a rule from a NEWER BUILD: kept, not applied, and SAID OUT LOUD
+  const future = { open: true, since: '2026-01-01' }
+  ok(unknownFilterKeys(future).join() === 'since',
+    'a filter key this build cannot evaluate is reported')
+  ok(unknownFilterKeys({ is: {}, open: true }).length === 0, '…and a known one is not')
+  ok(passesFilter(doc, vals({ status: 'doing' }), future),
+    'the rules this build DOES know are still applied alongside it')
+  ok(JSON.parse(JSON.stringify({ type: 'view', filter: future })).filter.since === '2026-01-01',
+    'and the rule itself round-trips verbatim')
+
+  ok(filterCount(undefined) === 0 && filterCount({ open: true, is: { status: ['a'], p: [] } }) === 2,
+    'the Filter button counts what actually narrows — an empty value list narrows nothing')
+
+  // ---- dropping a card ----------------------------------------------------
+  // THE BOARD'S ORDER IS THE PAGE ORDER. No per-view order field exists, so the
+  // arithmetic here is the whole mechanism, and its null return is what keeps a
+  // drag that went nowhere out of the undo stack.
+  const ps = (...ids: string[]): Page[] => ids.map((id) => ({ id, title: id, blocks: [] }))
+  const ids = (list: Page[] | null): string => (list ?? []).map((p) => p.id).join('')
+
+  ok(ids(reorderPages(ps('a', 'b', 'c'), 'c', { before: 'a' })) === 'cab', 'a card moves before another')
+  ok(ids(reorderPages(ps('a', 'b', 'c'), 'a', { after: 'c' })) === 'bca', '…or after the last one')
+  ok(reorderPages(ps('a', 'b', 'c'), 'a', { before: 'b' }) === null,
+    'dropping a card exactly where it already is records NOTHING')
+  ok(reorderPages(ps('a', 'b', 'c'), 'b', { after: 'a' }) === null, '…from either side of the gap')
+  ok(reorderPages(ps('a', 'b', 'c'), 'b', { before: 'b' }) === null, '…and dropping it on itself is not a move')
+  ok(reorderPages(ps('a', 'b', 'c'), 'b', {}) === null,
+    'a drop into an EMPTY column is a status change only, never a reorder')
+  ok(reorderPages(ps('a', 'b'), 'zz', { before: 'a' }) === null, 'a page that is not there does not move')
+  ok(reorderPages(ps('a', 'b'), 'a', { before: 'zz' }) === null, '…and neither does one aimed at a card that is not')
+  // the anchor is an ID because the index moves under the splice
+  ok(ids(reorderPages(ps('a', 'b', 'c', 'd'), 'a', { before: 'd' })) === 'bcad',
+    'moving forwards lands before the anchor, not one short of it')
+  ok(ids(reorderPages(ps('a', 'b', 'c', 'd'), 'd', { after: 'a' })) === 'adbc',
+    'and moving backwards lands after it')
+
+  // the value block a card's status button and a drop both write through
+  const page: Page = { id: 'p', title: 'x', blocks: [
+    { id: 'b1', type: 'prop', key: 'status', value: 'todo', html: 'Status: Todo' },
+    { id: 'b2', type: 'p', html: '' },
+  ] }
+  ok(propBlockOf(page, 'status')?.id === 'b1', 'a page reports the BLOCK holding a field, not just its value')
+  ok(propBlockOf(page, 'priority') === undefined,
+    'and a field it does not carry has none — the drop creates one through propBlock')
+}
+
+// ---- the board's writes go through the ONE writer -------------------------
+// `value` and `html` must move together on EVERY path, or a status set from the
+// board is invisible to an older build, a thumbnailer, a grep and the markdown
+// export. There are three ways to set one now (the header chip, the card
+// button, a drag) and they must not become three writers.
+{
+  const fs = await import('node:fs')
+  const ed = fs.readFileSync(new URL('../spaces/src/editor.ts', import.meta.url), 'utf8')
+  const ren = fs.readFileSync(new URL('../spaces/src/render.ts', import.meta.url), 'utf8')
+
+  ok((ed.match(/propHtml\(/g) ?? []).length === 1,
+    'editor.ts calls propHtml in exactly ONE place — applyField, the single writer')
+  ok(/private applyField\([^)]*\)[^{]*\{\s*;?\(b as Record<string, unknown>\)\.value = value\s*b\.html = propHtml\(f, value\)/.test(ed),
+    '…and that writer sets value and html together, in adjacent statements')
+  ok(!/\.value = optId/.test(ed),
+    'the drop handler does not assign a value of its own')
+
+  // undo scope: a page entry snapshots the page IN VIEW (store.ts), so a value
+  // changed from a board — which is on another page — must take a doc entry
+  ok(/at\.pageId === s\.pageId \? 'page' : 'doc'/.test(ed),
+    'a field set on another page takes a DOCUMENT undo entry, not a page one')
+
+  // one drag = one undo step, and a drag that changed nothing = none
+  ok(/if \(!setting && !order\) return/.test(ed),
+    'a drop that changes neither value nor order commits nothing')
+  ok((ed.match(/s\.commit\(\(\) => \{[\s\S]*?if \(order\) s\.doc\.pages = order/g) ?? []).length === 1,
+    'the value change and the move are ONE commit — one drag, one undo step')
+
+  // read-only and reading view: no board machinery at all. The guard is on the
+  // wiring ITSELF, not only on its call site — the callout chip loop shipped
+  // wired in reading view for exactly one round because the guard lived
+  // somewhere a later edit could step outside of.
+  ok(/private wireBoard\([^)]*\)[^{]*\{\s*const s = this\.store\s*if \(s\.readOnly \|\| this\.reading\) return/.test(ed),
+    'the board refuses to wire itself in a locked space or in reading view')
+  ok(/const own = opts\.editable && field && propBlockOf/.test(ren),
+    'the renderer emits a card status BUTTON only for an editable document')
+  ok(/if \(opts\.editable\) \{\s*const on = /.test(ren),
+    '…and the view controls likewise, so a reader and a printout get neither')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)
