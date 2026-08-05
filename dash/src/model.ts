@@ -113,6 +113,15 @@ export interface CellOverride {
   was?: unknown
   /** A per-cell formula, for the cases a column expression cannot express. */
   f?: string
+  /**
+   * The formula an imported .xlsx held, kept VERBATIM even when dash will not
+   * evaluate it — a cross-sheet reference, an external workbook, a function we
+   * lack. `f` is what dash computes; this is what the file said. Keeping both
+   * is what stops an xlsx → dash → xlsx round trip from quietly deleting
+   * somebody's model, and it is why an import that cannot run a formula still
+   * shows the cached VALUE rather than a blank or a zero.
+   */
+  xlsxF?: string
   /** Volatiles (`TODAY()`): the moment this value was committed. */
   froze?: string
   /**

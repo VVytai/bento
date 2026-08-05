@@ -33,6 +33,7 @@ import { mountAbout, rememberVersion } from './about.ts'
 import { mountPanels } from './panels.ts'
 import { installStory } from './story.ts'
 import { Dashboard } from './dashboard.ts'
+import { importXlsx, exportXlsx, xlsxFileName } from './xlsx.ts'
 import { runPivot, mountPivot, defaultPivot, newPivotSheet, type PivotSpec } from './pivot.ts'
 import { buildSheetPreview } from './preview.ts'
 import { installSaveMenu, adoptOpenedDoc } from './saveui.ts'
@@ -168,6 +169,8 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     `<button class="dx-btn" data-act="import">${t('Import CSV…')}</button>` +
     `<button class="dx-btn" data-act="undo">${t('Undo')}</button>` +
     `<button class="dx-btn" data-act="export">${t('Export CSV')}</button>` +
+    `<button class="dx-btn" data-act="import-xlsx">${t('Import Excel…')}</button>` +
+    `<button class="dx-btn" data-act="export-xlsx">${t('Export Excel')}</button>` +
     `<button class="dx-btn" data-act="save">${t('Save')}</button>` +
     `<span class="dx-ver">v${APP_VERSION}</span>` +
     `</header>` +
@@ -329,6 +332,13 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   }
   const clearPivot = (): void => { pivotDown?.(); pivotDown = null; pivotSpec = null }
   store.on('doc', () => { if (pivotSpec) drawPivot() })
+
+  app.querySelector('[data-act="import-xlsx"]')!.addEventListener('click', () => {
+    void pickXlsx(store, findingsEl, grid)
+  })
+  app.querySelector('[data-act="export-xlsx"]')!.addEventListener('click', () => {
+    void saveXlsx(store, grid, findingsEl)
+  })
 
   app.querySelector('[data-act="pivot"]')!.addEventListener('click', () => {
     const spec = defaultPivot(grid.sheet)
@@ -726,6 +736,53 @@ function openFilterMenu(
 const frozenTo = (grid: Grid, colId: string): boolean => {
   const at = grid.sheet.columns.filter((c) => !c.hidden).findIndex((c) => c.id === colId)
   return readFrozen(grid.sheet).cols === at + 1
+}
+
+/** Open a .xlsx. Every worksheet arrives as its own dash sheet. */
+async function pickXlsx(store: Store, host: HTMLElement, grid: Grid): Promise<void> {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  input.addEventListener('change', () => {
+    const f = input.files?.[0]
+    if (!f) return
+    void f.arrayBuffer().then(async (buf) => {
+      try {
+        const r = await importXlsx(new Uint8Array(buf), {
+          source: f.name, at: new Date().toISOString(),
+          idPrefix: `xl-${Math.floor(Date.now() % 1e8).toString(36)}`,
+        })
+        store.doc.sheets.push(...r.sheets)
+        store.replaceDoc(store.doc)
+        if (r.sheets.length) grid.setSheet(r.sheets[0].id)
+        showFindings(host, r.findings as never)
+      } catch (e) {
+        // A refusal, not a crash: the file on disk is untouched.
+        showFindings(host, [{ message: `${t('That .xlsx could not be opened.')} ${e instanceof Error ? e.message : String(e)}` }] as never)
+      }
+    })
+  })
+  input.click()
+}
+
+/**
+ * Save as .xlsx. `grid.computed` carries the formula columns' VALUES, which are
+ * never stored — without them a computed column exports empty, and the exporter
+ * says so in its findings rather than shipping blanks quietly.
+ */
+async function saveXlsx(store: Store, grid: Grid, host: HTMLElement): Promise<void> {
+  const r = await exportXlsx(store.doc, {
+    at: new Date(),
+    computed: { [grid.sheet.id]: grid.computed as Map<string, unknown[]> },
+  })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(new Blob([r.bytes as BlobPart], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }))
+  a.download = xlsxFileName(store.doc.title)
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  showFindings(host, r.findings as never)
 }
 
 const readCellOf = (sheet: TableSheet, colId: string, row: number): unknown =>
