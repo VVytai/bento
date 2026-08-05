@@ -33,6 +33,7 @@ import { mountAbout, rememberVersion } from './about.ts'
 import { mountPanels } from './panels.ts'
 import { installStory } from './story.ts'
 import { Dashboard } from './dashboard.ts'
+import { runPivot, mountPivot, defaultPivot, newPivotSheet, type PivotSpec } from './pivot.ts'
 import { buildSheetPreview } from './preview.ts'
 import { installSaveMenu, adoptOpenedDoc } from './saveui.ts'
 import { dismissSplash, dismissSplashNow } from './splash.ts'
@@ -161,6 +162,7 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     `<button class="dx-btn" data-act="formula">${t('＋ Formula column')}</button>` +
     `<button class="dx-btn" data-act="chart">${t('＋ Chart')}</button>` +
     `<button class="dx-btn" data-act="viz3d">${t('＋ 3D')}</button>` +
+    `<button class="dx-btn" data-act="pivot">${t('＋ Pivot')}</button>` +
     `<button class="dx-btn" data-act="dashboard">${t('Dashboard')}</button>` +
     `<button class="dx-btn" data-act="story">${t('Data story')}</button>` +
     `<button class="dx-btn" data-act="import">${t('Import CSV…')}</button>` +
@@ -262,10 +264,12 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   })
   app.querySelector('.dx-chart-close')!.addEventListener('click', () => {
     chartEl.hidden = true
+    clearPivot()
     teardown?.(); teardown = null
     vizDown?.(); vizDown = null; viz = null
   })
   app.querySelector('[data-act="chart"]')!.addEventListener('click', () => {
+    clearPivot()
     vizDown?.(); vizDown = null; viz = null
     binding = defaultBinding(grid.sheet)
     if (!binding) { showFindings(findingsEl, [{ message: t('This sheet has no numeric column to chart yet.') }]); return }
@@ -292,6 +296,7 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   }
   store.on('doc', () => { if (viz) draw3d() })
   app.querySelector('[data-act="viz3d"]')!.addEventListener('click', () => {
+    clearPivot()
     viz = defaultViz3d(grid.sheet)
     if (!viz) {
       showFindings(findingsEl, [{ message: t('This sheet needs at least three numeric columns, or a latitude and longitude, to plot in 3D.') }])
@@ -306,6 +311,41 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   // AFTER grid.onSelectionChange is set: mountPanels CHAINS that callback
   // rather than replacing it, so the formula bar and status bar keep working.
   mountPanels({ store, grid, body: app.querySelector<HTMLElement>('.dx-body')! })
+
+  // --- pivot. A pivot is a DOCUMENT, not a view: "revenue by region by
+  // quarter" is an argument about what the data means, somebody built it, and
+  // "look at the pivot on sheet 3" has to name something that exists in the
+  // file. The sheet stores the SPEC and never the numbers.
+  let pivotSpec: PivotSpec | null = null
+  let pivotDown: (() => void) | null = null
+  const drawPivot = (): void => {
+    if (!pivotSpec || chartEl.hidden) return
+    pivotDown?.(); teardown?.(); teardown = null
+    const src = store.doc.sheets.find((sh) => sh.id === pivotSpec!.from)
+    if (!src || src.kind !== 'table') return
+    chartTitle.textContent = `${t('Pivot')} · ${src.name}`
+    const computed = grid.computed as Map<string, unknown[]>
+    pivotDown = mountPivot(chartBody, runPivot(src, pivotSpec, { computed }), { sheet: src, computed })
+  }
+  const clearPivot = (): void => { pivotDown?.(); pivotDown = null; pivotSpec = null }
+  store.on('doc', () => { if (pivotSpec) drawPivot() })
+
+  app.querySelector('[data-act="pivot"]')!.addEventListener('click', () => {
+    const spec = defaultPivot(grid.sheet)
+    if (!spec) {
+      showFindings(findingsEl, [{ message:
+        t('This sheet needs a category column and a numeric column to pivot.') } as never])
+      return
+    }
+    const doc = store.doc
+    const id = `pivot-${Math.floor(Date.now() % 1e8).toString(36)}`
+    doc.sheets.push(newPivotSheet(id, `${grid.sheet.name} — ${t('pivot')}`, spec))
+    store.replaceDoc(doc)
+    binding = null; viz = null; vizDown?.(); vizDown = null
+    pivotSpec = spec
+    chartEl.hidden = false
+    drawPivot()
+  })
 
   // --- the dashboard. The LAYOUT is document data (doc.views); the SELECTION
   // is viewer state and goes through store.view(), so a cross-filter click

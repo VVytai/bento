@@ -230,7 +230,20 @@ export interface CanvasCell {
   [extra: string]: unknown
 }
 
-export type Sheet = TableSheet | CanvasSheet
+/**
+ * A pivot sheet holds a SPEC and never the numbers it produces — the same rule
+ * a chart tile follows, so a pivot cannot disagree with its data, go stale, or
+ * double the file.
+ */
+export interface PivotSheet {
+  id: string
+  name: string
+  kind: 'pivot'
+  pivot: Record<string, unknown>
+  [extra: string]: unknown
+}
+
+export type Sheet = TableSheet | CanvasSheet | PivotSheet
 
 /**
  * A named measure. Measured at 7,289 bytes for a real six-entity model — 0.13%
@@ -520,6 +533,20 @@ export function parseDoc(json: string): ParseResult {
     const id = claimIn(sheetIds, s.id, 'sh')
     if (s.kind === 'canvas') {
       return { ...s, id, kind: 'canvas', cells: isObj(s.cells) ? s.cells : {} } as unknown as CanvasSheet
+    }
+
+    // AN UNRECOGNISED KIND IS PRESERVED VERBATIM, not coerced to a table.
+    //
+    // This branch used to fall through, so every sheet that was not 'canvas'
+    // came back as `kind: 'table'` with empty rids/columns/data/steps bolted
+    // on. That is not a pivot-shaped problem, it is the additivity invariant
+    // (PLATFORM §3) failing for EVERY future sheet kind: a build that has never
+    // heard of one is required to keep the file intact, and instead it quietly
+    // rewrote the sheet into a different thing and dropped what made it one.
+    // Old builds are frozen code, so a file written by a newer dash has to
+    // survive a round trip through them untouched.
+    if (typeof s.kind === 'string' && s.kind !== 'table') {
+      return { ...s, id } as unknown as Sheet
     }
 
     const colIds = new Set<string>()
