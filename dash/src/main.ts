@@ -31,6 +31,7 @@ import { putRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
 import { mountAbout, rememberVersion } from './about.ts'
 import { mountPanels } from './panels.ts'
+import { installStory } from './story.ts'
 import { buildSheetPreview } from './preview.ts'
 import { installSaveMenu, adoptOpenedDoc } from './saveui.ts'
 import { dismissSplash, dismissSplashNow } from './splash.ts'
@@ -159,6 +160,7 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     `<button class="dx-btn" data-act="formula">${t('＋ Formula column')}</button>` +
     `<button class="dx-btn" data-act="chart">${t('＋ Chart')}</button>` +
     `<button class="dx-btn" data-act="viz3d">${t('＋ 3D')}</button>` +
+    `<button class="dx-btn" data-act="story">${t('Data story')}</button>` +
     `<button class="dx-btn" data-act="import">${t('Import CSV…')}</button>` +
     `<button class="dx-btn" data-act="undo">${t('Undo')}</button>` +
     `<button class="dx-btn" data-act="export">${t('Export CSV')}</button>` +
@@ -301,6 +303,20 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   // AFTER grid.onSelectionChange is set: mountPanels CHAINS that callback
   // rather than replacing it, so the formula bar and status bar keep working.
   mountPanels({ store, grid, body: app.querySelector<HTMLElement>('.dx-body')! })
+
+  // The hook: a workbook that presents itself. A step is a saved VIEW — filter,
+  // sort, chart binding, camera, caption — and stepping between them morphs the
+  // chart from the model, because both frames are already in the file.
+  installStory({
+    store,
+    button: app.querySelector<HTMLElement>('[data-act="story"]')!,
+    sheetId: () => grid.sheet.id,
+    filters: () => grid.filters,
+    sorts: () => grid.sorts,
+    chart: () => binding,
+    viz: () => viz,
+    computed: (id) => (id === grid.sheet.id ? (grid.computed as Map<string, unknown[]>) : undefined),
+  })
 
   const notes: Notice[] = []
   if (frozen) {

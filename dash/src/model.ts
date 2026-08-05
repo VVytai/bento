@@ -312,6 +312,8 @@ export interface DashDoc {
   meta?: DocMeta
   sheets: Sheet[]
   measures?: Record<string, Measure>
+  /** the data story — see the Story block at the foot of this file */
+  story?: Story
   names?: Record<string, { v: number | string; note?: string }>
   views?: View[]
   theme?: Theme
@@ -575,3 +577,112 @@ export const rowCount = (doc: DashDoc): number =>
     (n, s) => n + (s.kind === 'table' ? s.rids.reduce((m, [, c]) => m + c, 0) : 0),
     0,
   )
+
+// The story references the chart and 3D binding shapes. Both imports are
+// TYPE-ONLY and therefore erased, so this does not create a runtime cycle with
+// chart.ts/viz3d.ts, which import model.ts back.
+import type { ChartBinding } from './chart.ts'
+import type { Viz3dBinding } from './viz3d.ts'
+
+// --- data story --------------------------------------------------------------
+//
+// An ADDITIVE top-level field (`DashDoc.story`). A build that has never heard of
+// stories keeps it on a round trip and simply does not present it — the format
+// rule PLATFORM §3 states, and the reason the field can ship before the
+// presenter is finished.
+
+/**
+ * A filter, in the form that survives JSON.
+ *
+ * filter.ts's `Predicate` carries a `Set` for the checkbox list, and a Set
+ * serializes as `{}` — the filter would come back from the file matching
+ * NOTHING, which reads as "this step's data vanished" rather than as a broken
+ * round trip. So the stored spelling is an array and `toPredicate` /
+ * `fromPredicate` are the only bridge. Everything else is passed through
+ * verbatim, including a predicate op this build does not know: it is dropped at
+ * USE time (`toFilters`) and kept in the document, which is the additive
+ * behaviour and not the same as deleting it.
+ */
+export type StoredPredicate =
+  | { op: 'equals' | 'notEquals' | 'greater' | 'less' | 'greaterOrEqual' | 'lessOrEqual'; v: unknown }
+  | { op: 'contains' | 'notContains' | 'startsWith' | 'endsWith'; v: string }
+  | { op: 'between'; lo: unknown; hi: unknown }
+  | { op: 'isBlank' | 'notBlank' }
+  /** the Excel checkbox list; `null` in the list is the "(Blanks)" box */
+  | { op: 'isOneOf'; values: unknown[] }
+  | { op: 'topN' | 'bottomN'; n: number }
+  /** a predicate a future build understands. Kept, not applied. */
+  | { op: string; [k: string]: unknown }
+
+export interface StoredFilter {
+  col: string
+  pred: StoredPredicate
+  [extra: string]: unknown
+}
+
+export interface SortKey {
+  col: string
+  dir: 'asc' | 'desc'
+}
+
+/**
+ * Where the 3D camera stands. Angles in radians, matching gl.ts's `Orbit`, so
+ * capture and restore are a field copy rather than a conversion nobody can
+ * check. `distance` is optional because `frameCamera` derives a sensible one
+ * from the scene radius, and a stored distance from a differently-sized slice
+ * of the data would frame the next step wrong.
+ */
+export interface StoryCamera {
+  azimuth: number
+  elevation: number
+  distance?: number
+  [extra: string]: unknown
+}
+
+/**
+ * The subset the step is ABOUT — category values on the chart's x axis.
+ *
+ * Carried in the format from commit one even though the renderer cannot paint
+ * it yet (see KNOWN GAPS): a field added later is permanently second-class,
+ * which is the same argument model.ts makes for `CanvasSheet` and for the
+ * reserved `bind` op.
+ */
+export interface StoryHighlight {
+  values: unknown[]
+  label?: string
+  [extra: string]: unknown
+}
+
+/**
+ * How to get here from the step before.
+ *
+ * An OPEN union, like model.ts's `Policy`. A value this build does not know
+ * must PARSE and must degrade to a cut — a story from a newer build has to
+ * play, less prettily, rather than throw in front of an audience.
+ */
+export type StoryTransition = 'morph' | 'cut' | (string & {})
+
+/** One saved view of the data. */
+export interface StoryStep {
+  id: string
+  /** sheet id. A step whose sheet was deleted is SKIPPED, never guessed at. */
+  sheet: string
+  caption?: string
+  filters?: StoredFilter[]
+  sorts?: SortKey[]
+  /** the same binding shape chart.ts uses — columns, not numbers */
+  chart?: ChartBinding
+  /** a 3D step. `chart` and `viz` are alternatives; `viz` wins if both are set. */
+  viz?: Viz3dBinding
+  camera?: StoryCamera
+  highlight?: StoryHighlight
+  transition?: StoryTransition
+  /** seconds. Clamped at use; a story that hangs for a minute is not a story. */
+  duration?: number
+  [extra: string]: unknown
+}
+
+export interface Story {
+  steps: StoryStep[]
+  [extra: string]: unknown
+}

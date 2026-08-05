@@ -114,6 +114,16 @@ export type Patch =
    */
   | { op: 'setSheetProps'; sheet: string; props: Record<string, unknown>; drop?: string[] }
   /**
+   * Top-level document fields — the story, a dashboard layout, anything
+   * additive that belongs to the WORKBOOK rather than to a sheet.
+   *
+   * Same discipline as `setSheetProps`, for the same reason: deletes are a
+   * listed `drop`, and `props: {k: undefined}` is refused rather than accepted
+   * as a second spelling, because `JSON.stringify` erases it and the delete
+   * would reach no other replica.
+   */
+  | { op: 'setDocProps'; props: Record<string, unknown>; drop?: string[] }
+  /**
    * RESERVED. Both need the transform engine, which does not exist yet. They
    * are in the union now because the discriminant cannot be retrofitted once
    * patches are also CRDT ops. `applyPatch` refuses them loudly rather than
@@ -121,6 +131,15 @@ export type Patch =
    */
   | { op: 'applySteps'; sheet: string; steps: Step[] }
   | { op: 'refreshBinding'; sheet: string; cols: Record<string, ColumnData> }
+
+/**
+ * Document keys `setDocProps` refuses. `sheets` and `measures` have typed
+ * patches that know how to invert them; `docId` is identity and must never be
+ * rewritten by a props op (PLATFORM: it is the merge key).
+ */
+const STRUCTURAL_DOC_KEYS = new Set([
+  'sheets', 'measures', 'docId', 'format', 'version', 'policy',
+])
 
 /**
  * What a patch touched, so undo can invalidate precisely.
@@ -398,6 +417,33 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       return {
         inverse: { op: 'setMeasure', name: p.name, measure: was, dropEmpty: !existed },
         touched: {},
+      }
+    }
+
+    case 'setDocProps': {
+      const bag = doc as unknown as Record<string, unknown>
+      const props: Record<string, unknown> = {}
+      const drop: string[] = []
+      const dropping = new Set(p.drop ?? [])
+      const displace = (k: string): void => {
+        if (STRUCTURAL_DOC_KEYS.has(k)) {
+          throw new Error(`setDocProps may not write "${k}" — structure moves through typed patches`)
+        }
+        if (k in bag) props[k] = bag[k]
+        else drop.push(k)
+      }
+      for (const k of Object.keys(p.props)) {
+        if (dropping.has(k)) throw new Error(`setDocProps sets and drops "${k}" in one patch`)
+        if (p.props[k] === undefined) {
+          throw new Error(`setDocProps: to remove "${k}" list it in \`drop\`, not props`)
+        }
+        displace(k)
+        bag[k] = p.props[k]
+      }
+      for (const k of dropping) { displace(k); delete bag[k] }
+      return {
+        inverse: { op: 'setDocProps', props, ...(drop.length ? { drop } : {}) },
+        touched: { all: true },
       }
     }
 

@@ -129,6 +129,30 @@ roundTrip('setSheetProps', {
   s.undo()
   ok('condfmt' in (s.doc.sheets[0] as any), 'undo brings it back')
 }
+roundTrip('setDocProps', { op: 'setDocProps', props: { story: { steps: [] } } })
+{
+  // the document-level twin of setSheetProps, with the same wire discipline
+  const s = new Store(fresh())
+  s.commit({ op: 'setDocProps', props: { story: { steps: [{ id: 'a' }] } } })
+  ok('story' in (s.doc as any), 'a document field is set')
+  s.commit({ op: 'setDocProps', props: {}, drop: ['story'] })
+  ok(!('story' in (s.doc as any)), 'and a listed `drop` removes it')
+  s.undo()
+  ok('story' in (s.doc as any), 'undo brings it back')
+
+  let refused = ''
+  try { s.commit({ op: 'setDocProps', props: { story: undefined } }) } catch (e) { refused = String(e) }
+  ok(refused.includes('drop'),
+    'props:{k:undefined} is REFUSED — JSON.stringify erases it, so the delete would reach no other replica')
+
+  for (const k of ['sheets', 'docId', 'format']) {
+    let threw = ''
+    try { s.commit({ op: 'setDocProps', props: { [k]: 1 } }) } catch (e) { threw = String(e) }
+    ok(threw.includes(k),
+      `setDocProps refuses "${k}" — structure and identity move through typed patches, not an unbounded props write`)
+  }
+}
+
 roundTrip('addColumn', {
   op: 'addColumn', sheet: 'sh1',
   column: { id: 'computed', name: 'Computed', type: 'number', formula: 'amount * 2' },
