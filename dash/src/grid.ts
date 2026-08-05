@@ -40,10 +40,11 @@ import {
 /**
  * Row height, in px — SPREADSHEET density, not web-table density.
  *
- * Excel's default row is 20px at 96dpi and Google Sheets' is 21px, both with a
- * ~13px face. dash sat at 30, which is why the grid read as a table on a web
- * page: a third fewer rows on screen, and the eye has to travel further for
- * every comparison a spreadsheet exists to make.
+ * Excel's default row is exactly this at 96dpi; Google Sheets' is 21px. dash
+ * sat at 30, which is why the grid read as a table on a web page: a third fewer
+ * rows on screen, and the eye has to travel further for every comparison a
+ * spreadsheet exists to make. 22 was an intermediate step; 20 is the target,
+ * chosen with the 'dense pro' direction.
  *
  * THIS CONSTANT AND THE `--row-h` CUSTOM PROPERTY MUST AGREE. They are two
  * declarations of one number — the rows are absolutely positioned at
@@ -54,7 +55,7 @@ import {
  * constant at build time, and the value in styles.css is only a fallback for
  * anything that renders before the grid mounts.
  */
-const ROW_H = 22
+const ROW_H = 20
 const GUTTER_W = 52
 const OVERSCAN = 8
 

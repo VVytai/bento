@@ -20,7 +20,7 @@
   /* FALLBACK ONLY — grid.ts writes this from its ROW_H constant when it
      mounts, because the row boxes are positioned from that constant and the
      two must never disagree. Editing it here alone changes nothing. */
-  --row-h: 22px;
+  --row-h: 20px;
 
   /* ————— the grid's own greys —————
      Split out from --line because they answer a different question. --line is
