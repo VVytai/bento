@@ -195,6 +195,25 @@ export const SPECS: BlockSpec[] = [
     toMd: (b, _text, _indent, titleOf) => [`→ [[${titleOf(String(b.page)) ?? '?'}]]`],
   },
   {
+    // A FIELD VALUE on a page. Unlisted: fields are added from the issue header,
+    // not the / menu — "Field" in a block list would be a block whose value you
+    // then have to go and find somewhere else.
+    //
+    // It renders its own `html` on any build that does not know the type, which
+    // is the whole reason values are blocks rather than page keys.
+    type: 'prop', label: 'Field', hint: 'A typed value on this page', icon: 'tag',
+    tag: 'div', custom: true, unlisted: true,
+    toMd: (b) => [`**${String((b as { key?: unknown }).key ?? 'field')}:** ${String((b as { value?: unknown }).value ?? '')}`],
+  },
+  {
+    // A SAVED VIEW — a board or a list of the issues in this space. Also just a
+    // block, so it lives on a page, moves, duplicates, deletes and prints like
+    // anything else, and an older build shows its description instead.
+    type: 'view', label: 'Board or list', hint: 'Issues, grouped or listed', icon: 'board',
+    tag: 'div', custom: true,
+    toMd: (b) => [`_${String(b.html ?? 'View')}_`],
+  },
+  {
     type: 'image', label: 'Image', hint: 'Embedded in the file', icon: 'image',
     tag: 'div', custom: true,
     toMd: (b) => [`![${String(b.alt ?? '')}](${String(b.src ?? '')})`],

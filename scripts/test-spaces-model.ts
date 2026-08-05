@@ -31,6 +31,10 @@ import {
   type SpacesDoc,
 } from '../spaces/src/model.ts'
 import { countOutsideTags, replaceOutsideTags } from '../spaces/src/findreplace.ts'
+import {
+  DEFAULT_FIELDS, fieldsOf, fieldByKey, optionOf, propHtml, propBlock,
+  valuesOf, isIssue, issuesOf, headerLength,
+} from '../spaces/src/fields.ts'
 import { inlineHtml, parseNote, planImport } from '../spaces/src/markdown.ts'
 import { planUpdatePage } from '../spaces/src/agent.ts'
 import { tokenize, normLang, langLabel, CODE_LANGS } from '../spaces/src/highlight.ts'
@@ -446,7 +450,22 @@ for (const [label, input, err] of [
   todoInit?.(probe as never)
   ok(probe.done === false, 'the to-do trigger initialises done:false')
 
-  ok(MENU_SPECS.length === SPECS.length, 'every type is offered in the / menu')
+  // Every type is in the / menu UNLESS it is deliberately unlisted — and an
+  // unlisted type must have another way in, or it is a block nobody can make.
+  // `prop` is unlisted because a field is created from the issue header, where
+  // its value can be chosen; "Field" in a block list would insert a value you
+  // then have to go elsewhere to set.
+  const hidden = SPECS.filter((sp) => sp.unlisted).map((sp) => sp.type)
+  ok(MENU_SPECS.length === SPECS.length - hidden.length,
+    `the / menu offers every type except the deliberately unlisted (${hidden.join(', ') || 'none'})`)
+  {
+    const fsm = await import('node:fs')
+    const ed2 = fsm.readFileSync(new URL('../spaces/src/editor.ts', import.meta.url), 'utf8')
+    for (const h of hidden) {
+      ok(new RegExp(`propBlock|newBlock\\('${h}'\\)`).test(ed2),
+        `…and ${h} has another way in`)
+    }
+  }
   ok(SPEC.get('futuretype') === undefined, 'an unknown type has no spec — and must still render as text')
   ok(SPECS.filter((s) => s.type !== 'p').every((s) => !!s.toMd),
     'every type but plain text says how it exports to markdown')
@@ -1101,6 +1120,84 @@ for (const [label, input, err] of [
     'a duplicate rewrites its copies\' parent links, so the copy owns the copies')
   ok(/if \(!page\.blocks\.length\) page\.blocks\.push\(newBlock\('p'\)\)/.test(ed),
     'deleting the last block leaves something to type into')
+}
+
+// ---- an issue is a page, and its fields are blocks ------------------------
+// The tracker format is PERMANENT. What has to hold forever:
+//  · a value is a BLOCK, so search, undo, export and the preview see it
+//  · the block carries a readable `html`, so a build that predates all of this
+//    shows "Status: In progress" instead of nothing
+//  · the SCHEMA is document-level and additive, so an old build ignores it
+//  · nothing a newer build writes is DROPPED — not an unknown option, not an
+//    unknown field key
+{
+  const status = fieldByKey({ } as never, 'status') ?? DEFAULT_FIELDS[0]
+
+  // the schema is additive: absent means the defaults, not "no fields"
+  ok(fieldsOf({} as never).length === DEFAULT_FIELDS.length,
+    'a document with no fields key gets the default schema')
+  ok(fieldsOf({ fields: [{ key: 'k', label: 'K', vt: 'text' }] } as never).length === 1,
+    '…and a document that declares its own schema keeps it')
+
+  // the readable form is the degradation guarantee
+  ok(propHtml(status, 'doing') === 'Status: In progress',
+    `a value's readable form names the field and the label (${propHtml(status, 'doing')})`)
+  ok(propHtml(status, '') === 'Status: —', 'an empty value still says which field it is')
+  const unknownOpt = propHtml(status, 'shipped-to-space')
+  ok(unknownOpt.includes('shipped-to-space'),
+    `an option this build does not know is shown VERBATIM, never blanked (${unknownOpt})`)
+  ok(!/[<>]/.test(propHtml({ key: 'x', label: '<b>L', vt: 'text' }, '<img>')),
+    'the readable form is escaped — it is html, and the value is author data')
+
+  // the block itself
+  const blk = propBlock(status, 'todo', 'b1') as Record<string, unknown>
+  ok(blk.type === 'prop' && blk.key === 'status' && blk.value === 'todo',
+    'a field value is a prop BLOCK carrying key and value')
+  ok(typeof blk.html === 'string' && (blk.html as string).length > 0,
+    '…and always its readable form, in step with the value')
+
+  // an issue is DERIVED, never flagged
+  const doc = parseDoc(JSON.stringify({
+    format: FORMAT, version: 1, docId: 'tk', title: 'T', home: 'p1',
+    pages: [
+      { id: 'p1', title: 'Board', blocks: [{ id: 'v', type: 'view', layout: 'board', groupBy: 'status', html: 'All' }] },
+      { id: 'p2', title: 'An issue', blocks: [
+        { id: 'ps', type: 'prop', key: 'status', value: 'doing', html: 'Status: In progress' },
+        { id: 'pa', type: 'prop', key: 'assignee', value: 'sam', html: 'Assignee: sam' },
+        { id: 'pb', type: 'p', html: 'the body' },
+      ] },
+      { id: 'p3', title: 'Just a page', blocks: [{ id: 'x', type: 'p', html: 'prose' }] },
+      { id: 'p4', title: 'Archived issue', archived: true, blocks: [
+        { id: 'qs', type: 'prop', key: 'status', value: 'todo', html: 'Status: Todo' },
+      ] },
+    ],
+  }))
+  ok(doc.ok, 'a tracker document loads')
+  if (doc.ok) {
+    const [board, issue, plain] = doc.doc.pages
+    ok(isIssue(issue) && !isIssue(plain) && !isIssue(board),
+      'an issue is a page WITH A STATUS — not a page type, not a flag')
+    ok(valuesOf(issue).get('assignee') === 'sam', 'a page reports its field values by key')
+    ok(headerLength(issue) === 2, 'leading prop blocks are the header strip, by POSITION')
+    ok(headerLength(plain) === 0, '…and a page with no fields has no header')
+
+    const rows = issuesOf(doc.doc)
+    ok(rows.length === 1, `issuesOf lists issues only (${rows.length})`)
+    ok(!rows.some((r) => r.page.archived), 'and never an archived one')
+
+    // format additivity, both directions
+    const round = JSON.parse(JSON.stringify(doc.doc))
+    const kept = round.pages[1].blocks[0]
+    ok(kept.key === 'status' && kept.value === 'doing' && kept.html === 'Status: In progress',
+      'a prop block round-trips whole')
+    ok(round.pages[0].blocks[0].layout === 'board',
+      'a view block keeps the query a newer build wrote')
+  }
+
+  // an unknown FIELD KEY must not throw or vanish — it renders its own html
+  ok(fieldByKey({} as never, 'no-such-field') === undefined,
+    'an unknown field key resolves to no spec')
+  ok(optionOf(undefined, 'x') === undefined, '…and asking for its options is not an error')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

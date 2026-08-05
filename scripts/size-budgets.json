@@ -3,8 +3,8 @@
   "shells": {
     "spaces": {
       "path": "spaces/dist-single/Bento_Spaces.bento.html",
-      "max": 120832,
-      "//": "118 KiB. Raised from 114 KiB at 117218 B on 2026-08-05 for the static first-page preview (spaces/src/preview.ts): without it a saved space showed the boot splash to every reader that runs no script — QuickLook, iOS Files, Bento Tray. Reported from the field. The preview itself is per-SAVE and separately budgeted at 64KB."
+      "max": 128000,
+      "//": "125 KiB. Raised from 118 KiB at 122898 B on 2026-08-05 for the issue tracker: typed fields (fields.ts), the prop and view block types, and the board. An issue tracker in the same file as the notes is the thing neither Linear nor a wiki can do, and it is worth its bytes; the ceiling moves in the commit that spends them."
     }
   }
 }

@@ -223,4 +223,12 @@ export const fr: Catalog = {
   "Move down": "Descendre",
   "Duplicate": "Dupliquer",
   "Delete": "Supprimer",
+  "New issue": "Nouveau ticket",
+  "Make this page an issue": "Transformer cette page en ticket",
+  "Adds status, priority, assignee, estimate": "Ajoute statut, priorité, responsable et estimation",
+  "Already an issue": "Déjà un ticket",
+  "Now an issue": "C’est désormais un ticket",
+  "Issues": "Tickets",
+  "No issues yet. Add a status field to any page and it appears here.": "Aucun ticket pour l’instant. Ajoutez un champ statut à une page et elle apparaîtra ici.",
+  "Other": "Autres",
 }

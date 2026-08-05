@@ -223,4 +223,12 @@ export const pt: Catalog = {
   "Move down": "Mover para baixo",
   "Duplicate": "Duplicar",
   "Delete": "Eliminar",
+  "New issue": "Nova tarefa",
+  "Make this page an issue": "Transformar esta página numa tarefa",
+  "Adds status, priority, assignee, estimate": "Adiciona estado, prioridade, responsável e estimativa",
+  "Already an issue": "Já é uma tarefa",
+  "Now an issue": "Agora é uma tarefa",
+  "Issues": "Tarefas",
+  "No issues yet. Add a status field to any page and it appears here.": "Ainda não há tarefas. Adiciona um campo de estado a qualquer página e ela aparece aqui.",
+  "Other": "Outras",
 }

@@ -223,4 +223,12 @@ export const ja: Catalog = {
   "Move down": "下へ移動",
   "Duplicate": "複製",
   "Delete": "削除",
+  "New issue": "新しいイシュー",
+  "Make this page an issue": "このページをイシューにする",
+  "Adds status, priority, assignee, estimate": "ステータス・優先度・担当者・見積もりを追加します",
+  "Already an issue": "すでにイシューです",
+  "Now an issue": "イシューになりました",
+  "Issues": "イシュー",
+  "No issues yet. Add a status field to any page and it appears here.": "まだイシューはありません。どれかのページにステータス項目を追加すると、ここに表示されます。",
+  "Other": "その他",
 }

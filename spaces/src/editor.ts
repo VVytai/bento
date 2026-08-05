@@ -14,6 +14,7 @@ import { renderPage, toneLabel, paintCode } from './render'
 import { CODE_LANGS, langLabel, normLang } from './highlight'
 import { canonicalize, escText, sanitizeInline, textOf } from './sanitize'
 import { MENU_SPECS, MD_SPECS, SPEC, CALLOUT_TONES } from './blocks'
+import { fieldByKey, fieldsOf, propHtml, propBlock, isIssue } from './fields'
 import { planImport, type SourceFile } from './markdown'
 import { countOutsideTags, replaceOutsideTags } from './findreplace'
 import { t } from './i18n'
@@ -175,6 +176,9 @@ export class Editor {
       keep?: (b: HTMLButtonElement) => void
     }> = [
       { icon: 'page', label: t('New page'), hint: '⌘⌥N', run: () => this.newPage() },
+      { icon: 'board', label: t('New issue'), hint: '⌘⇧I', run: () => this.newIssue() },
+      { icon: 'tag', label: t('Make this page an issue'), hint: t('Adds status, priority, assignee, estimate'),
+        run: () => this.makeIssue() },
       { icon: 'eye', label: t('Reading view'), hint: t('The pages without the editing tools'),
         run: () => this.toggleReading(),
         keep: (b) => { this.readB = b } },
@@ -726,6 +730,123 @@ export class Editor {
     ]
   }
 
+  /**
+   * Change one field's value.
+   *
+   * Writes `value` AND `html` together, always. The readable form is what an
+   * older build, a thumbnailer, a grep and the markdown export see, so a value
+   * written without it is a value those readers cannot see at all — which is
+   * the entire reason field values are blocks rather than page keys.
+   */
+  private setField(blockId: string, value: unknown): void {
+    const s = this.store
+    const b = s.block(blockId)
+    if (!b) return
+    const f = fieldByKey(s.doc, String((b as { key?: unknown }).key ?? ''))
+    if (!f) return
+    s.commit(() => {
+      ;(b as Record<string, unknown>).value = value
+      b.html = propHtml(f, value)
+    }, { scope: 'page' })
+    this.paintPage()
+  }
+
+  private openFieldPicker(blockId: string, anchor: HTMLElement): void {
+    const s = this.store
+    if (s.readOnly || this.reading) return
+    const b = s.block(blockId)
+    const f = b && fieldByKey(s.doc, String((b as { key?: unknown }).key ?? ''))
+    if (!b || !f) return
+    this.closeOverlay()
+
+    const pop = el('div', this.isDrawer() ? 'sp-pop sp-sheet' : 'sp-pop')
+    pop.setAttribute('role', 'menu')
+    this.trapAndClose(pop)
+
+    if (f.vt === 'select' && f.options?.length) {
+      const cur = String((b as { value?: unknown }).value ?? '')
+      for (const o of f.options) {
+        const item = document.createElement('button')
+        item.className = 'sp-dditem' + (o.id === cur ? ' sp-sel' : '')
+        item.type = 'button'
+        const dot = el('span', 'sp-prop-dot')
+        if (o.color) dot.style.background = o.color
+        const name = document.createElement('span')
+        name.textContent = o.label
+        item.append(dot, name)
+        item.addEventListener('click', () => { this.closeOverlay(); this.setField(blockId, o.id) })
+        pop.append(item)
+      }
+    } else {
+      // free text, a number or a date: one field, committed on Enter
+      const input = document.createElement('input')
+      input.className = 'sp-find'
+      input.type = f.vt === 'number' ? 'number' : f.vt === 'date' ? 'date' : 'text'
+      input.value = String((b as { value?: unknown }).value ?? '')
+      input.placeholder = f.label
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          const raw = input.value.trim()
+          this.closeOverlay()
+          this.setField(blockId, f.vt === 'number' ? (raw === '' ? '' : Number(raw)) : raw)
+        }
+      })
+      pop.append(input)
+      afterPaint(() => input.focus())
+    }
+
+    this.overlay = pop
+    document.body.append(pop)
+    if (this.isDrawer()) pop.classList.add('sp-sheet-in')
+    else place(pop, anchor)
+    const away = (ev: MouseEvent) => {
+      if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
+    }
+    setTimeout(() => document.addEventListener('mousedown', away), 0)
+  }
+
+  /**
+   * Turn the current page into an issue, or make a new one.
+   *
+   * There is no "issue type" — a page WITH A STATUS is an issue, so this adds
+   * the fields and nothing else. Remove the status later and it is a document
+   * again, with its body, links and history intact.
+   */
+  makeIssue(pageId?: string): void {
+    const s = this.store
+    const page = pageId ? s.index.page.get(pageId) : s.page
+    if (!page || s.readOnly) return
+    if (isIssue(page)) { this.status(t('Already an issue')); return }
+    const fields = fieldsOf(s.doc).filter((f) => ['status', 'priority', 'assignee', 'estimate'].includes(f.key))
+    s.commit(() => {
+      page.blocks.unshift(...fields.map((f) => propBlock(f, f.def ?? '', newBlock('prop').id)))
+    })
+    this.paintPage()
+    this.status(t('Now an issue'))
+  }
+
+  /** A new issue: a page that starts with its fields, ready to be titled. */
+  newIssue(): void {
+    const s = this.store
+    if (s.readOnly) return
+    const page = newPage(t('New issue'))
+    const fields = fieldsOf(s.doc).filter((f) => ['status', 'priority', 'assignee', 'estimate'].includes(f.key))
+    page.blocks = [
+      ...fields.map((f) => propBlock(f, f.def ?? '', newBlock('prop').id)),
+      newBlock('p'),
+    ]
+    s.commit(() => { s.doc.pages.push(page) })
+    s.goToPage(page.id)
+    this.repaint()
+    // the title is what you actually want to type first
+    afterPaint(() => {
+      const h = this.main.querySelector<HTMLElement>('[data-page-title]')
+      h?.focus()
+      if (h) { const r = document.createRange(); r.selectNodeContents(h); getSelection()?.removeAllRanges(); getSelection()?.addRange(r) }
+    })
+  }
+
   /** The block actions, as a menu. Anchored on a wide screen, a sheet on a phone. */
   private openBlockMenu(id: string, anchor: HTMLElement): void {
     if (this.store.readOnly || this.reading) return
@@ -948,6 +1069,18 @@ export class Editor {
         s.commit(() => { const b = s.block(id); if (b) b.open = !b.open })
         this.paintPage()
       })
+    }
+
+    // FIELD CHIPS. Changing a status is the loop a tracker exists for, so it is
+    // one click from the issue and one from the board — never a form.
+    if (!this.store.readOnly && !this.reading) {
+      for (const chip of view.querySelectorAll<HTMLElement>('[data-edit-field]')) {
+        chip.addEventListener('click', (e) => {
+          e.preventDefault()
+          const id = (chip.closest('[data-block-id]') as HTMLElement).dataset.blockId!
+          this.openFieldPicker(id, chip)
+        })
+      }
     }
 
     // "Load this image" — the reader's consent to contact one remote host.
@@ -1244,6 +1377,7 @@ export class Editor {
     // reaches here when nothing is being edited (the text path returns above,
     // where `[` is the page-link trigger).
     if (!mod && e.key === '[') { e.preventDefault(); this.togglePane(); return }
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'i') { e.preventDefault(); this.newIssue(); return }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       if (e.shiftKey) s.redo(); else s.undo()

@@ -14,6 +14,7 @@ import { sanitizeInline, inertBody, esc } from './sanitize'
 import { tokenize } from './highlight'
 import { t } from './i18n'
 import { TAG_OF, LIST_OF, SPEC, TONE } from './blocks'
+import { fieldByKey, optionOf, issuesOf, headerLength, type FieldSpec } from './fields'
 import { ICONS, type IconName } from './icons'
 
 export interface RenderOpts {
@@ -59,7 +60,27 @@ export function renderBlocks(page: Page, doc: SpacesDoc, opts: RenderOpts = {}):
     return stack.length ? stack[stack.length - 1][1] : frag
   }
 
-  for (const b of page.blocks) {
+  // FIELDS AT THE TOP ARE A HEADER STRIP — by position, not by a flag.
+  //
+  // `prop` blocks that precede the first non-prop block are drawn as one
+  // compact row under the title; the same blocks further down render inline.
+  // Nothing in the format says "this is a header", so a build that predates all
+  // of this shows exactly the same values in exactly the same order, just
+  // stacked — which is the whole reason the header is a convention rather than
+  // a container.
+  const head = headerLength(page)
+  let strip: HTMLElement | null = null
+  if (head > 0) {
+    strip = document.createElement('div')
+    strip.className = 'sp-props'
+    frag.appendChild(strip)
+  }
+
+  page.blocks.forEach((b, i) => {
+    if (strip && i < head) {
+      strip.appendChild(renderBlock(b, doc, opts))
+      return
+    }
     const host = hostFor(b.parent)
     const kind = LIST_OF[b.type]
 
@@ -105,7 +126,7 @@ export function renderBlocks(page: Page, doc: SpacesDoc, opts: RenderOpts = {}):
       // `container` implies are wrong for it.
       stack.push([b.id, node])
     }
-  }
+  })
   return frag
 }
 
@@ -203,6 +224,49 @@ export function renderBlock(b: Block, doc: SpacesDoc, opts: RenderOpts = {}): HT
       el.appendChild(box)
       el.appendChild(inlineHost(b, opts))
       if (b.done) el.classList.add('sp-done')
+      return el
+    }
+
+    case 'prop': {
+      // A FIELD VALUE. The chip is built from the schema, but the block's own
+      // `html` is what a build that does not know this type shows — so the two
+      // must always say the same thing, and fields.ts keeps them in step.
+      const key = String((b as { key?: unknown }).key ?? '')
+      const f = fieldByKey(doc, key)
+      const value = (b as { value?: unknown }).value
+      el.classList.add('sp-prop')
+      el.dataset.field = key
+
+      const label = document.createElement('span')
+      label.className = 'sp-prop-key'
+      label.textContent = f?.label ?? key
+      el.appendChild(label)
+
+      const val = document.createElement(opts.editable ? 'button' : 'span')
+      val.className = 'sp-prop-val'
+      if (opts.editable) {
+        ;(val as HTMLButtonElement).type = 'button'
+        val.dataset.editField = key
+      }
+      const opt = f && optionOf(f, value)
+      if (opt) {
+        const dot = document.createElement('span')
+        dot.className = 'sp-prop-dot'
+        // colour is a HINT, never the meaning — the label is always present, so
+        // this reads correctly in monochrome and without colour vision
+        if (opt.color) dot.style.background = opt.color
+        val.appendChild(dot)
+      }
+      const text = document.createElement('span')
+      text.textContent = shownValue(f, value)
+      val.appendChild(text)
+      el.appendChild(val)
+      return el
+    }
+
+    case 'view': {
+      el.classList.add('sp-view')
+      renderView(el, b, doc, opts)
       return el
     }
 
@@ -459,7 +523,14 @@ export function renderPage(page: Page, doc: SpacesDoc, opts: RenderOpts = {}): H
   const inner = document.createElement('div')
   inner.className = 'sp-page-inner'
   inner.dir = doc.theme.dir ?? 'ltr'
-  if (doc.theme.measure) inner.style.maxWidth = `${doc.theme.measure}px`
+  // THE MEASURE IS FOR PROSE. A line of text has a comfortable width and that
+  // is what `theme.measure` is for — but a board is not a line of text, and
+  // squeezing one into 720px shows two and a half columns of a six-column
+  // board. A page carrying a view gets the room instead; a page of writing
+  // keeps its measure.
+  const wide = page.blocks.some((b) => b.type === 'view')
+  if (doc.theme.measure) inner.style.maxWidth = wide ? '1500px' : `${doc.theme.measure}px`
+  if (wide) inner.classList.add('sp-wide')
 
   const h = document.createElement('h1')
   h.className = 'sp-title'
@@ -472,4 +543,133 @@ export function renderPage(page: Page, doc: SpacesDoc, opts: RenderOpts = {}): H
   inner.appendChild(renderBlocks(page, doc, opts))
   art.appendChild(inner)
   return art
+}
+
+/** What a value reads as. Mirrors fields.ts propHtml, which writes the same
+ *  text into the block so an older build shows it too. */
+function shownValue(f: FieldSpec | undefined, value: unknown): string {
+  if (value === undefined || value === null || value === '') return '—'
+  if (f?.vt === 'select') return optionOf(f, value)?.label ?? String(value)
+  if (f?.vt === 'labels') return Array.isArray(value) ? value.join(', ') : String(value)
+  return String(value)
+}
+
+/**
+ * A BOARD or a LIST of the issues in this space.
+ *
+ * Derived, never stored: the view holds a query, and the issues are wherever
+ * they are. Storing membership would mean a card could disagree with the page
+ * it stands for — the mistake every "database" makes when it keeps its own copy
+ * of the rows.
+ */
+function renderView(host: HTMLElement, b: Block, doc: SpacesDoc, opts: RenderOpts): void {
+  const layout = String((b as { layout?: unknown }).layout ?? 'board')
+  const groupKey = String((b as { groupBy?: unknown }).groupBy ?? 'status')
+  const field = fieldByKey(doc, groupKey)
+  const rows = issuesOf(doc)
+
+  const head = document.createElement('div')
+  head.className = 'sp-view-head'
+  const title = document.createElement('span')
+  title.className = 'sp-view-title'
+  title.textContent = String(b.html || t('Issues'))
+  const count = document.createElement('span')
+  count.className = 'sp-view-count'
+  count.textContent = String(rows.length)
+  head.append(title, count)
+  host.appendChild(head)
+
+  if (!rows.length) {
+    const empty = document.createElement('p')
+    empty.className = 'sp-view-empty'
+    // says how to fix it, because an empty board with no explanation reads as
+    // broken rather than as empty
+    empty.textContent = t('No issues yet. Add a status field to any page and it appears here.')
+    host.appendChild(empty)
+    return
+  }
+
+  const card = (page: Page, values: Map<string, unknown>): HTMLElement => {
+    const a = document.createElement(opts.editable === false ? 'div' : 'a')
+    a.className = 'sp-card'
+    if (a instanceof HTMLAnchorElement) a.href = `#p/${page.id}`
+    const t1 = document.createElement('span')
+    t1.className = 'sp-card-title'
+    t1.textContent = page.title
+    a.appendChild(t1)
+    const meta = document.createElement('span')
+    meta.className = 'sp-card-meta'
+    for (const k of ['priority', 'assignee', 'estimate']) {
+      const v = values.get(k)
+      if (v === undefined || v === '' || v === null) continue
+      const f2 = fieldByKey(doc, k)
+      const chip = document.createElement('span')
+      chip.className = 'sp-card-chip'
+      const o = f2 && optionOf(f2, v)
+      if (o?.color) {
+        const d = document.createElement('span')
+        d.className = 'sp-prop-dot'
+        d.style.background = o.color
+        chip.appendChild(d)
+      }
+      chip.append(document.createTextNode(shownValue(f2, v)))
+      meta.appendChild(chip)
+    }
+    if (meta.childElementCount) a.appendChild(meta)
+    return a
+  }
+
+  if (layout === 'list') {
+    const ul = document.createElement('ul')
+    ul.className = 'sp-view-list'
+    for (const r of rows) {
+      const li = document.createElement('li')
+      li.appendChild(card(r.page, r.values))
+      ul.appendChild(li)
+    }
+    host.appendChild(ul)
+    return
+  }
+
+  // BOARD, in the schema's declared order — not alphabetical, and not the order
+  // issues happen to be in. A status list has a direction, and a board that
+  // does not follow it is a board you have to read rather than glance at.
+  const board = document.createElement('div')
+  board.className = 'sp-board'
+  const cols = field?.options ?? []
+  const seen = new Set<string>()
+  for (const opt of cols) {
+    const mine = rows.filter((r) => String(r.values.get(groupKey) ?? '') === opt.id)
+    mine.forEach((r) => seen.add(r.page.id))
+    const col = document.createElement('div')
+    col.className = 'sp-col'
+    col.dataset.group = opt.id
+    const ch = document.createElement('div')
+    ch.className = 'sp-col-head'
+    const dot = document.createElement('span')
+    dot.className = 'sp-prop-dot'
+    if (opt.color) dot.style.background = opt.color
+    ch.append(dot, document.createTextNode(opt.label))
+    const n = document.createElement('span')
+    n.className = 'sp-col-count'
+    n.textContent = String(mine.length)
+    ch.appendChild(n)
+    col.appendChild(ch)
+    for (const r of mine) col.appendChild(card(r.page, r.values))
+    board.appendChild(col)
+  }
+  // an issue whose status this build does not know still has to appear, or the
+  // board silently loses work written by a newer build
+  const orphans = rows.filter((r) => !seen.has(r.page.id))
+  if (orphans.length) {
+    const col = document.createElement('div')
+    col.className = 'sp-col'
+    const ch = document.createElement('div')
+    ch.className = 'sp-col-head'
+    ch.textContent = t('Other')
+    col.appendChild(ch)
+    for (const r of orphans) col.appendChild(card(r.page, r.values))
+    board.appendChild(col)
+  }
+  host.appendChild(board)
 }

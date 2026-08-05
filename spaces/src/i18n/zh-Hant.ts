@@ -223,4 +223,12 @@ export const zh_Hant: Catalog = {
   "Move down": "下移",
   "Duplicate": "建立副本",
   "Delete": "刪除",
+  "New issue": "新增項目",
+  "Make this page an issue": "將此頁面變為項目",
+  "Adds status, priority, assignee, estimate": "新增狀態、優先順序、負責人與估算",
+  "Already an issue": "已經是項目",
+  "Now an issue": "現在是項目了",
+  "Issues": "項目",
+  "No issues yet. Add a status field to any page and it appears here.": "還沒有項目。為任一頁面新增狀態欄位，它就會出現在這裡。",
+  "Other": "其他",
 }

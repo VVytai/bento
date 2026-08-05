@@ -223,4 +223,12 @@ export const zh_Hans: Catalog = {
   "Move down": "下移",
   "Duplicate": "创建副本",
   "Delete": "删除",
+  "New issue": "新建事项",
+  "Make this page an issue": "将此页面变为事项",
+  "Adds status, priority, assignee, estimate": "添加状态、优先级、负责人和估算",
+  "Already an issue": "已经是事项",
+  "Now an issue": "现在是事项了",
+  "Issues": "事项",
+  "No issues yet. Add a status field to any page and it appears here.": "还没有事项。给任意页面添加状态字段，它就会出现在这里。",
+  "Other": "其他",
 }

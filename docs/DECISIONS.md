@@ -1275,6 +1275,77 @@ CI-testable, but the registry drifting from the tree is. It pins `appId`
 against each app's own `configureApp()` call and the manifest URL against the
 path the release publishes to.
 
+## 2026-08-05 — An issue is a page: the tracker format for bento/spaces
+
+**Decision.** bento/spaces gains an opinionated, Linear-shaped issue tracker.
+An ISSUE IS A PAGE. Its fields are `prop` BLOCKS. The schema those fields draw
+on is `doc.fields`. A saved view is a `view` BLOCK. Nothing about this is a new
+document type and nothing is a page-level key.
+
+**Why spaces rather than a new app.** A tracker is a pile of short documents
+with typed fields and a few saved queries over them. Spaces already has pages,
+rich bodies, links, backlinks, search, archive, print, i18n, nine languages and
+an agent surface — which is most of a tracker — and Linear's own model is
+"an issue is a document with fields". A separate app would rebuild all of it,
+and would land where Jira is: a tracker whose issues cannot hold a real
+document. The suite's other half, bento/dash, owns typed COLUMNS over rows;
+this owns typed FIELDS on documents. That is the seam.
+
+**The format.**
+
+    doc.fields: [                       // the schema, document-level
+      { key: 'status', label: 'Status', vt: 'select', options: [
+          { id: 'todo', label: 'Todo', color: '#…', group: 'unstarted' }, … ] },
+      { key: 'assignee', label: 'Assignee', vt: 'person' },
+      …
+    ]
+
+    // …and on an issue page, its values, as ordinary blocks:
+    { id:'b1', type:'prop', key:'status', value:'todo', html:'Status: Todo' }
+
+    // …and a board, which is also just a block:
+    { id:'v1', type:'view', layout:'board', groupBy:'status',
+      filter:{…}, sort:[…], html:'Board — all issues by status' }
+
+**Why values are blocks and the schema is not.** The ruling above already
+settled values: a `prop` block degrades losslessly on a build that predates it
+(render.ts's `default:` branch shows its `html`), and it is found by ⌘F, ⌘K,
+undo and the block registry for free, because every one of those iterates
+`page.blocks`. A page-level key renders as nothing and is invisible to all of
+them. But the SCHEMA is not a value: putting the status list on every issue
+would copy it into every page and let two pages disagree about what "Todo"
+means. Document-level is the only place it can live, and `doc.fields` is
+additive — a build that predates it ignores the key and still renders every
+`prop` block's `html`.
+
+**Every `prop` block carries a human-readable `html`.** That is what makes the
+format degrade rather than vanish, and it is not redundancy: it is the same
+discipline as the static preview and the markdown export. An older build, a
+thumbnailer, a grep, and a markdown export all see "Status: In progress"
+without knowing what a field is.
+
+**Fields render as a header strip, by CONVENTION not by a new container.**
+`prop` blocks that precede the first non-prop block on a page are drawn as a
+compact strip under the title; the same blocks later in the body render inline.
+No format flag says "this is a header" — the position does — so an older build
+shows the same information in the same order, just stacked.
+
+**What this buys the day collaboration lands.** Nothing needs doing. The CRDT
+syncs pages and blocks; properties ARE blocks, so per-field last-writer-wins
+falls out of the existing per-(node,key) registers, and two people changing
+status and assignee at the same time both win. Had properties been one object
+on the page, that would have been one register and one of the two edits would
+have been lost silently — which is the measured reason the ruling exists.
+
+**Deliberately NOT in this format.** No teams (a file IS the team boundary), no
+per-user permissions (the file is the capability, per PLATFORM §5), no
+notifications, no server-side automation. Those are Buzz's problem shape — a
+relay, signed events, agents as members — and Buzz is a Rust service with
+Postgres behind it. The thing Bento can do that neither Linear nor Buzz can is
+hand you the whole tracker as one file that opens offline, forever, with no
+account. That is the feature, and it is the reason the format has to stay
+small enough to keep that promise.
+
 ## 2026-08-03 — bento/spaces: the format decisions that must precede parallel work
 
 Five independent design reviews of bento/spaces proposed overlapping feature

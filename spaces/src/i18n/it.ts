@@ -223,4 +223,12 @@ export const it: Catalog = {
   "Move down": "Sposta giù",
   "Duplicate": "Duplica",
   "Delete": "Elimina",
+  "New issue": "Nuova issue",
+  "Make this page an issue": "Trasforma questa pagina in una issue",
+  "Adds status, priority, assignee, estimate": "Aggiunge stato, priorità, assegnatario e stima",
+  "Already an issue": "È già una issue",
+  "Now an issue": "Ora è una issue",
+  "Issues": "Issue",
+  "No issues yet. Add a status field to any page and it appears here.": "Ancora nessuna issue. Aggiungi un campo stato a una pagina e comparirà qui.",
+  "Other": "Altre",
 }
