@@ -7,7 +7,7 @@
 import './styles.css'
 import { configureApp, appConfig } from '../../kernel/src/app.ts'
 import {
-  capturePristine, readEmbeddedDoc, serializeFile, serializeAuto,
+  capturePristine, readEmbeddedDoc, serializeFile, serializeAuto, registerPreview,
   saveFile, parseEnvelope, canWriteInPlace, decryptEnvelope, setEncryptionPassword,
   writeUpdatedFileAs,
   isEncryptionActive,
@@ -24,6 +24,7 @@ import {
 } from './agent'
 import { starterDoc } from './starter'
 import { textOf } from './sanitize'
+import { buildSpacePreview } from './preview'
 import { Store } from './store'
 import { Editor } from './editor'
 import { downloadMarkdown } from './about'
@@ -33,6 +34,13 @@ configureApp({
   appName: 'bento/spaces',
   manifestUrl: 'https://bento.page/releases/spaces/manifest.json',
 })
+
+// Every save writes a still render of the home page into the shell, for the
+// readers that run no script: macOS QuickLook, iOS Files, Bento Tray, and any
+// preview pane that renders HTML without executing it. Without this the runtime
+// never inflates, the splash is never removed, and a saved space shows a boot
+// animation where its content should be. See preview.ts.
+registerPreview((doc) => buildSpacePreview(doc as unknown as SpacesDoc))
 
 capturePristine()
 applyDirection()

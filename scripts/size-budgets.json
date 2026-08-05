@@ -3,8 +3,8 @@
   "shells": {
     "spaces": {
       "path": "spaces/dist-single/Bento_Spaces.bento.html",
-      "max": 116736,
-      "//": "114 KiB. Raised from 110 KiB at 114010 B on 2026-08-05: the suite chrome — animated splash, the mark and its About head, the fused Save with its dirty dot, and a resizable/collapsible page list with three more strings in eight locales. Bought consistency with bento/slides, which was the point of the app looking like it belongs to a suite."
+      "max": 120832,
+      "//": "118 KiB. Raised from 114 KiB at 117218 B on 2026-08-05 for the static first-page preview (spaces/src/preview.ts): without it a saved space showed the boot splash to every reader that runs no script — QuickLook, iOS Files, Bento Tray. Reported from the field. The preview itself is per-SAVE and separately budgeted at 64KB."
     }
   }
 }

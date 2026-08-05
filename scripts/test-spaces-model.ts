@@ -1033,5 +1033,37 @@ for (const [label, input, err] of [
     'undo/redo use the suite\'s glyphs')
 }
 
+// ---- a saved space shows its content to readers that run no script --------
+// The runtime ships deflated and inflates at boot, so with scripting off
+// nothing boots and the splash is never removed: every saved space appeared as
+// the bento boot animation to macOS QuickLook, iOS Files, Bento Tray and any
+// preview pane that renders HTML without executing it. Reported from the field.
+{
+  const fsv = await import('node:fs')
+  const rdv = (f: string) => fsv.readFileSync(new URL(`../spaces/src/${f}`, import.meta.url), 'utf8')
+  const main = rdv('main.ts'), pv = rdv('preview.ts')
+
+  ok(/registerPreview\(/.test(main), 'spaces registers a static first-page preview')
+  ok(/buildSpacePreview/.test(pv), '…built by preview.ts')
+
+  // A still has no runtime, so nothing in it may run, load or take input.
+  for (const tag of ['script', 'iframe', 'input', 'button', 'form', 'video', 'audio']) {
+    ok(new RegExp(`BANNED[^\n]*\\b${tag}\\b`).test(pv), `the preview strips <${tag}>`)
+  }
+  // …and it must never FETCH. A remote <img> here would phone home from a file
+  // manager — the remote-image consent rule, in a place nobody can consent.
+  ok(/'href', 'src', 'srcset'/.test(pv), 'the preview drops href and src')
+  ok(/startsWith\('data:'\)/.test(pv), '…keeping only images already inside the file')
+  ok(/attr\.name\.startsWith\('on'\)/.test(pv), 'and strips every on* handler')
+
+  // nothing to show is not the same as something to hide
+  ok(/if \(!doc\?\.pages\?\.length\) return null/.test(pv),
+    'a document with no pages produces no preview rather than an empty box')
+
+  // budgeted: a courtesy must never be why a file is large
+  ok(/PREVIEW_BUDGET/.test(pv) && /byteLength\(built\) <= PREVIEW_BUDGET/.test(pv),
+    'the preview is size-budgeted, with a title card as the fallback')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)
