@@ -480,10 +480,10 @@ export class Grid {
   }
 
   /** Write a block of values starting at a visible position. One undo step. */
-  private writeBlock(row: number, ci: number, block: unknown[][]): void {
+  private writeBlock(row: number, ci: number, block: unknown[][], extra: Patch[] = []): void {
     const s = this.sheet
     const vis = cols(s)
-    const patches: Patch[] = []
+    const patches: Patch[] = [...extra]
     const byCol = new Map<string, { rids: number[]; v: unknown[] }>()
     block.forEach((line, dr) => {
       line.forEach((val, dc) => {
@@ -500,12 +500,36 @@ export class Grid {
     if (patches.length) this.store.commit(patches)
   }
 
-  /** Clear every selected cell — one undo step, formula columns untouched. */
+  /** Clear every selected cell — one undo step, formula COLUMNS untouched. */
   clearSelection(): void {
+    const s = this.sheet
     const b = this.sel.bounds()
     const block: unknown[][] = []
     for (let r = b.top; r <= b.bottom; r++) block.push(new Array(b.right - b.left + 1).fill(null))
-    this.writeBlock(b.top, b.left, block)
+    // Clearing a cell has to drop its FORMULA too, not just blank the stored
+    // value underneath it. Writing nulls alone left the formula in place and it
+    // simply recomputed, so a cut appeared to do nothing and Delete on a
+    // formula cell was a no-op.
+    const keys: string[] = []
+    const overs: Array<Record<string, unknown> | null> = []
+    const vis = cols(s)
+    for (let r = b.top; r <= b.bottom; r++) {
+      for (let c = b.left; c <= b.right; c++) {
+        const col = vis[c]
+        if (!col) continue
+        const rid = ridAt(this.store, s, r)
+        const key = `${col.id}:${rid}`
+        const had = s.cells?.[key]
+        if (had?.f === undefined) continue
+        const { f: _f, ...rest } = had
+        keys.push(key)
+        overs.push(Object.keys(rest).length ? rest : null)
+      }
+    }
+    // ONE commit, so one ⌘Z puts back both the values and the formulas.
+    this.writeBlock(b.top, b.left, block, keys.length
+      ? [{ op: 'setOverrides', sheet: s.id, keys, v: overs as never, dropEmpty: true }]
+      : [])
   }
 
   /** Write the formula bar's contents into the active cell. */
@@ -538,7 +562,12 @@ export class Grid {
    * internal clip can never be pasted in place of what the user actually
    * copied.
    */
-  private clip: { tsv: string; block: Array<Array<{ v: unknown; f?: string }>> } | null = null
+  private clip: {
+    tsv: string
+    block: Array<Array<{ v: unknown; f?: string }>>
+    /** a CUT, not a copy — see writeClip for why that changes the answer */
+    cut?: boolean
+  } | null = null
 
   copyTsv(): string {
     const b = this.sel.bounds()
@@ -592,6 +621,7 @@ export class Grid {
     const vis = cols(s)
     const srcTop = this.clipTop ?? row
     const srcLeft = this.clipLeft ?? ci
+    const cut = this.clip?.cut === true
     const patches: Patch[] = []
     const byCol = new Map<string, { rids: number[]; v: unknown[] }>()
     const keys: string[] = []
@@ -604,8 +634,18 @@ export class Grid {
         if (rid < 0) return
         const key = `${c.id}:${rid}`
         if (cellv.f !== undefined) {
-          const dRow = dataRow(s, rid) - (srcTop + dr)
-          const dColIdx = s.columns.findIndex((x) => x.id === c.id) - (srcLeft + dc)
+          // A CUT does not translate. Copying makes a second formula that
+          // should mean the same thing in its new place, so its references
+          // move; cutting moves the ONE formula, and a formula that travels
+          // with its cells still means exactly what it did. Excel agrees, and
+          // getting this backwards silently re-points a moved formula at the
+          // wrong data.
+          //
+          // NOT DONE, and a real limitation: formulas ELSEWHERE that referenced
+          // the cut cells should follow them to the new location. They do not —
+          // they keep pointing at the old, now-empty positions.
+          const dRow = cut ? 0 : dataRow(s, rid) - (srcTop + dr)
+          const dColIdx = cut ? 0 : s.columns.findIndex((x) => x.id === c.id) - (srcLeft + dc)
           keys.push(key)
           overs.push({ ...(s.cells?.[key] ?? {}), f: translateCellFormula(cellv.f, dRow, dColIdx) })
         } else {
@@ -694,7 +734,7 @@ export class Grid {
     if (a.kind === 'clear') { this.clearSelection(); return true }
     if (a.kind === 'copy' || a.kind === 'cut') {
       void navigator.clipboard?.writeText(this.copyTsv())
-      if (a.kind === 'cut') this.clearSelection()
+      if (a.kind === 'cut') { if (this.clip) this.clip.cut = true; this.clearSelection() }
       return true
     }
     if (a.kind === 'paste') return false          // the document paste listener has the data
