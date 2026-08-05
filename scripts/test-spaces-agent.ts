@@ -41,7 +41,7 @@ import {
   planUpdatePage, planRemovePage,
   fieldsReport, issuesReport, planSetField, planNewIssue,
 } from '../spaces/src/agent.ts'
-import { DEFAULT_FIELDS, ISSUE_FIELDS, propHtml, isIssue, valuesOf } from '../spaces/src/fields.ts'
+import { DEFAULT_FIELDS, ISSUE_FIELDS, propHtml, isIssue, valuesOf, columnMoves } from '../spaces/src/fields.ts'
 
 let checks = 0
 let failures = 0
@@ -606,6 +606,82 @@ const issue = (id: string, values: Record<string, unknown>, extra: Record<string
   ok(/ISSUE_FIELDS\.includes\(f\.key\)/.test(editor) &&
      !/'status', 'priority', 'assignee', 'estimate'/.test(editor),
     'the editor seeds a new issue from the shared list, not a second copy of it')
+}
+
+// ---- five defects a review reproduced in the tracker ----------------------
+{
+  // 1. THE DEGRADATION GUARANTEE, enforced rather than claimed. setField kept
+  //    value and html in step; updateBlock and insertBlocks did not — measured,
+  //    updateBlock({value:'doing'}) left html:'Status: Todo', so the file SAID
+  //    Todo to every older build, thumbnailer, grep and markdown export while
+  //    its value said doing. A guarantee one writer keeps and three break is
+  //    not a guarantee, so it moved to where blocks are WRITTEN.
+  const d = load([p('p1', [{ id: 'ps', type: 'prop', key: 'status', value: 'todo', html: 'Status: Todo' }])])
+  apply(planUpdateBlock(d, 'ps', { value: 'doing' }))
+  ok((d.pages[0].blocks[0] as { html?: string }).html === 'Status: In progress',
+    'updateBlock re-derives the readable form from the new value')
+
+  apply(planInsertBlocks(d, 'p1', 'ps', [{ type: 'prop', key: 'priority', value: 'urgent' }]))
+  ok((d.pages[0].blocks[1] as { html?: string }).html === 'Priority: Urgent',
+    'insertBlocks writes a readable form for a field it was given without one')
+
+  apply(planInsertBlocks(d, 'p1', null, [{ type: 'prop', key: 'from-the-future', value: 'x', html: 'From the future: x' }]))
+  const last = d.pages[0].blocks[d.pages[0].blocks.length - 1] as { html?: string }
+  ok(last.html === 'From the future: x',
+    '…and leaves a key it does not know exactly as a newer build wrote it')
+
+  // 2. A malformed schema entry must not CRASH a write verb. It comes out of a
+  //    file, validate() reports it, and every other bad input is a tagged
+  //    refusal — this one threw a TypeError out of the public API.
+  for (const [name, spec] of [
+    ['no label', { key: 'owner', vt: 'text' }],
+    ['a numeric label', { key: 'o', label: 42, vt: 'text' }],
+    ['neither', { vt: 'text' }],
+  ] as Array<[string, unknown]>) {
+    let threw: string | null = null
+    let out = ''
+    try { out = propHtml(spec as never, 'ana') } catch (e) { threw = (e as Error).message }
+    ok(threw === null, `a schema entry with ${name} does not throw (${threw ?? out})`)
+  }
+
+  // 3. A new issue must BE an issue, or the verb reports a success nothing can
+  //    see: invisible to issues(), to every board, and to a follow-up setField.
+  const noStatus = load([p('p1', [b('b1')])], { fields: [{ key: 'state', label: 'State', vt: 'text' }] })
+  const made = planNewIssue(noStatus, { title: 'filed by an agent' }) as { ok: boolean; err?: string }
+  ok(made.ok === false && made.err === 'no-status-field',
+    `a space with no status field refuses to make an issue (${made.err ?? 'ok'})`)
+
+  // 4. An UNSET status is not an UNKNOWN one — they want opposite handling:
+  //    "leave it alone" versus "this needs triaging".
+  const mixed = load([
+    p('a', [{ id: 'a1', type: 'prop', key: 'status', value: '', html: 'Status: —' }]),
+    p('c', [{ id: 'c1', type: 'prop', key: 'status', value: 'from-a-newer-build', html: 'Status: from-a-newer-build' }]),
+  ])
+  const rows = issuesReport(mixed, {})
+  ok(rows.find((r) => r.id === 'a')?.group === undefined, 'an unset status reports no group')
+  ok(rows.find((r) => r.id === 'c')?.group === 'unknown', 'a status from a newer build reports "unknown"')
+}
+
+// ---- a drop that changes nothing must WRITE nothing ------------------------
+// reorderPages judged adjacency in doc.pages, and page order is not column
+// order: a board with two columns interleaves them. Measured on
+// [board,i1,i2,i3,i4,i5] with i1,i3,i5 in one column — dropping i1 back into
+// its own slot rewrote doc.pages, took an undo entry, set the dirty flag, and
+// visibly reshuffled the SIDEBAR, because board order is sidebar order. The rig
+// missed it because its fixture had ONE column, the only shape where the two
+// orders agree.
+{
+  const col = ['i1', 'i3', 'i5']
+  for (const [label, aim] of [
+    ['before its own next card', { before: 'i3' }],
+    ['after its own previous card', { after: 'i3' }],
+    ['onto itself', { after: 'i1' }],
+  ] as Array<[string, never]>) {
+    const moved = label.includes('previous') ? 'i5' : 'i1'
+    ok(!columnMoves(col, moved, aim), `dropping ${label} moves nothing`)
+  }
+  ok(columnMoves(col, 'i5', { before: 'i1' } as never), 'a real move is a move')
+  ok(columnMoves(col, 'newcomer', { before: 'i3' } as never), 'a card from another column always moves')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

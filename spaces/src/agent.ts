@@ -35,7 +35,7 @@ import { SPECS, SPEC } from './blocks.ts'
 import { sanitizeInline, textOf, inertBody, esc, UNWRAP } from './sanitize.ts'
 import { orphanAssets, humanBytes } from './assets.ts'
 import {
-  type FieldSpec, ISSUE_FIELDS, fieldsOf, optionOf, propBlock, propHtml, valuesOf, isIssue, headerLength,
+  type FieldSpec, ISSUE_FIELDS, fieldsOf, fieldByKey, optionOf, propBlock, propHtml, valuesOf, isIssue, headerLength,
 } from './fields.ts'
 
 // ---------------------------------------------------------------------------
@@ -693,6 +693,29 @@ function splitPatch(patch: Record<string, unknown>): { sets: Record<string, unkn
  * It used to append silently, which put the content somewhere the agent did not
  * ask for and reported success.
  */
+/**
+ * A `prop` block's readable form, re-derived from its value. ALWAYS.
+ *
+ * The degradation guarantee — "an older build, a thumbnailer, a grep and the
+ * markdown export all see 'Status: In progress'" — was claimed by setField and
+ * enforced nowhere else. Measured on this build: `updateBlock(id,{value:'doing'})`
+ * left `html:'Status: Todo'`, so the file SAID Todo while its value said doing;
+ * and `insertBlocks` with a prop block wrote no `html` at all. A guarantee that
+ * one writer keeps and three writers break is not a guarantee.
+ *
+ * So it is applied where blocks are WRITTEN, not where fields are set: every
+ * verb goes through here, and a verb added later gets it without knowing.
+ * An unknown key has no spec and keeps whatever it was given — that is a value
+ * from a newer build, not an error.
+ */
+function syncProp(doc: SpacesDoc, b: Block): void {
+  if (b.type !== 'prop') return
+  const key = String((b as Record<string, unknown>).key ?? '')
+  const f = key ? fieldByKey(doc, key) : undefined
+  if (!f || typeof f.label !== 'string') return
+  ;(b as Record<string, unknown>).html = propHtml(f, (b as Record<string, unknown>).value)
+}
+
 export function planInsertBlocks(
   doc: SpacesDoc, pageId: string, afterId: string | null, blocks: unknown,
 ): Plan<{ ids: string[]; page: string }> {
@@ -712,6 +735,7 @@ export function planInsertBlocks(
     const b = { ...src, id: uid('b'), type } as Block
     if (typeof src.id === 'string' && src.id) remap.set(src.id, b.id)
     if (typeof b.html === 'string') b.html = normalizeHtml(b.html, type)
+    syncProp(doc, b)   // a field value is nothing without its readable form
     made.push(b)
   }
   for (const b of made) {
@@ -772,6 +796,7 @@ export function planUpdateBlock(doc: SpacesDoc, id: string, patch: unknown): Pla
       for (const k of dels) delete (block as Record<string, unknown>)[k]
       const retyped = typeof sets.type === 'string' && sets.type !== block.type
       Object.assign(block, sets)
+      syncProp(doc, block)   // value and readable form move together, always
       // A TYPE CHANGE RUNS THE REGISTRY'S init, exactly as the editor's setType
       // does. Without it an agent-written callout has no `tone` and an
       // agent-written to-do has no `done` — documents the app itself could not
@@ -1195,8 +1220,15 @@ export function issuesReport(doc: SpacesDoc, query: IssueQuery = {}): IssueRepor
     if (!isIssue(page)) continue
     if (page.archived && !query.archived) continue
     const values = valuesOf(page)
-    const opt = status && optionOf(status, values.get('status'))
-    const group = status && !opt ? 'unknown' : opt?.group
+    const raw = values.get('status')
+    const opt = status && optionOf(status, raw)
+    // An UNSET status is not an UNKNOWN one. Reporting 'unknown' for a field
+    // nobody has filled in tells an agent the value came from a build we do not
+    // understand, when in fact there is no value — and those want opposite
+    // handling: one is "leave it alone", the other is "this needs triaging".
+    const group = raw === undefined || raw === null || raw === ''
+      ? undefined
+      : opt ? opt.group : 'unknown'
 
     // OPEN MEANS NOT FINISHED — one predicate, so a status with no group and a
     // status this build has never heard of both count as work. That is the safe
@@ -1264,8 +1296,20 @@ export function planNewIssue(doc: SpacesDoc, spec: unknown): Plan<NewIssueResult
   // an agent and a fresh issue from ⌘⇧I must carry the same fields, or one of
   // them makes an issue a human cannot assign — there is no "add a field"
   // gesture, because `prop` is unlisted in the / menu on purpose.
-  const props = schema
-    .filter((f) => ISSUE_FIELDS.includes(f.key) || f.key in values)
+  const seed = schema.filter((f) => ISSUE_FIELDS.includes(f.key) || f.key in values)
+
+  // A NEW ISSUE MUST BE AN ISSUE. A space that declares its own schema without
+  // a `status` seeded nothing recognisable: the verb returned ok, and the page
+  // it made was invisible to issues(), to every board, and to a follow-up
+  // setField('status') that then failed `no-such-field`. Reporting success for
+  // a page that is not an issue is worse than refusing to make one.
+  if (!seed.some((f) => f.key === 'status')) {
+    return fail('no-status-field',
+      'this space declares no `status` field, and a page is an issue because it has one — '
+      + 'add a status field to doc.fields (see bento.fields()) before creating issues')
+  }
+
+  const props = seed
     .map((f) => propBlock(f, f.key in values ? values[f.key] : (f.def ?? ''), uid('b')))
   page.blocks = [...props, newBlock('p')]
 

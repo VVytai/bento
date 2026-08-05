@@ -128,12 +128,21 @@ export const optionOf = (f: FieldSpec | undefined, id: unknown): FieldOption | u
  * what it holds.
  */
 export function propHtml(f: FieldSpec, value: unknown): string {
-  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  // COERCE, never assume. The schema comes out of a file someone sent you, so
+  // `label` can be absent or a number — and this used to throw a TypeError
+  // straight out of the public API (setField and newIssue), on exactly the
+  // untrusted-file class the rest of the code is hardened against. A malformed
+  // schema entry is something validate() reports; it is not something a write
+  // verb should crash on. Falling back to the KEY keeps the readable form
+  // readable, which is the whole job.
+  const esc = (v: unknown) =>
+    String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const label = typeof f?.label === 'string' && f.label ? f.label : String(f?.key ?? 'field')
   const shown =
     f.vt === 'select' ? (optionOf(f, value)?.label ?? String(value ?? ''))
       : f.vt === 'labels' ? (Array.isArray(value) ? value.join(', ') : String(value ?? ''))
         : String(value ?? '')
-  return `${esc(f.label)}: ${esc(shown) || '—'}`
+  return `${esc(label)}: ${esc(shown) || '—'}`
 }
 
 /** A page's field values, by key. Only `prop` blocks carry them. */
@@ -316,4 +325,34 @@ export const propBlockOf = (page: Page, key: string): Block | undefined =>
 /** Build a prop block, with its readable form already in step. */
 export function propBlock(f: FieldSpec, value: unknown, id: string): Block {
   return { id, type: 'prop', key: f.key, value, html: propHtml(f, value) } as Block
+}
+
+/**
+ * Would this drop change the order the user can actually SEE?
+ *
+ * `reorderPages` compares adjacency in `doc.pages`, and page order is not
+ * column order: a board with two columns interleaves them, so a card dropped
+ * back into its own slot is NOT adjacent to itself in the page array. Measured:
+ * pages [board,i1,i2,i3,i4,i5] with i1,i3,i5 in one column — dropping i1 where
+ * it already sat returned a reordered array, so a gesture that visibly did
+ * nothing wrote to the document, took an undo entry, set the dirty flag, and
+ * visibly reshuffled the SIDEBAR, because board order is sidebar order.
+ *
+ * The rig missed it because its fixture had one column, which is the only
+ * shape where the two orders coincide.
+ *
+ * `cards` is the column's card ids in the order they are drawn, INCLUDING the
+ * dragged one. The answer is about the column, because the column is the only
+ * order the gesture was about.
+ */
+export function columnMoves(cards: string[], moved: string, aim: DropAim): boolean {
+  const at = cards.indexOf(moved)
+  if (at < 0) return true                       // it is arriving from elsewhere
+  const rest = cards.filter((id) => id !== moved)
+  const target = aim.before
+    ? rest.indexOf(aim.before)
+    : aim.after ? rest.indexOf(aim.after) + 1 : rest.length
+  if (target < 0) return true
+  const next = [...rest.slice(0, target), moved, ...rest.slice(target)]
+  return next.join('\u001f') !== cards.join('\u001f')
 }

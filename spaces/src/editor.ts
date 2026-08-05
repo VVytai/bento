@@ -488,7 +488,12 @@ export class Editor {
       a.draggable = true
       a.addEventListener('click', (e) => { e.preventDefault(); s.goToPage(page.id); this.toggleSidebar(false) })
       a.addEventListener('dragstart', (e) => e.dataTransfer?.setData('text/bento-page', page.id))
-      a.addEventListener('dragover', (e) => { e.preventDefault(); a.classList.add('sp-drop') })
+      a.addEventListener('dragover', (e) => {
+        // a sidebar row accepts PAGES; a card dragged over it lit up and
+        // promised a nesting it would never perform
+        if (!e.dataTransfer?.types.includes('text/bento-page')) return
+        e.preventDefault(); a.classList.add('sp-drop')
+      })
       a.addEventListener('dragleave', () => a.classList.remove('sp-drop'))
       a.addEventListener('drop', (e) => {
         e.preventDefault(); a.classList.remove('sp-drop')
@@ -670,7 +675,16 @@ export class Editor {
     })
     grip.addEventListener('dragend', () => node.classList.remove('sp-dragging'))
 
-    node.addEventListener('dragover', (e) => { e.preventDefault(); node.classList.add('sp-dropline') })
+    node.addEventListener('dragover', (e) => {
+      // ONLY a block drag. A view block is a block node, so an issue card
+      // dragged across the board lit the blue "block moves here" bar under the
+      // whole view at the same time as the column's outline — two things
+      // claiming one drop, from different owners. The payload says which
+      // gesture this is; ask it.
+      if (!e.dataTransfer?.types.includes('text/bento-block')) return
+      e.preventDefault()
+      node.classList.add('sp-dropline')
+    })
     node.addEventListener('dragleave', () => node.classList.remove('sp-dropline'))
     node.addEventListener('drop', (e) => {
       e.preventDefault()
@@ -942,7 +956,13 @@ export class Editor {
     if (!page || !f || s.readOnly) return
     const own = propBlockOf(page, key)
     const setting = !own || String((own as { value?: unknown }).value ?? '') !== optId
-    const order = reorderPages(s.doc.pages, pageId, aim)
+    // The no-op test is about the COLUMN, not the page array — those are
+    // different orders the moment a board has two columns, and judging by page
+    // adjacency let a drop that visibly did nothing rewrite doc.pages.
+    const cards = [...document.querySelectorAll<HTMLElement>(`.sp-col[data-group="${CSS.escape(optId)}"] .sp-issue[data-issue]`)]
+      .map((c) => c.dataset.issue!)
+    const moves = columnMoves(cards, pageId, aim)
+    const order = moves ? reorderPages(s.doc.pages, pageId, aim) : null
     if (!setting && !order) return
 
     s.commit(() => {
