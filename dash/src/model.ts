@@ -268,6 +268,63 @@ export interface PivotSheet {
   [extra: string]: unknown
 }
 
+// --- rid partitioning -------------------------------------------------------
+//
+// TWO REPLICAS MUST NEVER MINT THE SAME RID FOR DIFFERENT ROWS. The watermark
+// (`TableSheet.nextRid`) makes minting monotonic, which fixes reuse after a
+// delete — but it cannot help the CONCURRENT case, where two people insert at
+// the same moment, both compute "one past the highest I know about", and both
+// get the same number. rid is identity: the CRDT keys a row node on it, and
+// overrides and comments attach to it. Two different rows sharing one would
+// merge into a single row and silently lose one of them.
+//
+// So under collaboration each replica mints from its OWN BLOCK of the rid
+// space. `rid = base + counter`, and no two replicas share a base.
+//
+// THE SPLIT. JavaScript integers are exact to 2^53. That budget is divided
+// 30 bits of block by 23 bits of counter: 1.07e9 blocks, and 8.4M rows per
+// replica per workbook — comfortably past `docBudget`, which stops a document
+// long before then. The alternative split (more rows, fewer blocks) buys
+// capacity nobody reaches at the cost of the only thing that matters here.
+//
+// BLOCK 0 IS RESERVED and is what a solo document uses, so an unshared
+// workbook still numbers its rows 1, 2, 3 and run-length encodes to
+// `[[1, 4200]]`. Nothing about the common case changes; the cost is paid only
+// once a second person is actually editing.
+//
+// THE RESIDUAL RISK, stated plainly: a block is derived from the actor id, so
+// two replicas collide only if their derived blocks collide. That is the same
+// assumption the engine already rests on everywhere else — actor ids are
+// random per session and every register comparison assumes they differ. With
+// 1.07e9 blocks the chance for ten concurrent editors is about 5e-8, and for a
+// hundred about 5e-6. It is not zero, and pretending otherwise would be worse
+// than saying so.
+
+/** Rows one replica may mint in one workbook: 2^23. */
+export const RID_BLOCK = 8_388_608
+/** Blocks available: 2^30. Block 0 is the solo/pre-collab range. */
+export const RID_BLOCKS = 1_073_741_824
+
+/**
+ * The rid block for an actor id — deterministic, and never 0.
+ *
+ * FNV-1a over the id. It only has to spread evenly; it is not a security
+ * property, and the uniqueness it inherits is the actor id's.
+ */
+export function ridBlockFor(actor: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < actor.length; i++) {
+    h ^= actor.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  // 1..RID_BLOCKS-1 — never block 0, which belongs to solo documents
+  return (h % (RID_BLOCKS - 1)) + 1
+}
+
+/** First rid in a block. Block 0 starts at 1, so a solo file numbers from 1. */
+export const ridBase = (block: number): number =>
+  block <= 0 ? 1 : block * RID_BLOCK
+
 export type Sheet = TableSheet | CanvasSheet | PivotSheet
 
 /**

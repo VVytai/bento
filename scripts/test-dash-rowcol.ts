@@ -31,12 +31,11 @@
 // right one is possible.
 
 import { parseDoc, type Column, type DashDoc, type TableSheet } from '../dash/src/model.ts'
+import { RID_BLOCK, RID_BLOCKS, ridBase, ridBlockFor } from '../dash/src/model.ts'
 import { Store, applyPatch, readCell, _internals as store_, type Patch } from '../dash/src/store.ts'
-import {
-  insertRowsAt, deleteRowsAt, insertColumn, deleteColumn, moveColumn, resizeColumn,
+import { insertRowsAt, deleteRowsAt, insertColumn, deleteColumn, moveColumn, resizeColumn,
   autoFitWidth, freezeAt, readFrozen, applySheetProps, hiddenSet, setHidden,
-  _internals, type SetSheetProps,
-} from '../dash/src/rowcol.ts'
+  _internals, type SetSheetProps, setRidBlock } from '../dash/src/rowcol.ts'
 
 let failures = 0
 let checks = 0
@@ -594,6 +593,72 @@ roundTrip('setHidden', (s) => setHidden(s, 'note', true))
   const r = applyPatch(st.doc, patches[0])
   ok(r.touched.structural === true && r.touched.cols?.includes('qty') === true,
     'the store reports a structural invalidation naming the column, so the grid relayouts instead of repainting')
+}
+
+// RID PARTITIONING — the correctness precondition collaboration rests on.
+//
+// The watermark stops a rid being REUSED after a delete. It cannot touch the
+// concurrent case: two people insert at the same moment, both compute "one past
+// the highest I know about", and both get the same number. rid is IDENTITY — the
+// CRDT keys a row node on it — so two different rows sharing one merge into a
+// single row and one of them is silently lost.
+{
+  const A = 'actor-aaaa'
+  const B = 'actor-bbbb'
+  ok(ridBlockFor(A) !== ridBlockFor(B), 'two actors derive different rid blocks')
+  ok(ridBlockFor(A) === ridBlockFor(A), 'and the derivation is deterministic')
+  ok(ridBlockFor(A) > 0 && ridBlockFor(B) > 0,
+    'never block 0, which is reserved for solo documents')
+  ok(ridBase(0) === 1, 'so an unshared workbook still numbers its rows from 1')
+  ok(ridBase(RID_BLOCKS - 1) + RID_BLOCK - 1 <= Number.MAX_SAFE_INTEGER,
+    'and the very top block still lands inside exact integer arithmetic')
+
+  /** Mint `n` rows as `actor`, from the same starting document. */
+  const mintAs = (actor: string | null, n: number): number[] => {
+    setRidBlock(actor === null ? null : ridBase(ridBlockFor(actor)))
+    const st = new Store(fresh())
+    const out: number[] = []
+    for (let i = 0; i < n; i++) {
+      const p = insertRowsAt(sheetOf(st.doc), 0, 1) as Patch[]
+      st.commit(p)
+      out.push((p[0] as { rids: number[] }).rids[0])
+    }
+    setRidBlock(null)
+    return out
+  }
+
+  // THE CASE THAT MATTERS: both replicas start from the SAME document and both
+  // insert. Without partitioning they mint the identical numbers.
+  const fromA = mintAs(A, 25)
+  const fromB = mintAs(B, 25)
+  const clash = fromA.filter((r) => fromB.includes(r))
+  ok(clash.length === 0,
+    `two replicas inserting concurrently from the same document share NO rid (${clash.length} collisions)`)
+  ok(new Set(fromA).size === fromA.length, 'and one replica never repeats itself')
+
+  // reuse after a delete, INSIDE a block — the watermark cannot help here,
+  // because it is a maximum across every actor and would push this replica out
+  // of its own block entirely
+  setRidBlock(ridBase(ridBlockFor(A)))
+  {
+    const st = new Store(fresh())
+    const seen: number[] = []
+    for (let i = 0; i < 6; i++) {
+      const p = insertRowsAt(sheetOf(st.doc), 0, 1) as Patch[]
+      st.commit(p)
+      const rid = (p[0] as { rids: number[] }).rids[0]
+      seen.push(rid)
+      st.commit(deleteRowsAt(sheetOf(st.doc), 0, 1))   // delete it again at once
+    }
+    ok(new Set(seen).size === seen.length,
+      'a rid deleted inside a block is never minted again in that session')
+  }
+  setRidBlock(null)
+
+  // and the solo path is byte-for-byte what it always was
+  const solo = mintAs(null, 3)
+  ok(JSON.stringify(solo) === JSON.stringify([5, 6, 7]),
+    `a solo document still mints small consecutive rids (${solo.join(',')})`)
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

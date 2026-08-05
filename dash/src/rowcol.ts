@@ -29,6 +29,7 @@
 // bugs that corrupt the file quietly, so those throw. `applyPatch` takes the
 // same line ("refusing loudly is the point").
 
+import { RID_BLOCK } from './model.ts'
 import type { Column, ColumnData, ColumnType, TableSheet } from './model.ts'
 import type { Patch, Touched } from './store.ts'
 import { formatValue, TYPE_LABEL } from './format.ts'
@@ -105,7 +106,56 @@ function refusePacked(sheet: TableSheet, doing: string): void {
  * here so that stamping it is a one-line change at the call site the moment a
  * patch op can write a sheet field — see SetSheetProps below.
  */
+/**
+ * This replica's rid block while a collaborative session is live, or `null`
+ * when the document is solo.
+ *
+ * Module state rather than a threaded argument because minting happens deep
+ * inside patch construction and the block belongs to the SESSION, not to any
+ * one sheet or edit — the same shape the kernel uses for the encryption
+ * password. `setRidBlock(null)` restores the solo numbering exactly.
+ */
+let ridBlock: { base: number; high: number } | null = null
+
+/**
+ * Point minting at an actor's block. See model.ts's rid-partitioning note.
+ *
+ * `high` is an in-memory high-water mark for THIS session, and it is what stops
+ * a rid being reused after a delete inside the block: the durable
+ * `sheet.nextRid` watermark cannot serve here, because it is a maximum across
+ * every actor's rids and would push this replica straight out of its own block
+ * and into someone else's.
+ *
+ * Across sessions the question does not arise — an actor id is fresh per
+ * session instance, so a reconnecting replica gets a different block and cannot
+ * collide with what it minted before.
+ */
+export function setRidBlock(base: number | null): void {
+  ridBlock = base === null || base <= 1 ? null : { base, high: base - 1 }
+}
+
 function nextRidFloor(sheet: TableSheet): number {
+  const blk = ridBlock
+  if (blk) {
+    // The maximum WITHIN this block. Other replicas' rids live in other blocks
+    // and are irrelevant — taking a global maximum is exactly what would break
+    // the partition.
+    const top = blk.base + RID_BLOCK - 1
+    let hi = blk.high
+    const inBlock = (rid: number) => rid >= blk.base && rid <= top
+    for (const [start, count] of sheet.rids) {
+      const last = start + count - 1
+      if (inBlock(last)) hi = Math.max(hi, last)
+      else if (inBlock(start)) hi = Math.max(hi, start)
+    }
+    for (const k of Object.keys(sheet.cells ?? {})) {
+      const rid = ridOfKey(k)
+      if (Number.isFinite(rid) && inBlock(rid)) hi = Math.max(hi, rid)
+    }
+    blk.high = hi
+    return hi + 1
+  }
+
   let hi = 0
   for (const [start, count] of sheet.rids) hi = Math.max(hi, start + count - 1)
   for (const k of Object.keys(sheet.cells ?? {})) {
@@ -135,6 +185,7 @@ export function insertRowsAt(sheet: TableSheet, at: number, count: number): Patc
 
   const pos = clampInt(at, 0, rowsOf(sheet))
   const first = nextRidFloor(sheet)
+  if (ridBlock) ridBlock.high = Math.max(ridBlock.high, first + n - 1)
   const rids: number[] = []
   const ats: number[] = []
   // Contiguous and ascending, so `at[i]` stays valid as earlier splices land

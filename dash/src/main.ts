@@ -33,6 +33,10 @@ import { mountAbout, openAbout, rememberVersion } from './about.ts'
 import { mountPanels } from './panels.ts'
 import { installStory } from './story.ts'
 import { Dashboard } from './dashboard.ts'
+import { SyncSession } from './sync/session.ts'
+import { mountPeople } from './sync/people.ts'
+import { ridBase, ridBlockFor } from './model.ts'
+import { setRidBlock } from './rowcol.ts'
 import { importXlsx, exportXlsx, xlsxFileName } from './xlsx.ts'
 import { runPivot, mountPivot, defaultPivot, newPivotSheet, type PivotSpec } from './pivot.ts'
 import { buildSheetPreview } from './preview.ts'
@@ -498,6 +502,21 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
       }
     }, 2500)
   }
+  // --- live collaboration.
+  //
+  // The session is CONSTRUCTED for every workbook but connects to nothing
+  // unless the file arrived carrying credentials or the reader opts in this
+  // session (`shareEligible`) — a freshly created workbook must never phone
+  // home (PLATFORM §5).
+  //
+  // The rid block is set FIRST and before any edit can happen. Two replicas
+  // minting the same rid for different rows would merge them into one and lose
+  // a row, and rid is identity everywhere — the CRDT node key, overrides,
+  // comments. See model.ts's partitioning note.
+  const sync = new SyncSession(store)
+  setRidBlock(ridBase(ridBlockFor(sync.actor)))
+  ;(window as unknown as Record<string, unknown>).__sync = sync
+
   store.on('doc', markDirty)
 
   // The wordmark and the version chip open About. Mounted AFTER markDirty
@@ -508,6 +527,15 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     showSheet: (id: string) => grid.setSheet(id),
     onDirty: markDirty,
   }
+  // The People panel: who else is in this workbook.
+  //
+  // It takes OVER its host (`host.innerHTML = …` on every render), so it gets
+  // a container of its own. Handing it `app` erased the entire application on
+  // boot — grid, panels, everything — and left only the panel markup behind,
+  // with nothing in the console because nothing threw.
+  const peopleEl = document.createElement('div')
+  app.querySelector('.dx-bar')!.appendChild(peopleEl)
+  mountPeople(peopleEl, sync, store)
   mountAbout(app, aboutHooks)
   // …and an EXPLICIT way in. mountAbout only arms the wordmark and the version
   // chip, and nobody guesses that a logo is a button — the chip, meanwhile, is
