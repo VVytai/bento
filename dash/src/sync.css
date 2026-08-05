@@ -1,0 +1,103 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 The Bento authors
+ * The live-session / People panel. Imported by src/sync/people.ts, so it only
+ * reaches the bundle when collaboration is wired in.
+ *
+ * Deliberately its own file rather than an addition to styles.css: sync is one
+ * feature with one owner, and a panel that never mounts should not cost the
+ * shell any bytes it cannot explain. Variables come from styles.css. */
+
+.dx-people {
+  font: inherit;
+  padding: 8px 10px;
+}
+
+.dx-people-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* Grey until the relay is actually open. A "Live" label that is only an
+ * intention is the one thing this dot must never be. */
+.dx-people-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #8FA3BF;
+  flex: none;
+}
+
+.dx-people-dot.on {
+  background: #7FC8A9;
+  box-shadow: 0 0 0 3px rgba(127, 200, 169, 0.22);
+}
+
+.dx-people-title {
+  font-weight: 600;
+  margin-inline-end: auto;
+}
+
+.dx-people-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dx-people-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 2px;
+  min-width: 0;
+}
+
+.dx-people-chip {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* The name is a claim, so it gets no more visual weight than the key that
+ * actually proves something. */
+.dx-people-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dx-people-role,
+.dx-people-key {
+  font-size: 0.82em;
+  opacity: 0.65;
+  flex: none;
+}
+
+.dx-people-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.dx-people-x {
+  margin-inline-start: auto;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  opacity: 0.5;
+  font: inherit;
+  padding: 0 2px;
+}
+
+.dx-people-x:hover {
+  opacity: 1;
+}
+
+.dx-people-empty {
+  margin: 6px 2px 0;
+  font-size: 0.9em;
+  opacity: 0.6;
+}

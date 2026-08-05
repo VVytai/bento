@@ -32,6 +32,59 @@
   #app .dp-centre { flex-direction: column; }
 }
 
+/* ————— phones: the panels become DRAWERS —————
+   As flex siblings, two 220px panels plus their resizers claim 450px of a
+   390px screen: MEASURED, document.body.scrollWidth was 460 against a
+   clientWidth of 390, so the whole app grew a horizontal scrollbar and the
+   grid — the thing you came for — was the smallest region on screen.
+   panels.ts already shuts both panels at BOOT on a narrow window, which is why
+   this never showed up on a real phone; it shows up the moment a desktop window
+   is narrowed or a tablet is rotated, because that path runs once and never
+   again. Overlaying costs no layout width at all, so the grid keeps the full
+   screen whether a drawer is open or shut. slides made the same move at the
+   same breakpoint, and for the same reason.
+
+   699 and not 700, because panels.ts tests `vw < PHONE_W` with PHONE_W = 700 —
+   so 700 is a DESKTOP there. At `max-width: 700px` the two definitions
+   disagreed on exactly one pixel, and on that pixel a fresh load left both
+   panels open AND floating: two overlay drawers covering a 700px window, with
+   the grid a sliver between them. Breakpoints that mean the same thing have to
+   BE the same number. */
+@media (max-width: 699px) {
+  #app .dx-body { position: relative; }
+  #app .dp-panel {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 40;
+    box-shadow: 0 0 40px rgb(15 23 36 / 0.18);
+  }
+  #app .dp-left { left: 0; }
+  #app .dp-right { right: 0; }
+  /* a shut drawer casts no shadow, or the closed edge draws a grey smear */
+  #app .dp-panel.dp-shut { box-shadow: none; }
+
+  /* Both chevrons DOCK now, open or shut. With the panels floating, the two
+     resizer strips are the only things left in flow, so they sit hard against
+     the screen edges — and a 16px chevron centred on a 5px rail then hung 5.5px
+     past the viewport. Measured: body.scrollWidth 396 against clientWidth 390,
+     a horizontal scrollbar for six pixels of decoration. These are the same
+     rules the shut state already used; the phone just always wants them. */
+  #app .dp-panel + .dp-resizer .dp-toggle {
+    left: 0;
+    transform: translateY(-50%);
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+  #app .dp-resizer:has(+ .dp-panel) .dp-toggle {
+    left: auto;
+    right: 0;
+    transform: translateY(-50%);
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+}
+
 .dp-panel {
   width: var(--dp-w, 220px);
   flex: none;

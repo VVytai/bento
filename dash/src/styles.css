@@ -10,8 +10,41 @@
   --accent: #f7a600;
   --bg: #ffffff;
   --panel: #f8fafc;
-  --sel: #fff7e6;
+  --sel: #fdf0d6;
+  /* COUPLED TO grid.ts `ROW_H`, and there is no mechanism keeping them honest.
+     The body is virtualised: JS positions every row at `top: i * ROW_H` as an
+     inline style, so this variable only sizes the cell that lands there.
+     Setting it to 26 to get Excel's density left the rows 30px apart with a
+     4px transparent band between them — the gridlines stopped meeting and the
+     grid looked perforated. Change one and you must change the other. */
   --row-h: 30px;
+
+  /* ————— the grid's own greys —————
+     Split out from --line because they answer a different question. --line is
+     chrome: the edge of a panel, where one surface stops. These two are the
+     GRID, and a spreadsheet's gridlines are the strongest signal that what you
+     are looking at is a spreadsheet and not a table on a web page. At #e3e8ef
+     dash's grid had vertical rules only, no horizontal ones at all, and read as
+     a web table with zebra striping — which is what it was. Excel and Sheets
+     both draw both axes at roughly this weight (Sheets' is #e0e0e0 on white)
+     and neither stripes. */
+  --grid-line: #d8dee7;
+  --grid-head: #eef1f6;   /* the header/gutter band — must read as a BAND */
+  --grid-head-on: #f6dfae; /* …and a selected row/column header, as a lit one */
+
+  /* ————— one scale, five surfaces —————
+     The pivot, the dashboard, the story editor, the save menu and the About
+     dialog were each written separately and each picked its own radii, shadows
+     and caption size. These are the agreed values; every one of those files
+     now reads them rather than restating a number. */
+  --radius: 7px;         /* controls: buttons, inputs, chips */
+  --radius-lg: 10px;     /* floating surfaces: menus, popovers, cards */
+  --radius-xl: 14px;     /* dialogs */
+  --shadow-pop: 0 12px 32px rgb(15 23 42 / 0.16);
+  --shadow-dialog: 0 24px 64px rgb(15 23 42 / 0.34);
+  --fs-ui: 13px;         /* control and menu text */
+  --fs-small: 11.5px;    /* captions, sub-labels, meta */
+  --fs-micro: 11px;      /* section headers, badges */
 }
 
 * { box-sizing: border-box; }
@@ -31,44 +64,245 @@ html, body {
 .dx-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line-strong);
   background: var(--panel);
   flex: 0 0 auto;
+  min-width: 0;
   /* the notch: the app positions its own chrome and never asks the browser to pad it */
-  padding-top: max(8px, env(safe-area-inset-top));
+  padding-top: max(7px, env(safe-area-inset-top));
 }
-.dx-mark { font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; }
-.dx-mark span { color: #ff9e8a; }
+.dx-mark {
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+.dx-slash { color: #ff9e8a; }
 .dx-title {
   font: inherit;
   font-weight: 600;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 4px 8px;
-  min-width: 8ch;
-  flex: 1 1 auto;
+  /* `flex: 0 1` and never `1 1`: the title is elastic, but it is not entitled
+     to the slack — the buttons to its right are, and a growing title is what
+     pushes them off the end. */
+  flex: 0 1 240px;
+  min-width: 60px;
   background: transparent;
   color: inherit;
 }
 .dx-title:hover { border-color: var(--line-strong); }
 .dx-title:focus { outline: none; border-color: var(--accent); background: #fff; }
+
+.dx-group { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+/* everything after the insert group is pushed to the far end */
+.dx-bar-end { margin-inline-start: auto; }
+
 .dx-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font: inherit;
-  padding: 5px 11px;
+  font-size: var(--fs-ui);
+  padding: 5px 10px;
   border: 1px solid var(--line-strong);
-  border-radius: 7px;
+  border-radius: var(--radius);
   background: #fff;
   color: inherit;
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 .dx-btn:hover { background: var(--panel); border-color: var(--muted); }
 .dx-btn:active { transform: translateY(0.5px); }
 .dx-btn[disabled] { opacity: 0.45; cursor: default; }
-.dx-ver { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.dx-dirty { color: var(--accent); font-size: 18px; line-height: 1; }
+.dx-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dx-i { flex: 0 0 auto; }
+/* the caret on a dropdown trigger is a hint, not a peer of the icon */
+.dx-dd-trig > .dx-i:last-child { opacity: 0.5; margin-inline-start: -2px; }
+
+.dx-ver {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+/* Unsaved-changes dot: it badges SAVE rather than floating in the bar, where
+   an amber bullet next to the title explained nothing. Absolutely positioned,
+   so it costs the button no width — which matters, because Save is the control
+   that has to survive every width. */
+.dx-btn-save { position: relative; }
+/* Scoped through .dx-bar .dx-btn-save, not written bare, because the dot IS a
+   <span> inside a bar button and the narrow-window rule below hides exactly
+   that. A bare `.dx-dirty { display: block }` lost the specificity duel and the
+   dot measured 0×0 at every width under 1280 — i.e. the unsaved-changes signal
+   silently vanished on the widths that need it most. */
+.dx-bar .dx-btn-save > .dx-dirty {
+  display: block;
+  position: absolute;
+  top: 3px;
+  inset-inline-end: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  pointer-events: none;
+}
+.dx-bar .dx-btn-save > .dx-dirty[hidden] { display: none; }
+
+/* ————— top-bar dropdowns —————
+   One panel style, shared with .dx-pop and the save menu. */
+.dx-dd { position: relative; flex: 0 0 auto; }
+.dx-menu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-start: 0;
+  z-index: 60;
+  min-width: 200px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px;
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+}
+.dx-dd.open > .dx-menu { display: flex; }
+.dx-menu .dx-btn {
+  width: 100%;
+  justify-content: flex-start;
+  border: 0;
+  background: transparent;
+  padding: 6px 9px;
+}
+.dx-menu .dx-btn:hover { background: var(--panel); }
+.dx-menu .dx-i { color: var(--muted); }
+/* Labels ALWAYS show inside an OPEN menu panel. The narrow-window rule below
+   strips them from bar buttons, and the first pass stripped them here too —
+   which left an icon-only mystery menu. slides hit this and wrote the same
+   exception; what slides did NOT have is dash's insert group, whose buttons
+   live inside a .dx-menu that is a plain inline row until 900px. Written with
+   `!important` the exception forced labels back on in that row too, so the bar
+   never actually shrank (measured: the group stayed 516px wide at 1100px).
+   Keying on `.open` says the real thing — a FLOATING PANEL is what needs
+   words — and wins on specificity without reaching for !important. */
+.dx-bar .dx-dd.open > .dx-menu .dx-btn > span { display: inline; }
+.dx-menu-sep { height: 1px; background: var(--line); margin: 4px 6px; }
+/* the data menu hangs off a button near the right edge, so it grows inward */
+.dx-data-dd > .dx-menu { inset-inline-start: auto; inset-inline-end: 0; }
+
+/* ————— responsive top bar —————
+   LABELS GIVE WAY, THEN GROUPS FOLD. Never a scrollbar, and never a
+   horizontally scrolling body — the bar carries Save, and a control you have
+   to scroll to reach is a control that is missing.
+
+   Wide: the six insert buttons sit in the bar as a plain row; the same markup
+   is the dropdown's contents below 900px, so nothing is reparented and no
+   listener is ever rebound. */
+.dx-insert-dd { display: flex; align-items: center; gap: 6px; }
+.dx-insert-dd > .dx-dd-trig { display: none; }
+.dx-insert-dd > .dx-menu {
+  display: flex;
+  flex-direction: row;
+  position: static;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+}
+/* …and as a row they are ordinary bar buttons again, not menu rows */
+.dx-insert-dd > .dx-menu > .dx-btn {
+  width: auto;
+  border: 1px solid var(--line-strong);
+  background: #fff;
+  padding: 5px 10px;
+}
+.dx-insert-dd > .dx-menu > .dx-btn:hover { background: var(--panel); border-color: var(--muted); }
+.dx-insert-dd > .dx-menu .dx-i { color: inherit; }
+
+/* 1280, not slides' 1200. MEASURED: with every label showing, the insert group
+   ends at x=860 and the end group starts at x=1031 — 171px of slack in a
+   1440px window, so the fully-labelled bar needs ~1270px. A 1200px breakpoint
+   would have let the two groups collide for the 70px in between. Breakpoints
+   are measurements, not round numbers. */
+@media (max-width: 1280px) {
+  /* icons and tooltips take over. Save keeps its word: it is the control the
+     user names when it goes missing, and an unlabelled floppy is a guess. */
+  .dx-bar .dx-btn > span { display: none; }
+  .dx-bar .dx-btn-save > .dx-save-lab { display: inline; }
+  .dx-bar { gap: 6px; }
+  .dx-btn { padding: 5px 8px; }
+  .dx-title { flex: 0 1 200px; }
+}
+
+/* 900, and again it is a measurement: at 1041px the icon-only insert row still
+   left 214px of slack, so folding it there threw away a whole toolbar for
+   nothing. The row needs 827px; 900 keeps ~73px of margin over that. */
+@media (max-width: 900px) {
+  /* below this the six icon buttons no longer clear the end group, so they
+     become one ＋ menu. Their labels come back inside it. */
+  .dx-insert-dd { display: block; position: relative; }
+  .dx-insert-dd > .dx-dd-trig { display: inline-flex; }
+  .dx-insert-dd > .dx-menu {
+    display: none;
+    position: absolute;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 200px;
+    padding: 5px;
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    box-shadow: var(--shadow-pop);
+  }
+  .dx-insert-dd.open > .dx-menu { display: flex; }
+  .dx-insert-dd > .dx-menu > .dx-btn {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 6px 9px;
+  }
+  .dx-insert-dd > .dx-menu .dx-i { color: var(--muted); }
+}
+
+@media (max-width: 860px) {
+  /* the version chip is the least load-bearing thing in the bar, and About is
+     now a real button, so the chip is no longer anybody's only way in */
+  .dx-ver { display: none; }
+}
+
+@media (max-width: 760px) {
+  .dx-mark-b { display: none; } /* "/dash" — the peach slash IS the mark */
+}
+
+@media (max-width: 700px) {
+  .dx-bar { gap: 4px; padding-left: 8px; padding-right: 8px; }
+  /* HIG touch targets. A 30px icon button is a mis-tap on glass. */
+  .dx-bar > .dx-group > .dx-btn,
+  .dx-bar > .dx-group .dx-dd-trig,
+  .dx-bar > .dx-insert-dd > .dx-dd-trig { min-height: 38px; justify-content: center; }
+  .dx-bar .dx-btn:not(.dx-btn-save):not(.dxs-caret) { min-width: 38px; }
+  .dx-bar .dx-menu .dx-btn { min-width: 0; min-height: 0; } /* menu rows are text */
+  /* the trigger carets are the first thing to go: at this width the panel that
+     opens is explanation enough, and 15px each is a whole button's worth */
+  .dx-dd-trig > .dx-i:last-child { display: none; }
+  .dx-title { flex: 0 1 90px; min-width: 36px; }
+}
+
+/* The smallest screen anyone still ships (320px). MEASURED there: the bar came
+   to 348px and ⓘ hung 28px past the edge. The wordmark is the only thing left
+   on the bar that does no work — and About, which is where "what IS this file"
+   lives, is precisely what it was standing in front of. So the brand goes and
+   the button stays. Everything else here is load-bearing. */
+@media (max-width: 380px) {
+  .dx-mark { display: none; }
+}
 
 /* ————— findings: what import refused to decide ————— */
 .dx-findings {
@@ -118,7 +352,19 @@ html, body {
   white-space: nowrap;
 }
 .dx-chart-head .dx-btn { padding: 3px 8px; font-size: 12px; }
-.dx-chart-body { flex: 1 1 auto; min-height: 0; padding: 6px; }
+/* A COLUMN, not a block. This panel hosts three different things — a chart, a
+   3D scene and a whole pivot table — and only the chart is happy sizing itself
+   from a 100% height. `.dxp` is a flex column that caps its own scroller at the
+   panel height; in a block parent it had no height to cap against and the pivot
+   ran off the bottom of the panel instead of scrolling inside it. */
+.dx-chart-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+}
+.dx-chart-body > * { flex: 1 1 auto; min-height: 0; }
 .dx-chart-body svg { display: block; width: 100%; height: 100%; }
 
 /* stack on a phone rather than squeezing both */
@@ -127,7 +373,12 @@ html, body {
   .dx-chart { flex: 0 0 45%; border-left: 0; border-top: 1px solid var(--line); }
 }
 .dg-scroll { position: absolute; inset: 0; overflow: auto; }
-.dg-table { position: relative; min-width: max-content; }
+/* 13px, not the 14px the rest of the UI runs at. A grid is read a hundred
+   cells at a time and a spreadsheet's type is always a step smaller than its
+   chrome's — Excel's default is 11pt against a 12pt UI, Sheets' 10pt against
+   13px. At 14px in a 30px row the type filled the row and the grid read as
+   prose; a step down gives the figures air on both sides. */
+.dg-table { position: relative; min-width: max-content; font-size: 13px; }
 /* the sizer is the ONLY absolutely-positioned region: header and totals stay in
    flow so `position: sticky` resolves against the scroller */
 .dg-sizer { position: relative; }
@@ -139,23 +390,33 @@ html, body {
   position: sticky;
   z-index: 3;
   height: var(--row-h);
-  background: var(--panel);
+  background: var(--grid-head);
 }
-.dg-head-row { top: 0; border-bottom: 1px solid var(--line-strong); }
-.dg-foot-row { bottom: 0; border-top: 1px solid var(--line-strong); font-weight: 600; }
+/* 2px, and --line-strong: the seam under the header is the one edge in the
+   grid that has to survive being scrolled under. A 1px --line rule there read
+   as one more gridline. */
+.dg-head-row { top: 0; border-bottom: 2px solid var(--line-strong); }
+.dg-foot-row { bottom: 0; border-top: 2px solid var(--line-strong); font-weight: 600; }
 
+/* BOTH AXES. The grid drew vertical rules only and separated rows with a zebra
+   stripe — the arrangement of a web table, not of a spreadsheet, and the single
+   biggest reason dash did not read as one. Excel and Sheets both rule every
+   cell on all four sides and neither stripes; with real horizontal lines the
+   stripe is redundant AND busy, so it is gone.
+   box-sizing is border-box globally, so the 1px bottom border eats into the
+   row height — hence the line-height below, or the text sits a pixel low. */
 .dg-cell {
   flex: 0 0 auto;
   padding: 0 8px;
   height: var(--row-h);
-  line-height: var(--row-h);
-  border-right: 1px solid var(--line);
+  line-height: calc(var(--row-h) - 1px);
+  border-right: 1px solid var(--grid-line);
+  border-bottom: 1px solid var(--grid-line);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
-.dg-sizer .dg-row:nth-child(even) .dg-cell { background: #fcfdfe; }
 .dg-cell.dg-editing {
   background: #fff;
   box-shadow: inset 0 0 0 2px var(--accent);
@@ -229,79 +490,115 @@ html, body {
   * { transition: none !important; }
 }
 
-/* ————— formula bar ————— */
+/* ————— formula bar —————
+   Excel and Sheets both build this out of three parts with visible seams: the
+   name box, a rule, then the entry field running the full width. dash had the
+   three parts floating in whitespace, which reads as a search bar. The rule and
+   the fixed 30px height are what make it furniture. */
 .dx-formula {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 10px;
-  border-bottom: 1px solid var(--line);
+  align-items: stretch;
+  gap: 0;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--line-strong);
   background: #fff;
   flex: 0 0 auto;
+  min-height: 32px;
 }
 .dx-ref {
-  min-width: 74px;
-  font: 600 12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  min-width: 82px;
+  font: 600 12px/22px ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--ink);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 2px 8px;
+  background: var(--grid-head);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 0 8px;
   text-align: center;
   flex: 0 0 auto;
+  align-self: center;
 }
-.dx-fx-mark { color: var(--muted); font: italic 600 13px/1 serif; flex: 0 0 auto; }
+/* the seam between "where you are" and "what is in it" */
+.dx-fx-mark {
+  color: var(--muted);
+  font: italic 600 13px/1 serif;
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  margin-inline-start: 8px;
+  border-inline-start: 1px solid var(--line);
+}
 .dx-fx-input {
   flex: 1 1 auto;
   font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 3px 8px;
   background: transparent;
   color: inherit;
   min-width: 0;
+  align-self: center;
 }
 .dx-fx-input:hover { border-color: var(--line); }
 .dx-fx-input:focus { outline: none; border-color: var(--accent); background: #fff; }
 
-/* ————— status bar ————— */
+/* ————— status bar —————
+   Excel's reads left: what you are looking at; right: what the selection adds
+   up to. The sum is the half people actually use, so it gets the ink — grid
+   figures on the app's own surface, not muted like the label beside it. */
 .dx-status {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 4px 12px;
-  border-top: 1px solid var(--line);
+  padding: 3px 12px;
+  border-top: 1px solid var(--line-strong);
   background: var(--panel);
   font-size: 12px;
   color: var(--muted);
   flex: 0 0 auto;
   min-height: 26px;
   font-variant-numeric: tabular-nums;
-  padding-bottom: max(4px, env(safe-area-inset-bottom));
+  padding-bottom: max(3px, env(safe-area-inset-bottom));
 }
-.dx-status-sum { margin-left: auto; }
+.dx-status-view { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dx-status-sum {
+  margin-left: auto;
+  color: var(--ink);
+  font-weight: 500;
+  white-space: nowrap;
+  padding-inline-start: 16px;
+  border-inline-start: 1px solid var(--line-strong);
+}
+.dx-status-sum:empty { border: 0; padding: 0; }
 
 /* ————— row gutter and column letters ————— */
+/* Row numbers and the corner: one BAND, and it has to look like one. Both
+   Excel and Sheets tint the headers distinctly from the sheet and rule them
+   off with a heavier edge — that band is what tells you where the data starts.
+   --panel (#f8fafc, two shades off white) did not. */
 .dg-gutter {
   width: 52px;
   flex: 0 0 52px;
-  background: var(--panel);
+  background: var(--grid-head);
   color: var(--muted);
   text-align: right;
   font-size: 11px;
-  border-right: 1px solid var(--line-strong);
+  font-weight: 500;
+  border-right: 2px solid var(--line-strong);
   position: sticky;
   left: 0;
   z-index: 2;
   cursor: pointer;
   user-select: none;
 }
-.dg-gutter-on { background: #fdf0d5; color: var(--ink); font-weight: 600; }
+.dg-gutter:hover { background: #e4e9f1; color: var(--ink); }
+.dg-gutter-on { background: var(--grid-head-on); color: var(--ink); font-weight: 700; }
 .dg-corner {
   width: 52px;
   flex: 0 0 52px;
-  background: var(--panel);
-  border-right: 1px solid var(--line-strong);
+  background: var(--grid-head);
+  border-right: 2px solid var(--line-strong);
   position: sticky;
   left: 0;
   z-index: 4;
@@ -316,7 +613,7 @@ html, body {
   padding: 0 3px;
   border-radius: 4px;
 }
-.dg-letter:hover { background: var(--line); color: var(--ink); }
+.dg-letter:hover { background: var(--line-strong); color: var(--ink); }
 
 /* ————— selection ————— */
 .dg-cell.dg-sel { background: var(--sel) !important; }
@@ -347,7 +644,7 @@ html, body {
   font-size: 10px;
 }
 .dg-filter:hover { color: var(--accent); }
-.dg-h.dg-filtered { background: #fdf0d5; }
+.dg-h.dg-filtered { background: var(--grid-head-on); }
 .dg-h.dg-filtered .dg-filter { color: var(--accent); }
 .dg-grip {
   position: absolute;
@@ -362,14 +659,17 @@ html, body {
 .dg-h { position: relative; }
 
 /* ————— popover menus ————— */
+/* Same panel as .dx-menu and the save menu — one floating-surface style for
+   the whole app, so a right-click menu and a top-bar menu are recognisably
+   the same object. */
 .dx-pop {
   position: fixed;
   z-index: 9999;
   min-width: 210px;
   background: #fff;
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  box-shadow: 0 12px 34px rgba(30, 42, 58, 0.18);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
   padding: 5px;
   display: flex;
   flex-direction: column;
@@ -377,12 +677,12 @@ html, body {
 }
 .dx-pop button {
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   text-align: left;
   border: 0;
   background: transparent;
-  border-radius: 6px;
-  padding: 6px 10px;
+  border-radius: var(--radius);
+  padding: 6px 9px;
   cursor: pointer;
   color: inherit;
 }
@@ -392,15 +692,15 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 4px 10px 6px;
-  font-size: 11px;
+  padding: 4px 9px 6px;
+  font-size: var(--fs-micro);
   color: var(--muted);
 }
 .dx-pop-in {
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 4px 7px;
   color: var(--ink);
 }
@@ -433,10 +733,16 @@ html, body {
 /* Frozen columns stay put while the rest scrolls under them, so they need an
    opaque background (the cells behind would show through) and an edge that
    says where the frozen pane ends. */
-.dg-cell.dg-frozen { background: var(--surface); z-index: 2; }
+/* --surface and --sel-bg were never declared anywhere in dash: a frozen cell
+   resolved to `background: <invalid>` and stayed TRANSPARENT — the exact
+   failure the rule above exists to prevent — and a frozen cell inside a
+   selection fell back to a hard-coded blue while the rest of the selection was
+   amber. Both now read dash's own tokens. */
+.dg-cell.dg-frozen { background: var(--bg); z-index: 2; }
+.dg-head-row .dg-cell.dg-frozen { background: var(--grid-head); }
 .dg-head-row .dg-cell.dg-frozen { z-index: 5; }
 .dg-cell.dg-frozen.dg-freeze-edge { border-right: 2px solid var(--line-strong); }
-.dg-cell.dg-sel.dg-frozen { background: var(--sel-bg, #eef4ff); }
+.dg-cell.dg-sel.dg-frozen { background: var(--sel); }
 
 /* ————— two-line column header —————
    The letter strip on top (Excel's position, and the click target for
@@ -449,8 +755,8 @@ html, body {
   position: relative;
   display: block;
   height: 19px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  border-bottom: 1px solid var(--line-strong);
+  background: var(--grid-head);
 }
 .dg-h .dg-letter {
   display: block;

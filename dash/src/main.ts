@@ -29,7 +29,7 @@ import {
 } from '../../kernel/src/save.ts'
 import { putRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
-import { mountAbout, rememberVersion } from './about.ts'
+import { mountAbout, openAbout, rememberVersion } from './about.ts'
 import { mountPanels } from './panels.ts'
 import { installStory } from './story.ts'
 import { Dashboard } from './dashboard.ts'
@@ -55,6 +55,47 @@ import {
   autoFitWidth, setHidden, freezeAt, readFrozen } from './rowcol.ts'
 import { FUNCTIONS } from './formula.ts'
 import { buildScene, defaultViz3d, mountViz3d, type Viz3dBinding, type Viz3dKind } from './viz3d.ts'
+
+// --- topbar icons -----------------------------------------------------------
+//
+// Every top-bar control carries an icon AND a <span> label, because that is the
+// only shape that survives a narrow window: under 1280px the CSS hides the
+// spans and the icons carry on alone (slides/src/styles.css does the same, and
+// its comment — "labels give way, never a scrollbar" — is the whole rule). A
+// label-only button has nothing left to shrink to, which is exactly how this
+// bar came to be 1436px wide inside an 802px window with Save off the end.
+//
+// 15px box, 1.6px strokes, currentColor: they have to read at 100% and at the
+// 0.45 opacity a disabled button gets.
+const SVG = (d: string): string =>
+  `<svg class="dx-i" viewBox="0 0 20 20" width="15" height="15" aria-hidden="true" fill="none" ` +
+  `stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`
+
+const ICON = {
+  plus: SVG('<path d="M10 4v12M4 10h12"/>'),
+  fx: SVG('<path d="M12 4.5h-1.2a2 2 0 0 0-2 2V16"/><path d="M6.5 9.5h5"/><path d="M13 11l4 5M17 11l-4 5"/>'),
+  chart: SVG('<path d="M3.5 16.5h13"/><path d="M6.5 16.5v-5M10 16.5V5.5M13.5 16.5v-8"/>'),
+  cube: SVG('<path d="M10 2.8l6 3.4v7.6l-6 3.4-6-3.4V6.2z"/><path d="M4 6.2l6 3.4 6-3.4M10 9.6v7.6"/>'),
+  pivot: SVG('<rect x="3.2" y="3.2" width="13.6" height="13.6" rx="1.6"/><path d="M3.2 8h13.6M8 3.2v13.6"/>'),
+  dashboard: SVG('<rect x="3.2" y="3.2" width="6" height="6" rx="1.2"/><rect x="10.8" y="3.2" width="6" height="6" rx="1.2"/>' +
+    '<rect x="3.2" y="10.8" width="6" height="6" rx="1.2"/><rect x="10.8" y="10.8" width="6" height="6" rx="1.2"/>'),
+  story: SVG('<rect x="2.8" y="4" width="14.4" height="9.6" rx="1.4"/><path d="M7 17h6"/>'),
+  undo: SVG('<path d="M7 7H4.5V4.5"/><path d="M4.9 7.4A5.6 5.6 0 1 1 4.4 12"/>'),
+  data: SVG('<ellipse cx="10" cy="5.4" rx="5.6" ry="2.4"/><path d="M4.4 5.4v9.2c0 1.3 2.5 2.4 5.6 2.4s5.6-1.1 5.6-2.4V5.4"/><path d="M4.4 10c0 1.3 2.5 2.4 5.6 2.4s5.6-1.1 5.6-2.4"/>'),
+  // Import and export get OPPOSITE arrows, not two copies of the cylinder. Four
+  // rows reading "Import CSV / Export CSV / Import Excel / Export Excel" behind
+  // the same glyph is four rows you have to read word by word; the arrow is
+  // what lets you find the one you meant at a glance.
+  imp: SVG('<path d="M10 3v8.5"/><path d="M6.6 8.2L10 11.6l3.4-3.4"/><path d="M4.2 13.6v2.2h11.6v-2.2"/>'),
+  exp: SVG('<path d="M10 11.6V3.1"/><path d="M6.6 6.5L10 3.1l3.4 3.4"/><path d="M4.2 13.6v2.2h11.6v-2.2"/>'),
+  save: SVG('<path d="M4.4 3.6h8.3l3.3 3.3v9.5H4.4z"/><path d="M7 3.6v4.2h5V3.6"/><path d="M7 16.4v-4.6h6v4.6"/>'),
+  info: SVG('<circle cx="10" cy="10" r="7"/><path d="M10 9.2v4.4"/><path d="M10 6.6h.01"/>'),
+  down: SVG('<path d="M6 8l4 4 4-4"/>'),
+} as const
+
+/** A top-bar button: icon + collapsible label, the one shape the bar can shrink. */
+const barBtn = (act: string, icon: string, label: string, tip: string, extra = ''): string =>
+  `<button class="dx-btn${extra}" data-act="${act}" title="${esc(tip)}">${icon}<span>${esc(label)}</span></button>`
 
 configureApp({
   appId: 'bento-dash',
@@ -156,23 +197,56 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
 
   const app = document.getElementById('app')!
   app.innerHTML =
+    // THE BAR IS GROUPED, AND IT NEVER SCROLLS. It used to be thirteen flat
+    // buttons: measured at an 802px window its scrollWidth was 1436px, and the
+    // controls hanging off the right edge included Save — the one control the
+    // whole application exists to reach. The layout strategy is slides':
+    // labels give way to icons, then whole groups fold into menus, and a
+    // horizontal scrollbar is never the answer (see styles.css "responsive
+    // top bar" for the widths and what happens at each).
+    //
+    // The grouping is a spreadsheet's, not an alphabet: identity · insert ·
+    // (right) history · data in-out · save · about. Import/export live behind
+    // ONE menu at every width — four buttons for something done twice a
+    // session is what pushed Save off screen in the first place.
     `<header class="dx-bar">` +
-    `<span class="dx-mark">bento<span>/</span>dash</span>` +
+    `<span class="dx-mark"><span class="dx-mark-b">bento</span><span class="dx-slash">/</span>dash</span>` +
     `<input class="dx-title" value="">` +
-    `<span class="dx-dirty" hidden>•</span>` +
-    `<button class="dx-btn" data-act="formula">${t('＋ Formula column')}</button>` +
-    `<button class="dx-btn" data-act="chart">${t('＋ Chart')}</button>` +
-    `<button class="dx-btn" data-act="viz3d">${t('＋ 3D')}</button>` +
-    `<button class="dx-btn" data-act="pivot">${t('＋ Pivot')}</button>` +
-    `<button class="dx-btn" data-act="dashboard">${t('Dashboard')}</button>` +
-    `<button class="dx-btn" data-act="story">${t('Data story')}</button>` +
-    `<button class="dx-btn" data-act="import">${t('Import CSV…')}</button>` +
-    `<button class="dx-btn" data-act="undo">${t('Undo')}</button>` +
-    `<button class="dx-btn" data-act="export">${t('Export CSV')}</button>` +
-    `<button class="dx-btn" data-act="import-xlsx">${t('Import Excel…')}</button>` +
-    `<button class="dx-btn" data-act="export-xlsx">${t('Export Excel')}</button>` +
-    `<button class="dx-btn" data-act="save">${t('Save')}</button>` +
+    // Insert group. `display: contents` at wide widths (the six buttons sit in
+    // the bar); a real dropdown below 1040px, where they do not fit. No JS
+    // reparenting, so every listener below keeps working at every width.
+    `<div class="dx-dd dx-insert-dd">` +
+    `<button class="dx-btn dx-dd-trig" data-dd="insert" title="${esc(t('Insert a formula column, chart, pivot, dashboard or story'))}">` +
+    `${ICON.plus}<span>${t('Insert')}</span>${ICON.down}</button>` +
+    `<div class="dx-menu">` +
+    barBtn('formula', ICON.fx, t('Formula'), t('Add a formula column')) +
+    barBtn('chart', ICON.chart, t('Chart'), t('Chart the selected columns')) +
+    barBtn('viz3d', ICON.cube, t('3D'), t('Plot three numeric columns in 3D')) +
+    barBtn('pivot', ICON.pivot, t('Pivot'), t('Summarise this sheet as a pivot table')) +
+    barBtn('dashboard', ICON.dashboard, t('Dashboard'), t('Show or hide the dashboard')) +
+    barBtn('story', ICON.story, t('Story'), t('Build a data story from saved views')) +
+    `</div></div>` +
+    `<div class="dx-group dx-bar-end">` +
+    barBtn('undo', ICON.undo, t('Undo'), t('Undo (⌘Z)')) +
+    `<div class="dx-dd dx-data-dd">` +
+    `<button class="dx-btn dx-dd-trig" data-dd="data" title="${esc(t('Import and export CSV and Excel files'))}">` +
+    `${ICON.data}<span>${t('Data')}</span>${ICON.down}</button>` +
+    `<div class="dx-menu">` +
+    barBtn('import', ICON.imp, t('Import CSV…'), t('Add a sheet from a CSV or TSV file')) +
+    barBtn('export', ICON.exp, t('Export CSV'), t('Download this sheet as CSV')) +
+    `<div class="dx-menu-sep"></div>` +
+    barBtn('import-xlsx', ICON.imp, t('Import Excel…'), t('Add sheets from an .xlsx workbook')) +
+    barBtn('export-xlsx', ICON.exp, t('Export Excel'), t('Download this workbook as .xlsx')) +
+    `</div></div>` +
+    // Save keeps its label all the way down to a phone: it is the control the
+    // user names when it is missing, and an unlabelled floppy is a guess.
+    // The unsaved dot badges its corner rather than floating loose in the bar,
+    // where it explained nothing (slides made the same move).
+    `<button class="dx-btn dx-btn-save" data-act="save" title="${esc(t('Save this workbook (⌘S)'))}">` +
+    `${ICON.save}<span class="dx-save-lab">${t('Save')}</span><span class="dx-dirty" hidden></span></button>` +
+    barBtn('about', ICON.info, t('About'), t('About this workbook')) +
     `<span class="dx-ver">v${APP_VERSION}</span>` +
+    `</div>` +
     `</header>` +
     `<div class="dx-formula"><span class="dx-ref">A1</span>` +
     `<span class="dx-fx-mark">fx</span>` +
@@ -421,18 +495,56 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
 
   // The wordmark and the version chip open About. Mounted AFTER markDirty
   // exists — it takes it as the dirty signal for the edits it makes itself.
-  mountAbout(app, {
+  const aboutHooks = {
     store,
     showingSheet: () => grid.sheet.id,
-    showSheet: (id) => grid.setSheet(id),
+    showSheet: (id: string) => grid.setSheet(id),
     onDirty: markDirty,
-  })
+  }
+  mountAbout(app, aboutHooks)
+  // …and an EXPLICIT way in. mountAbout only arms the wordmark and the version
+  // chip, and nobody guesses that a logo is a button — the chip, meanwhile, is
+  // the first thing the responsive rules drop. The ⓘ button is the real door;
+  // the other two stay as shortcuts for whoever already found them.
+  app.querySelector('[data-act="about"]')!.addEventListener('click', () => openAbout(aboutHooks))
   void pruneOld()
 
   titleEl.addEventListener('input', () => {
     store.commit({ op: 'setTitle', title: titleEl.value })
     document.title = `${titleEl.value} — ${appConfig().appName}`
   })
+
+  // --- the top-bar dropdowns.
+  // Two rules, and they are the whole of it: a trigger toggles its own group,
+  // and ANY click outside shuts every group. The second rule has to be
+  // pointerdown on the document — a menu that survives the click that opened
+  // the next one leaves two panels overlapping, which is how a bar with one
+  // menu is fine and a bar with two is not.
+  //
+  // Note the menus are NOT rebuilt per width: at wide widths CSS gives the
+  // group `display: contents` and its buttons sit in the bar, so `.open` is
+  // simply inert. Nothing moves, so nothing loses a listener.
+  const shutMenus = (except?: Element) => {
+    for (const dd of app.querySelectorAll('.dx-dd.open')) if (dd !== except) dd.classList.remove('open')
+  }
+  for (const trig of app.querySelectorAll<HTMLElement>('.dx-dd-trig')) {
+    trig.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const dd = trig.closest('.dx-dd')!
+      const opening = !dd.classList.contains('open')
+      shutMenus()
+      dd.classList.toggle('open', opening)
+    })
+  }
+  // a menu item is a command: run it and get out of the way
+  for (const item of app.querySelectorAll('.dx-menu .dx-btn')) {
+    item.addEventListener('click', () => shutMenus())
+  }
+  document.addEventListener('pointerdown', (e) => {
+    const dd = (e.target as HTMLElement | null)?.closest?.('.dx-dd')
+    shutMenus(dd ?? undefined)
+  })
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') shutMenus() })
 
   // --- actions
   app.querySelector('[data-act="save"]')!.addEventListener('click', () => { void doSave() })
@@ -603,8 +715,16 @@ function exportCsv(store: Store): void {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000)
 }
 
-const esc = (s: string): string =>
-  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+// A FUNCTION DECLARATION, and it has to stay one. The boot dispatcher above
+// calls boot() during module evaluation — i.e. before this line runs — so as a
+// `const esc = …` arrow this sat in the temporal dead zone for the entire
+// first paint. Nothing noticed while only refuse() used it; the moment the top
+// bar did, every load died on "Cannot access 'esc' before initialization" with
+// the splash still up and nothing in the console (the boot try/catch swallows
+// it into the dark card). A declaration hoists, so the landmine is gone.
+function esc(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
 
 // referenced so the budget constants are not tree-shaken out of the bundle,
 // and so a reader of this file sees both halves of the rule in one place

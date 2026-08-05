@@ -67,7 +67,7 @@
 
 .ds-chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
 .ds-chip {
-  font-size: 12px;
+  font-size: var(--fs-small);
   padding: 2px 9px;
   border-radius: 999px;
   background: rgba(247, 166, 0, 0.16);
@@ -96,13 +96,18 @@
 }
 .ds-dot:hover { background: rgba(255, 255, 255, 0.45); }
 .ds-dot.on { background: var(--accent, #f7a600); transform: scale(1.35); }
-.ds-count { font-variant-numeric: tabular-nums; color: #8c99ad; font-size: 12px; }
+.ds-count { font-variant-numeric: tabular-nums; color: #8c99ad; font-size: var(--fs-small); }
 
+/* Same metrics as .dx-btn in styles.css — padding, radius, type size — and a
+   dark skin instead of a light one. The presenter overlay is the one surface in
+   dash that inverts, and inverting is ALL it should do: a button that also
+   changed shape and size would read as a different kind of control. */
 .ds-btn {
   font: inherit;
+  font-size: var(--fs-ui);
   line-height: 1;
-  padding: 6px 11px;
-  border-radius: 7px;
+  padding: 5px 10px;
+  border-radius: var(--radius);
   border: 1px solid rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.06);
   color: inherit;
@@ -123,6 +128,9 @@
 
 /* ————— the authoring panel ————— */
 
+/* The AUTHORING panel is light — it belongs to the editor, not to the show —
+   so it is styled as a floating surface exactly like the save menu and the
+   right-click popovers: same radius, same shadow, same 13px rows. */
 .ds-editor {
   position: fixed;
   right: 16px;
@@ -135,9 +143,9 @@
   background: var(--bg, #fff);
   color: var(--ink, #1e2a3a);
   border: 1px solid var(--line-strong, #cbd5e1);
-  border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.22);
-  font-size: 13px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--fs-ui);
 }
 .ds-ed-head {
   display: flex;
@@ -170,7 +178,7 @@
   align-items: center;
   gap: 6px;
   padding: 5px 6px;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 .ds-step:hover { background: var(--panel, #f8fafc); }
 .ds-n {
@@ -186,13 +194,13 @@
   width: 100%;
   padding: 3px 6px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius);
   background: transparent;
   color: inherit;
 }
 .ds-cap-in:hover { border-color: var(--line-strong, #cbd5e1); }
 .ds-cap-in:focus { outline: none; border-color: var(--accent, #f7a600); background: #fff; }
-.ds-meta { font-size: 11px; color: var(--muted, #64748b); padding-left: 6px; }
+.ds-meta { font-size: var(--fs-micro); color: var(--muted, #64748b); padding-left: 6px; }
 .ds-warn { color: #b91c1c; font-weight: 600; }
 .ds-hint { margin: 0; padding: 14px 14px 6px; color: var(--muted, #64748b); }
 .ds-ed-foot {

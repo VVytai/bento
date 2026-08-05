@@ -6,7 +6,11 @@
 
    Variables come from styles.css and are never redefined here: a pivot that
    carried its own palette would drift from the grid beside it on the first
-   theme change. */
+   theme change. In particular the rules use --grid-line and the header band
+   uses --grid-head, NOT the chrome greys: a pivot is a grid, it sits a few
+   hundred pixels from the real one, and the two have to be the same object at
+   a glance. It used --line and --panel, and read a shade lighter than the
+   sheet it summarised. */
 
 .dxp {
   display: flex;
@@ -14,6 +18,7 @@
   min-height: 0;
   font: 13px/1.4 var(--ui, system-ui, sans-serif);
   color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .dxp-scroll {
@@ -33,9 +38,10 @@
 
 .dxp-table th,
 .dxp-table td {
-  border-right: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  padding: 4px 10px;
+  border-right: 1px solid var(--grid-line);
+  border-bottom: 1px solid var(--grid-line);
+  padding: 0 10px;
+  height: var(--row-h);
   white-space: nowrap;
 }
 
@@ -43,18 +49,20 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--panel);
+  background: var(--grid-head);
   font-weight: 600;
   text-align: left;
   /* the sticky header loses its own border on scroll in every engine — the
-     shadow is what keeps the seam visible */
-  box-shadow: inset 0 -1px 0 var(--line-strong);
+     shadow is what keeps the seam visible. 2px, matching .dg-head-row: this is
+     the same seam, and it has to be the same weight. */
+  box-shadow: inset 0 -2px 0 var(--line-strong);
 }
 
 .dxp-corner {
   position: sticky;
   left: 0;
   z-index: 3;
+  background: var(--grid-head);
   color: var(--muted);
   font-weight: 600;
   vertical-align: bottom;
@@ -119,11 +127,16 @@
 
 /* --- findings + notes ---------------------------------------------------- */
 
+/* the same shape as the top-level findings banner (.dx-findings): amber on a
+   warm tint, because they answer the same question — what did this decide for
+   me? Two different treatments for one idea is how a suite stops reading as one. */
 .dxp-findings {
   border-left: 3px solid var(--accent);
-  background: var(--sel);
+  background: #fffbeb;
+  border-radius: 0 var(--radius) var(--radius) 0;
   padding: 6px 10px;
   margin: 0 0 6px;
+  font-size: var(--fs-ui);
 }
 
 .dxp-finding + .dxp-finding {
@@ -134,7 +147,7 @@
 .dxp-empty {
   color: var(--muted);
   margin: 6px 2px 0;
-  font-size: 12px;
+  font-size: var(--fs-small);
 }
 
 /* --- drill-down ---------------------------------------------------------- */
@@ -171,14 +184,19 @@
   margin-inline-start: auto;
 }
 
+/* the same button as everywhere else in dash, at the same radius — this one
+   had grown its own 4px corners and a lighter border */
 .dxp-drawer-close {
+  font: inherit;
+  font-size: var(--fs-ui);
   border: 1px solid var(--line-strong);
   background: var(--bg);
   color: var(--muted);
-  border-radius: 4px;
+  border-radius: var(--radius);
   cursor: pointer;
-  padding: 1px 7px;
+  padding: 2px 8px;
 }
+.dxp-drawer-close:hover { background: var(--panel); color: var(--ink); }
 
 .dxp-drill-scroll {
   overflow: auto;
@@ -194,8 +212,8 @@
 
 .dxp-drill th,
 .dxp-drill td {
-  border-right: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--grid-line);
+  border-bottom: 1px solid var(--grid-line);
   padding: 3px 8px;
   white-space: nowrap;
   text-align: left;
@@ -204,9 +222,9 @@
 .dxp-drill thead th {
   position: sticky;
   top: 0;
-  background: var(--panel);
+  background: var(--grid-head);
   font-weight: 600;
-  box-shadow: inset 0 -1px 0 var(--line-strong);
+  box-shadow: inset 0 -2px 0 var(--line-strong);
 }
 
 .dxp-drill-n {

@@ -44,7 +44,7 @@
   min-width: 0;
   min-height: 0;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg);
   overflow: hidden;
 }
@@ -56,11 +56,14 @@
   padding: 7px 10px 4px;
   flex: 0 0 auto;
 }
+/* the same label as a panel section header and a chart-panel title: 11px,
+   uppercase, wide-tracked, muted. Three surfaces had three different answers. */
 .dbx-title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-transform: uppercase;
   color: var(--muted);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.06em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -79,7 +82,7 @@
 }
 
 .dbx-note {
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--muted);
   padding-top: 4px;
   flex: 0 0 auto;
@@ -95,13 +98,13 @@
   align-items: center;
   justify-content: center;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--fs-small);
   color: var(--muted);
   padding: 8px;
 }
 .dbx-blank { height: 100%; }
 
-.dbx-text { font-size: 13px; padding: 4px 0; }
+.dbx-text { font-size: var(--fs-ui); padding: 4px 0; }
 
 /* ————— the selection bar ————— */
 .dbx-chips {
@@ -110,13 +113,13 @@
   flex-wrap: wrap;
   gap: 6px;
   padding: 0 2px 10px;
-  font-size: 12px;
+  font-size: var(--fs-small);
 }
 .dbx-chips-idle { color: var(--muted); }
 .dbx-chips-label { color: var(--muted); }
 .dbx-chip {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--fs-small);
   padding: 3px 9px;
   border: 1px solid var(--accent);
   border-radius: 999px;
@@ -139,7 +142,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.dbx-sub { font-size: 11.5px; color: var(--muted); padding-top: 2px; }
+.dbx-sub { font-size: var(--fs-small); color: var(--muted); padding-top: 2px; }
 /* Direction is a hue AND a sign in the text, never hue alone — a colour-blind
    reader gets the same answer. */
 .dbx-up { color: #1f8a5b; }
@@ -147,7 +150,7 @@
 
 /* ————— charts ————— */
 .dbx-svg { flex: 1 1 auto; min-height: 0; width: 100%; overflow: visible; }
-.dbx-grid { stroke: var(--line); stroke-width: 1; }
+.dbx-grid { stroke: var(--grid-line); stroke-width: 1; }
 .dbx-axis { stroke: var(--line-strong); stroke-width: 1; }
 .dbx-ytick { font-size: 9px; fill: var(--muted); text-anchor: end; }
 .dbx-xtick { font-size: 9px; fill: var(--muted); text-anchor: middle; }
@@ -171,7 +174,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  font-size: 11px;
+  font-size: var(--fs-micro);
   color: var(--muted);
   padding-bottom: 2px;
   flex: 0 0 auto;
@@ -183,23 +186,23 @@
 .dbx-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--fs-small);
   font-variant-numeric: tabular-nums;
 }
 .dbx-table th {
   position: sticky;
   top: 0;
-  background: var(--bg);
+  background: var(--grid-head);
   text-align: left;
   font-weight: 600;
   color: var(--muted);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--line-strong);
   padding: 3px 6px;
   white-space: nowrap;
 }
 .dbx-table td {
   padding: 3px 6px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--grid-line);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

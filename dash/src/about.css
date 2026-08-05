@@ -7,7 +7,12 @@
    is what postbuild-compress deflates (it takes the first <style> in head and
    would leave a second one as plaintext). So this file must be IMPORTED, never
    linked, and nothing here may depend on landing after styles.css in the
-   cascade — order follows the module graph, not intent. */
+   cascade — order follows the module graph, not intent.
+
+   Which is exactly why the shared radii/shadows/type sizes are CUSTOM
+   PROPERTIES and not a base rule some file overrides: a var() resolves where
+   it is used, so --radius-xl means the same thing here whether this file lands
+   before or after the one that declares it. */
 
 .dx-about-back {
   position: fixed;
@@ -25,8 +30,8 @@
 .dx-about {
   background: var(--bg);
   color: var(--ink);
-  border-radius: 14px;
-  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.34);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-dialog);
   padding: 20px 22px 18px;
   width: min(560px, 100%);
   /* the notch, same rule as the top bar: the app pads its own chrome */
@@ -34,7 +39,7 @@
 }
 
 .dx-about h2 {
-  font-size: 12px;
+  font-size: var(--fs-micro);
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -48,7 +53,7 @@
 
 .dx-about-note {
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--fs-small);
   line-height: 1.5;
   margin: 6px 0 0;
 }
@@ -58,7 +63,7 @@
   align-items: center;
   gap: 10px;
   padding: 4px 0;
-  font-size: 13px;
+  font-size: var(--fs-ui);
 }
 .dx-about-row > span:first-child {
   flex: 0 0 8.5rem;
@@ -74,9 +79,9 @@
 .dx-about-in,
 .dx-about select {
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 4px 7px;
   background: #fff;
   color: inherit;
@@ -99,7 +104,7 @@
   min-height: 9rem;
   margin-top: 8px;
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 8px;
   resize: vertical;
   background: #fff;
@@ -114,12 +119,12 @@
   max-height: 30vh;
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 4px;
 }
 .dx-about-ver {
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-ui);
   display: flex;
   gap: 10px;
   align-items: baseline;
@@ -127,7 +132,7 @@
   border: 0;
   background: transparent;
   color: inherit;
-  border-radius: 6px;
+  border-radius: var(--radius);
   padding: 5px 8px;
   cursor: pointer;
 }
