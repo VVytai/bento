@@ -570,10 +570,58 @@ export class Store {
    * Closes any open typing run first, so a run's text and a structural edit
    * never merge into one entry.
    */
+  /**
+   * Listeners that see every patch BEFORE it is applied, and may replace the
+   * list — collaboration's entry point.
+   *
+   * WHY A HOOK RATHER THAN WRAPPING THE VERBS. The sync session used to
+   * decorate `commit` and `runEdit` on the instance, which covers every edit
+   * the UI makes and cannot see UNDO and REDO — those apply their inverses
+   * through a private path. Undo therefore fell back to broadcasting a whole
+   * state snapshot: correct, and enormously heavier than the two ops it
+   * stands in for. `invert` calls this too, so an undo now ships as ops.
+   *
+   * The listener runs BEFORE the document changes because the CRDT reads what
+   * a delete is about to displace; `afterPatch` is the other half.
+   */
+  beforePatch(fn: (patches: Patch[]) => Patch[] | void): () => void {
+    this.patchHooks.push(fn)
+    return () => { this.patchHooks = this.patchHooks.filter((f) => f !== fn) }
+  }
+
+  /** Listeners that run once the document HAS changed. */
+  afterPatch(fn: () => void): () => void {
+    this.appliedHooks.push(fn)
+    return () => { this.appliedHooks = this.appliedHooks.filter((f) => f !== fn) }
+  }
+
+  private patchHooks: Array<(p: Patch[]) => Patch[] | void> = []
+  private appliedHooks: Array<() => void> = []
+
+  /**
+   * Run the before-hooks. `substitute` is false for undo/redo: a hook may
+   * REFUSE a patch it cannot express, and dropping one there would apply half
+   * an inverse and leave the undo stack describing a document that no longer
+   * exists. An undo must land whole or not at all.
+   */
+  private runBefore(list: Patch[], substitute = true): Patch[] {
+    let out = list
+    for (const fn of this.patchHooks) {
+      const next = fn(out)
+      if (substitute && Array.isArray(next)) out = next
+    }
+    return out
+  }
+
+  private runAfter(): void {
+    for (const fn of this.appliedHooks) fn()
+  }
+
   commit(patches: Patch | Patch[]): void {
     if (this.readOnly) return
     this.endRun()
-    const list = Array.isArray(patches) ? patches : [patches]
+    const list = this.runBefore(Array.isArray(patches) ? patches : [patches])
+    if (!list.length) return
     const inverse: Patch[] = []
     const touched: Touched = {}
     let bytes = 0
@@ -587,6 +635,7 @@ export class Store {
     this.touch()
     this.lastTouched = touched
     this.emit('doc')
+    this.runAfter()
   }
 
   /**
@@ -608,7 +657,8 @@ export class Store {
     // One EDIT may be several patches — writing a value and clearing the
     // formula it replaced is two, and they have to undo as ONE step. Their
     // inverses go on REVERSED, because `invert` replays the list forward.
-    const list = Array.isArray(patch) ? patch : [patch]
+    const list = this.runBefore(Array.isArray(patch) ? patch : [patch])
+    if (!list.length) return
     const inverses: Patch[] = []
     const r = { touched: {} as Touched }
     for (const p of list) {
@@ -625,6 +675,7 @@ export class Store {
     merge(this.pending!.touched, r.touched)
     this.touch()
     this.emit('doc')
+    this.runAfter()
     clearTimeout(this.runTimer)
     this.runTimer = setTimeout(() => this.endRun(), RUN_IDLE_MS)
   }
@@ -677,6 +728,11 @@ export class Store {
     const inverse: Patch[] = []
     const touched: Touched = {}
     let bytes = 0
+    // THE POINT OF THE HOOK. Undo and redo change the document exactly as an
+    // edit does, and a collaborator has to hear about it. Without this the
+    // session could not see them at all and fell back to broadcasting a whole
+    // state snapshot. `substitute: false` — see runBefore.
+    this.runBefore(e.inverse, false)
     for (const p of e.inverse) {
       const r = applyPatch(this.doc, p)
       inverse.unshift(r.inverse)
@@ -686,6 +742,7 @@ export class Store {
     this.touch()
     this.lastTouched = touched
     this.emit('doc')
+    this.runAfter()
     return { inverse, touched, bytes }
   }
 

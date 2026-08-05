@@ -193,20 +193,27 @@ export class SyncSession {
   /**
    * Intercept the store's write verbs.
    *
-   * THE HOOK WE ACTUALLY WANT is one line in store.ts — a `beforePatch`
-   * listener called from `commit`, `runEdit` and `invert` with the patches
-   * about to be applied. Until it exists this wraps the two public verbs on
-   * the INSTANCE, which covers every edit the UI makes but cannot see undo and
-   * redo: those apply inverses through a private method. So undo/redo fall
-   * back to shipping a state snapshot, which is correct and heavier. See
-   * docs/dash-collab.md, "What this needs from store.ts".
+   * `store.beforePatch` is the real hook: called from `commit`, `runEdit` AND
+   * `invert` with the patches about to be applied, and able to replace the
+   * list. `afterPatch` is its other half — the CRDT mints ops from the
+   * PRE-state (a delete has to be read before it displaces anything) and
+   * settles once the document has moved.
+   *
+   * INVERT IS WHY IT EXISTS. Wrapping the two public verbs on the instance
+   * covers every edit the UI makes and cannot see undo or redo, which apply
+   * their inverses through a private path — so undo used to fall back to
+   * broadcasting a whole state snapshot: correct, and enormously heavier than
+   * the two ops it stood in for. The wrapper below is kept for a store that
+   * predates the hook.
    */
   private tapStore() {
     const store = this.store as Store & {
-      beforePatch?: (fn: (patches: Patch[]) => void) => void
+      beforePatch?: (fn: (patches: Patch[]) => Patch[] | void) => () => void
+      afterPatch?: (fn: () => void) => () => void
     }
-    if (typeof store.beforePatch === 'function') {
+    if (typeof store.beforePatch === 'function' && typeof store.afterPatch === 'function') {
       store.beforePatch((patches) => this.localPatches(patches))
+      store.afterPatch(() => this.afterLocal())
       return
     }
     const commit = store.commit.bind(store)

@@ -423,13 +423,18 @@ real hole rather than a stylistic one.
 
 ### store.ts
 
-1. **A patch hook.** `beforePatch(fn: (patches: Patch[]) => void)`, called from
-   `commit`, `runEdit` **and `invert`**, with the patches about to be applied.
-   The session already looks for it and uses it when present. Without it the
-   session wraps `commit`/`runEdit` on the instance — which works, and cannot
-   see undo/redo, because those apply inverses through a private method. Today
-   undo/redo therefore fall back to broadcasting a whole state snapshot:
-   correct, and much heavier than the two ops it replaces.
+1. ~~**A patch hook.**~~ **DONE.** `store.beforePatch(fn)` is called from
+   `commit`, `runEdit` and `invert` with the patches about to be applied and
+   may replace the list; `store.afterPatch(fn)` is the other half, since the
+   CRDT mints from the PRE-state and settles once the document has moved.
+   `invert` passes `substitute: false` — a hook may refuse a patch it cannot
+   express, and dropping one there would apply half an inverse and leave the
+   undo stack describing a document that no longer exists.
+
+   Undo and redo therefore ship as OPS now rather than a whole state snapshot.
+   Measured in two tabs: an edit broadcasts one `ops` frame, the undo
+   broadcasts one `ops` frame, and the peer follows both.
+
 2. ~~**`insertRows` must clamp the write.**~~ **DONE.** `applyPatch` clamps the
    write index to the splice position, so an `at` past the end no longer leaves
    a hole and a column longer than the sheet has rows. It was reachable without
