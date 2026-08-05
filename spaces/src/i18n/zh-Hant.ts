@@ -207,4 +207,9 @@ export const zh_Hant: Catalog = {
   "⌘Z removes the imported pages again.": "按 ⌘Z 可以把匯入的頁面再撤銷掉。",
   "The images in these notes come to {size} so far, and they all travel inside the file. Keep embedding them?": "這些筆記裡的圖片已經有 {size}，而且都會隨檔案一起走。要繼續嵌入嗎？",
   "{n} image(s) were left as paths because embedding stopped there.": "{n} 張圖片以路徑形式保留，因為嵌入到此為止。",
+  "About bento/spaces — version, updates, language, password": "關於 bento/spaces — 版本、更新、語言、密碼",
+  "Unsaved changes — ⌘S rewrites this file": "未儲存的變更 — ⌘S 會重寫此檔案",
+  "Unsaved changes — ⌘S downloads an updated copy": "未儲存的變更 — ⌘S 會下載更新後的副本",
+  "format v{v}": "格式 v{v}",
+  "Visit bento.page (opens in a new tab)": "造訪 bento.page（在新分頁開啟）",
 }

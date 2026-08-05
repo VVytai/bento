@@ -207,4 +207,9 @@ export const zh_Hans: Catalog = {
   "⌘Z removes the imported pages again.": "按 ⌘Z 可以把导入的页面再撤销掉。",
   "The images in these notes come to {size} so far, and they all travel inside the file. Keep embedding them?": "这些笔记里的图片已经有 {size}，而且都会随文件一起走。继续嵌入吗？",
   "{n} image(s) were left as paths because embedding stopped there.": "{n} 张图片以路径形式保留，因为嵌入到此为止。",
+  "About bento/spaces — version, updates, language, password": "关于 bento/spaces — 版本、更新、语言、密码",
+  "Unsaved changes — ⌘S rewrites this file": "未保存的更改 — ⌘S 会重写此文件",
+  "Unsaved changes — ⌘S downloads an updated copy": "未保存的更改 — ⌘S 会下载更新后的副本",
+  "format v{v}": "格式 v{v}",
+  "Visit bento.page (opens in a new tab)": "访问 bento.page（在新标签页打开）",
 }

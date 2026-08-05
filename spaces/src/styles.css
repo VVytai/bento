@@ -47,12 +47,20 @@ select, input, textarea, [contenteditable='true'] { -webkit-user-select: auto; u
   flex: 0 0 auto;
 }
 .sp-mark {
-  font-weight: 700; font-size: 14px; letter-spacing: -0.01em;
-  white-space: nowrap; padding-inline-end: 4px; user-select: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  font: inherit; font-weight: 700; font-size: 14px; letter-spacing: -0.01em;
+  white-space: nowrap; padding: 4px 7px 4px 4px; user-select: none;
+  background: transparent; border: 1px solid transparent; border-radius: 8px;
+  color: var(--ink); cursor: pointer;
 }
-.sp-mark span { color: var(--accent); }
+.sp-mark:hover { background: var(--chrome-2); }
+.sp-mark-svg { display: block; flex: 0 0 auto; }
+.sp-mark-word span { color: #FF9E8A; }
 .sp-doctitle {
-  flex: 1 1 auto; min-width: 0;
+  /* Sized, not greedy: a title input that eats the slack pushed undo/redo away
+     from the document they belong to and left them floating mid-bar. The
+     spacer is the right group's margin-inline-start:auto. */
+  flex: 0 1 240px; min-width: 0;
   font: inherit; font-size: 14px; font-weight: 600; color: var(--ink);
   background: transparent; border: 1px solid transparent;
   border-radius: 8px; padding: 5px 8px;
@@ -618,8 +626,6 @@ button.sp-callout-chip:hover { text-decoration: underline; text-underline-offset
 @media (max-width: 720px) {
   .sp-sec { display: none; }
   .sp-more { display: inline-flex; }
-  /* the wordmark is decoration here — the tab title carries identity */
-  .sp-mark { display: none; }
   /* Save keeps its icon; the word costs 44px and says nothing the icon doesn't */
   .sp-bar .sp-primary span.sp-savelabel { display: none; }
   .sp-bar { gap: 2px; }
@@ -655,3 +661,52 @@ button.sp-callout-chip:hover { text-decoration: underline; text-underline-offset
   .sp-findbar .sp-find { flex: 1 1 120px; width: auto; min-width: 0; }
   .sp-findcount { order: 1; flex: 1 1 100%; text-align: start; }
 }
+
+/* ————— the toolbar, grouped as slides groups it —————
+   LEFT is the document (mark · title · save state · history); RIGHT is what you
+   do with it. Two apps in one suite should not teach two different toolbars. */
+.sp-group { display: flex; align-items: center; gap: 6px; }
+.sp-group-right { margin-inline-start: auto; gap: 4px; }
+.sp-group-history { gap: 2px; }
+
+/* Save is ONE control with two halves, fused — not two buttons that happen to
+   be adjacent. The caret is visibly part of the thing it modifies. */
+.sp-split { display: inline-flex; align-items: stretch; }
+.sp-split > .sp-btn:first-child {
+  border-start-end-radius: 0; border-end-end-radius: 0;
+  padding-inline-end: 10px;
+}
+.sp-split .sp-dd { display: flex; align-items: stretch; }
+.sp-split .sp-caret > .sp-btn {
+  height: 100%; padding: 6px 6px;
+  border-start-start-radius: 0; border-end-start-radius: 0;
+  margin-inline-start: 1px;
+  background: var(--ink); color: #fff;
+}
+.sp-split .sp-caret > .sp-btn:hover { background: var(--ink-2); }
+
+/* The unsaved dot lives ON Save: the place you look to find out whether you
+   need to press it is the button itself. */
+.sp-dirty {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); margin-inline-start: 7px;
+  opacity: 0; transition: opacity .18s;
+}
+.sp-dirty.sp-on { opacity: 1; }
+
+@media (max-width: 720px) {
+  /* the mark stays — it is the route to About — but loses its word */
+  .sp-mark { display: inline-flex; }
+  .sp-mark-word { display: none; }
+}
+
+/* About opens with the suite's mark, as slides does — a dialog that starts on a
+   section heading does not say what you are looking at. */
+.sp-about-head { margin-bottom: 4px; }
+.sp-about-logo {
+  display: inline-flex; align-items: center; gap: 10px;
+  text-decoration: none; color: inherit;
+}
+.sp-about-logo b { display: block; font-size: 15px; letter-spacing: -0.01em; }
+.sp-about-logo span { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; }
+.sp-about-logo:hover b { text-decoration: underline; }

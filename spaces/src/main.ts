@@ -219,6 +219,11 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
     store.endRun()
     editor.status(t('Saving…'))
     const res = await saveFile(store.doc)
+    if (res === 'saved' || res === 'saved-as' || res === 'downloaded') {
+      // the document is on disk now — the dot goes out
+      store.dirty = false
+      editor.syncDirty()
+    }
     if (res === 'saved') {
       void clearRecovery(store.doc.docId)
       // "Saved" is doing real work here: on a browser without file-system

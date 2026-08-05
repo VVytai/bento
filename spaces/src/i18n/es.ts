@@ -207,4 +207,9 @@ export const es: Catalog = {
   "⌘Z removes the imported pages again.": "⌘Z vuelve a quitar las páginas importadas.",
   "The images in these notes come to {size} so far, and they all travel inside the file. Keep embedding them?": "Las imágenes de estas notas suman ya {size} y todas viajan dentro del archivo. ¿Seguir incrustándolas?",
   "{n} image(s) were left as paths because embedding stopped there.": "{n} imagen(es) quedaron como rutas porque la incrustación se detuvo ahí.",
+  "About bento/spaces — version, updates, language, password": "Acerca de bento/spaces: versión, actualizaciones, idioma, contraseña",
+  "Unsaved changes — ⌘S rewrites this file": "Cambios sin guardar: ⌘S reescribe este archivo",
+  "Unsaved changes — ⌘S downloads an updated copy": "Cambios sin guardar: ⌘S descarga una copia actualizada",
+  "format v{v}": "formato v{v}",
+  "Visit bento.page (opens in a new tab)": "Visitar bento.page (se abre en una pestaña nueva)",
 }

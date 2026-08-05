@@ -14,7 +14,7 @@ import {
 } from '../../kernel/src/save.ts'
 import { clearVersions, clearRecovery } from '../../kernel/src/autosave.ts'
 import { t, localeChoices, locale, setLocale } from './i18n'
-import { inertBody } from './sanitize'
+import { inertBody, esc } from './sanitize'
 import { SPEC, mdLayout } from './blocks'
 import type { Store } from './store'
 
@@ -67,6 +67,23 @@ export function openAbout({ store, onRepaint, onSaveCopy, onImport }: AboutHooks
   }
 
   // ---- what this is ------------------------------------------------------
+  // The same head slides uses: the suite's mark, the app, the version, and a
+  // gentle route back to the site. A dialog that opens with a section heading
+  // does not tell you what you are looking at.
+  const head = document.createElement('div')
+  head.className = 'sp-about-head'
+  head.innerHTML =
+    '<a class="sp-about-logo" href="https://bento.page" target="_blank" rel="noopener">' +
+    '<svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">' +
+    '<rect width="32" height="32" rx="7" fill="#16273E"/>' +
+    '<rect x="5" y="5" width="7" height="22" rx="2.5" fill="#5E7699"/>' +
+    '<rect x="14" y="5" width="13" height="10" rx="2.5" fill="#FF9E8A"/>' +
+    '<rect x="14" y="17" width="13" height="10" rx="2.5" fill="#F0EBE0"/>' +
+    '</svg><div><b>bento<span style="color:#FF9E8A">/</span>spaces</b>' +
+    `<span>v${APP_VERSION} · ${esc(t('format v{v}', { v: String(store.doc.version ?? 1) }))}</span></div></a>`
+  head.querySelector('a')?.setAttribute('title', t('Visit bento.page (opens in a new tab)'))
+  card.append(head)
+
   card.append(h(t('This file')))
   const blurb = document.createElement('p')
   blurb.className = 'sp-about-blurb'

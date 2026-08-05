@@ -18,6 +18,7 @@ import { planImport, type SourceFile } from './markdown'
 import { countOutsideTags, replaceOutsideTags } from './findreplace'
 import { t } from './i18n'
 import { openAbout } from './about'
+import { canWriteInPlace } from '../../kernel/src/save.ts'
 import { ICONS, type IconName } from './icons'
 import { internAsset, prepareImage, humanBytes, IMAGE_EMBED_BUDGET, blobToDataUri } from './assets'
 
@@ -68,7 +69,8 @@ export class Editor {
   private allowedRemote = new Set<string>()
   private undoB: HTMLButtonElement | null = null
   private readB: HTMLButtonElement | null = null
-  private redoB: HTMLButtonElement | null = null
+  private redoB!: HTMLButtonElement
+  private dirtyDot!: HTMLElement
   onSave: (() => void) | null = null
   onSaveAs: ((suffix: string) => void) | null = null
   onPrint: (() => void) | null = null
@@ -79,7 +81,7 @@ export class Editor {
     this.build()
     this.store.on('tree', () => this.paintTree())
     this.store.on('page', () => { this.paintPage(); this.paintTree() })
-    this.store.on('doc', () => { this.status(t('Edited')); this.syncHistoryButtons() })
+    this.store.on('doc', () => { this.status(t('Edited')); this.syncHistoryButtons(); this.syncDirty() })
     window.addEventListener('popstate', () => this.fromHash())
     this.fromHash()
   }
@@ -90,8 +92,21 @@ export class Editor {
     this.root.className = 'sp-app'
 
     const bar = el('header', 'sp-bar')
-    const mark = el('span', 'sp-mark')
-    mark.innerHTML = 'bento<span>/</span>spaces'
+    // THE SUITE'S MARK, and the way into About — the same control slides has.
+    // A wordmark that is only decoration wastes the one place everyone looks
+    // for "what is this file, and what version": there was no route to About
+    // except a ⋯ menu nobody opens.
+    const mark = el('button', 'sp-mark')
+    ;(mark as HTMLButtonElement).type = 'button'
+    mark.innerHTML =
+      '<svg class="sp-mark-svg" viewBox="0 0 32 32" width="20" height="20" aria-hidden="true">' +
+      '<rect width="32" height="32" rx="7" fill="#16273E"/>' +
+      '<rect x="5" y="5" width="7" height="22" rx="2.5" fill="#5E7699"/>' +
+      '<rect x="14" y="5" width="13" height="10" rx="2.5" fill="#FF9E8A"/>' +
+      '<rect x="14" y="17" width="13" height="10" rx="2.5" fill="#F0EBE0"/>' +
+      '</svg><b class="sp-mark-word">bento<span>/</span>spaces</b>'
+    mark.title = t('About bento/spaces — version, updates, language, password')
+    mark.addEventListener('click', () => this.openAbout())
 
     // Pages panel toggle — on every width, like slides' Slides/Format toggles.
     // A sidebar you cannot put away is a sidebar you resent on a laptop.
@@ -127,6 +142,7 @@ export class Editor {
     })
 
     this.undoB = iconBtn('undo', t('Undo (⌘Z)'), () => { this.store.undo(); this.repaint() })
+    this.redoB = iconBtn('redo', t('Redo (⇧⌘Z)'), () => { this.store.redo(); this.repaint() })
     const search = iconBtn('search', t('Search all pages (⌘K)'), () => this.openSearch())
 
     // SECONDARY ACTIONS, declared ONCE.
@@ -146,9 +162,6 @@ export class Editor {
       keep?: (b: HTMLButtonElement) => void
     }> = [
       { icon: 'page', label: t('New page'), hint: '⌘⌥N', run: () => this.newPage() },
-      { icon: 'redo', label: t('Redo'), hint: '⇧⌘Z',
-        run: () => { this.store.redo(); this.repaint() },
-        keep: (b) => { this.redoB = b } },
       { icon: 'eye', label: t('Reading view'), hint: t('The pages without the editing tools'),
         run: () => this.toggleReading(),
         keep: (b) => { this.readB = b } },
@@ -179,6 +192,13 @@ export class Editor {
     saveLabel.className = 'sp-savelabel'
     saveLabel.textContent = t('Save')
     saveB.append(saveLabel)
+    // The unsaved dot lives ON Save, as in slides: the place you look to find
+    // out whether you need to press it is the button itself.
+    this.dirtyDot = el('span', 'sp-dirty')
+    this.dirtyDot.title = canWriteInPlace()
+      ? t('Unsaved changes — ⌘S rewrites this file')
+      : t('Unsaved changes — ⌘S downloads an updated copy')
+    saveB.append(this.dirtyDot)
     const saveMore = this.dropdown('chevronDown', '', t('Other ways to save'), (menu, close) => {
       menu.append(this.menuItem('copy', t('Save a copy…'), t('A second file — the original is left alone'), () => {
         close(); void this.saveAs('copy')
@@ -195,8 +215,17 @@ export class Editor {
     })
     saveMore.classList.add('sp-caret', 'sp-dd-end')
 
-    bar.append(pagesB, mark, title, this.statusEl, insert,
-      this.undoB, search, ...inlineSecondary, more, saveB, saveMore)
+    // LEFT = the document (mark · title · save state · history), RIGHT = doing
+    // things with it. Same grouping as slides, so the two apps do not teach two
+    // different toolbars.
+    const history = el('div', 'sp-group sp-group-history')
+    history.append(this.undoB, this.redoB)
+    const saveGroup = el('div', 'sp-split')
+    saveGroup.append(saveB, saveMore)
+    const right = el('div', 'sp-group sp-group-right')
+    right.append(insert, search, ...inlineSecondary, more, saveGroup)
+
+    bar.append(pagesB, mark, title, this.statusEl, history, right)
 
     this.sidebar = el('nav', 'sp-side')
     this.sidebar.setAttribute('aria-label', t('Pages'))
@@ -209,6 +238,7 @@ export class Editor {
     this.paintTree()
     this.paintPage()
     this.syncHistoryButtons()
+    this.syncDirty()
     document.addEventListener('keydown', (e) => this.onKey(e), true)
 
     // Dropping notes anywhere on the app imports them — the sidebar, the
@@ -248,6 +278,11 @@ export class Editor {
   }
 
   /** Undo/redo must LOOK unavailable when they are, or they read as broken. */
+  /** The dot on Save, and the only place the file's state is visible. */
+  syncDirty(): void {
+    this.dirtyDot?.classList.toggle('sp-on', this.store.dirty)
+  }
+
   private syncHistoryButtons(): void {
     if (this.undoB) this.undoB.disabled = !this.store.canUndo
     if (this.redoB) this.redoB.disabled = !this.store.canRedo

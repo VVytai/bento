@@ -36,6 +36,15 @@ export class Store {
   /** blocks currently selected at block level (Esc from text editing) */
   selection: string[] = []
   readOnly = false
+  /**
+   * Unsaved changes.
+   *
+   * The header comment above has claimed since 0.1.0 that this policy sets
+   * "the dirty flag", and there was no dirty flag — so the Save button could
+   * not say whether it needed pressing, which in a format whose whole promise
+   * is "the file IS the document" is the one thing it should say.
+   */
+  dirty = false
 
   private undoStack: Entry[] = []
   private redoStack: Entry[] = []
@@ -90,6 +99,7 @@ export class Store {
     this.endRun()
     this.checkpoint()
     mutate()
+    this.dirty = true
     this.reindex()
     this.emit('doc')
     if (opts.structure !== false) this.emit('tree')
@@ -124,8 +134,16 @@ export class Store {
 
   /** Model changed without a new undo entry (mid-run). */
   touch(): void {
+    // A typing run deliberately does NOT emit 'doc' per keystroke — that is the
+    // whole point of the run. But the FIRST keystroke changes something the
+    // reader can see: the file now differs from the disk. Announce that once,
+    // on the transition only, or the unsaved dot does not appear until the run
+    // closes 600ms later and the button lies for as long as you keep typing.
+    const wasClean = !this.dirty
+    this.dirty = true
     this.doc.modified = new Date().toISOString()
     this.reindex()
+    if (wasClean) this.emit('doc')
   }
 
   private reindex(): void {
@@ -153,6 +171,7 @@ export class Store {
   }
 
   private restore(entry: Entry): void {
+    this.dirty = true
     const assets = this.doc.assets
     this.doc = { ...(JSON.parse(entry.json) as SpacesDoc), ...(assets ? { assets } : {}) }
     this.pageId = entry.pageId
@@ -206,6 +225,7 @@ export class Store {
 
   /** Replace the whole document — the AI round-trip and version restore path. */
   replaceDoc(next: SpacesDoc): void {
+    this.dirty = true
     this.endRun()
     this.checkpoint()
     this.doc = next
