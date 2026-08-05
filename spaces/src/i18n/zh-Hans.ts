@@ -215,4 +215,5 @@ export const zh_Hans: Catalog = {
   "Drag to resize · double-click to reset": "拖动可调整宽度 · 双击恢复默认",
   "Show the page list ([)": "显示页面列表（[）",
   "Hide the page list ([)": "隐藏页面列表（[）",
+  "{n} note name(s) appear more than once, so links naming them all went to the first.": "有 {n} 个笔记名称重复，因此指向该名称的链接都指向了第一个。",
 }

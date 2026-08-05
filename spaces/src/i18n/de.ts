@@ -215,4 +215,5 @@ export const de: Catalog = {
   "Drag to resize · double-click to reset": "Ziehen zum Anpassen · Doppelklick setzt zurück",
   "Show the page list ([)": "Seitenliste einblenden ([)",
   "Hide the page list ([)": "Seitenliste ausblenden ([)",
+  "{n} note name(s) appear more than once, so links naming them all went to the first.": "{n} Notiznamen kommen mehrfach vor — Links mit diesem Namen führen alle zur ersten.",
 }

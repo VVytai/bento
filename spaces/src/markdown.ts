@@ -417,6 +417,9 @@ export interface ImportStats {
   /** …and those that named a note that was not in the selection */
   dangling: number
   frontmatter: number
+  /** notes that shared a NAME with an earlier one, so links to them resolved to
+   *  the first — the reader is told rather than left to find out */
+  duplicateNames: number
   tables: number
   remoteImages: number
 }
@@ -477,7 +480,7 @@ export function planImport(
   const images: PendingImage[] = []
   const stats: ImportStats = {
     files: src.length, pages: 0, blocks: 0, linked: 0, dangling: 0,
-    frontmatter: 0, tables: 0, remoteImages: 0,
+    frontmatter: 0, tables: 0, remoteImages: 0, duplicateNames: 0,
   }
 
   let rootId: string | undefined
@@ -556,7 +559,7 @@ export function planImport(
   }
 
   // ---- wikilinks, once every page exists ----------------------------------
-  const index = linkIndex(src, parsed, filePage, tops.size === 1 ? [...tops][0] : '')
+  const { index, collisions } = linkIndex(src, parsed, filePage, tops.size === 1 ? [...tops][0] : '')
   for (const page of pages) {
     for (const b of page.blocks) {
       if (!b.html) continue
@@ -584,6 +587,7 @@ export function planImport(
   for (const p of pages) if (!p.blocks.length) p.blocks.push(mk('p', { html: '' }))
 
   for (const p of pages) stats.blocks += p.blocks.length
+  stats.duplicateNames = collisions
   stats.pages = pages.length
   return { pages, images, stats }
 }
@@ -616,10 +620,18 @@ function linkIndex(
   parsed: Map<string, ParsedNote>,
   filePage: Map<string, Page>,
   root: string,
-): Map<string, string> {
+): { index: Map<string, string>; collisions: number } {
   const index = new Map<string, string>()
+  // Two notes can share a NAME in different folders, and a [[wikilink]] names
+  // only the name. First one wins — which is the standard behaviour and the
+  // only thing a bare name CAN mean — but it must be reported: silently, every
+  // link to the second note pointed at the first, including that note's links
+  // to ITSELF, and the import claimed unqualified success. Counted here and
+  // surfaced in the summary, so the reader knows which links to check.
+  const collisions = new Set<string>()
   const put = (k: string, id: string) => {
     const key = linkKey(k)
+    if (key && index.has(key) && index.get(key) !== id) collisions.add(key)
     if (key && !index.has(key)) index.set(key, id)
   }
   for (const f of src) {
@@ -631,7 +643,7 @@ function linkIndex(
     }
     put(parsed.get(f.path)!.title, id)                        // [[The title]]
   }
-  return index
+  return { index, collisions: collisions.size }
 }
 
 /** Wikilink targets ignore case, a `.md` suffix, and a `#heading`/`^block`

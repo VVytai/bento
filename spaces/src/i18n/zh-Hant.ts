@@ -215,4 +215,5 @@ export const zh_Hant: Catalog = {
   "Drag to resize · double-click to reset": "拖曳可調整寬度 · 雙擊還原預設",
   "Show the page list ([)": "顯示頁面清單（[）",
   "Hide the page list ([)": "隱藏頁面清單（[）",
+  "{n} note name(s) appear more than once, so links naming them all went to the first.": "有 {n} 個筆記名稱重複，因此指向該名稱的連結都指向了第一個。",
 }

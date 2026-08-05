@@ -177,11 +177,20 @@ class Replica {
     return stable(this.doc)
   }
   stateCanon(): string {
-    const j = this.state.toJSON()
-    const txt = Object.fromEntries(
-      Object.entries(j.txt).filter(([id]) => !this.state.dead(id)),
+    // EVERYTHING toJSON() emits, minus what is legitimately volatile — not a
+    // hand-picked list of the fields that existed when this was written. The
+    // listed version compared six keys, so a SEVENTH added by the very
+    // parameterization this rig exists to check would have been invisible to
+    // it: the rig would go green on an engine minting a field the baseline
+    // never mints. Deleting is the only direction that fails safe.
+    const j = this.state.toJSON() as unknown as Record<string, unknown>
+    const canon: Record<string, unknown> = { ...j }
+    // dead nodes' text is retained deliberately and is not part of the
+    // observable state (see crdt.ts's stash/replay); everything else counts.
+    canon.txt = Object.fromEntries(
+      Object.entries(j.txt as Record<string, unknown>).filter(([id]) => !this.state.dead(id)),
     )
-    return stable({ regs: j.regs, pos: j.pos, births: j.births, tombs: j.tombs, txt, vv: j.vv })
+    return stable(canon)
   }
 }
 
@@ -813,7 +822,20 @@ function mutantEngine(M: CrdtModule, name: MutantName): Engine {
   return {
     label: `mutant:${name}`,
     SyncState: Cls,
-    fromJSON: (a, j) => M.SyncState.fromJSON(a, j) as unknown as EngineState,
+    // crdt.ts's `static fromJSON` constructs `new SyncState(actor)` literally —
+    // not `new this(actor)` — so a subclass cannot be produced through it, and
+    // this returned an UNMUTATED engine. Every scenario that round-trips state
+    // therefore tested the baseline against itself while reporting mutant
+    // coverage, which is the one lie a self-test must not tell.
+    //
+    // Re-pointing the prototype is a test-harness liberty, taken here rather
+    // than changing one word in the shipped engine: this step's whole
+    // acceptance criterion is that `git diff slides/ kernel/ server/` is empty.
+    fromJSON: (a, j) => {
+      const base = M.SyncState.fromJSON(a, j)
+      Object.setPrototypeOf(base, Cls.prototype)
+      return base as unknown as EngineState
+    },
   }
 }
 

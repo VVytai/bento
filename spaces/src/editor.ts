@@ -773,12 +773,19 @@ export class Editor {
 
     // the callout's own mark and name ARE the control that changes them — a
     // tone buried in a menu is a tone nobody ever changes
-    for (const chip of view.querySelectorAll<HTMLElement>('.sp-callout-chip')) {
-      chip.addEventListener('click', (e) => {
-        e.preventDefault()
-        const id = (chip.closest('[data-block-id]') as HTMLElement).dataset.blockId!
-        this.openTonePicker(id, chip)
-      })
+    // Reading view is READ-ONLY, and this loop is the one that forgot: the
+    // renderer already emits an inert <span> when !opts.editable, so the wiring
+    // contradicted the renderer's own intent and a click in reading view
+    // committed a tone change — undo entry, dirty flag and all. The gutter and
+    // language loops guard the same way.
+    if (!this.store.readOnly && !this.reading) {
+      for (const chip of view.querySelectorAll<HTMLElement>('.sp-callout-chip')) {
+        chip.addEventListener('click', (e) => {
+          e.preventDefault()
+          const id = (chip.closest('[data-block-id]') as HTMLElement).dataset.blockId!
+          this.openTonePicker(id, chip)
+        })
+      }
     }
 
     for (const tw of view.querySelectorAll<HTMLElement>('.sp-twist')) {
@@ -930,9 +937,11 @@ export class Editor {
   /** Choose what a code block is highlighted as. */
   private openLangPicker(blockId: string, anchor: HTMLElement): void {
     const s = this.store
+    if (s.readOnly || this.reading) return
     this.closeOverlay()
     const pop = el('div', 'sp-pop sp-langpop')
     pop.setAttribute('role', 'menu')
+    this.trapAndClose(pop, () => this.focusBlock(blockId))
     // An UNKNOWN tag matches NO row. `rust` renders plain, but it is not the
     // same thing as plain: ticking "Plain text" for it would say the tag is
     // already gone, and the next click would quietly delete it.
@@ -1272,6 +1281,30 @@ export class Editor {
     this.overlay = null
   }
 
+  /**
+   * Make a popover dismissible and reachable from the keyboard.
+   *
+   * The tone and language pickers set `this.overlay` and installed only a
+   * mousedown-away listener — and `onKey` early-returns while an overlay is
+   * open, so Escape did nothing and Tab walked off into the page behind. That
+   * is a keyboard trap: a menu you can open without a mouse and cannot close
+   * without one. The slash menu got this right by focusing its own input; these
+   * two have no input, so the popover itself takes focus.
+   */
+  private trapAndClose(pop: HTMLElement, returnTo?: () => void): void {
+    pop.tabIndex = -1
+    pop.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      this.closeOverlay()
+      returnTo?.()
+    })
+    // focus AFTER the browser has laid the popover out, or the focus is lost to
+    // the element the click came from
+    afterPaint(() => pop.focus())
+  }
+
   /** Anchor a popover to a rect, kept inside the viewport. */
 
   /** ⌘K — search every page, including collapsed toggles and archived pages. */
@@ -1505,10 +1538,11 @@ export class Editor {
   private openTonePicker(blockId: string, anchor: HTMLElement): void {
     const s = this.store
     const b = s.block(blockId)
-    if (!b || s.readOnly) return
+    if (!b || s.readOnly || this.reading) return
     this.closeOverlay()
     const pop = el('div', 'sp-pop sp-tonepop')
     pop.setAttribute('role', 'menu')
+    this.trapAndClose(pop, () => this.focusBlock(blockId))
 
     const current = String(b.tone ?? 'note')
     for (const tone of CALLOUT_TONES) {
@@ -1909,6 +1943,12 @@ export class Editor {
         // sentence about nothing
         if (plan.stats.dangling) lines.push(t('The rest name notes that were not in the selection, and are left as text.'))
       }
+      // A shared NAME is the one import outcome the reader cannot see for
+      // themselves: the links look fine and point at the wrong note.
+      if (plan.stats.duplicateNames) {
+        lines.push(t('{n} note name(s) appear more than once, so links naming them all went to the first.',
+          { n: plan.stats.duplicateNames }))
+      }
       if (plan.stats.frontmatter) {
         lines.push(t('{n} page(s) had frontmatter, kept verbatim in a folded block.', { n: plan.stats.frontmatter }))
       }
@@ -2201,7 +2241,7 @@ export class Editor {
 
     for (const page of pages) {
       host.append(renderPage(page, s.doc, {
-        editable: false, forceOpen: true,
+        editable: false, forceOpen: true, printing: true,
         titleOf: (id) => s.index.page.get(id)?.title,
         allowRemote: (src) => this.allowedRemote.has(src),
       }))

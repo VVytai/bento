@@ -31,7 +31,7 @@
 // path testable in node, where there is no store and no DOM.
 
 import { type SpacesDoc, type Page, type Block, buildIndex, isRemote, newBlock, uid } from './model.ts'
-import { SPECS } from './blocks.ts'
+import { SPECS, SPEC } from './blocks.ts'
 import { sanitizeInline, textOf, inertBody, esc, UNWRAP } from './sanitize.ts'
 import { orphanAssets, humanBytes } from './assets.ts'
 
@@ -301,7 +301,16 @@ export function validateDoc(doc: SpacesDoc): ValidateResult {
         for (const m of b.html.matchAll(LINK_RE)) {
           const href = m[1]
           if (href.startsWith('#p/')) {
-            const target = href.slice(3)
+            // The SAME last-slash rule the resolver and the backlink index use
+            // (editor.resolveAnchor / model.linkTarget): `#p/<page>/<block>` is
+            // a legal href — sanitize.ts admits it and navigation resolves it to
+            // the page — so looking the whole remainder up as a page id reported
+            // every block anchor as a broken link, at severity ERROR, with a fix
+            // ("remove the link") that would destroy a working link. An agent
+            // acting on a false error does more damage than one told nothing.
+            const raw = href.slice(3)
+            const cut = raw.lastIndexOf('/')
+            const target = pageIx.has(raw) || cut <= 0 ? raw : raw.slice(0, cut)
             if (!pageIx.has(target)) {
               add({ ...at, code: 'broken-link', severity: 'error', path: 'html',
                 message: `Links to page "${target}", which does not exist — the link renders and does nothing when clicked.`,
@@ -690,7 +699,14 @@ export function planUpdateBlock(doc: SpacesDoc, id: string, patch: unknown): Pla
     ok: true, id, page: page.id,
     apply() {
       for (const k of dels) delete (block as Record<string, unknown>)[k]
+      const retyped = typeof sets.type === 'string' && sets.type !== block.type
       Object.assign(block, sets)
+      // A TYPE CHANGE RUNS THE REGISTRY'S init, exactly as the editor's setType
+      // does. Without it an agent-written callout has no `tone` and an
+      // agent-written to-do has no `done` — documents the app itself could not
+      // have produced, from the API whose whole promise is that it produces
+      // documents the app could have produced.
+      if (retyped) SPEC.get(block.type)?.init?.(block)
     },
   }
 }

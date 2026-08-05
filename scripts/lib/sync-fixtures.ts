@@ -87,7 +87,7 @@ export function baseDoc(): Doc {
 /** mutation menu — mirrors what the editor's commit sites do */
 export function randomMutation(r: Mutator, rnd: () => number): (doc: Doc) => void {
   const pick = <T>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)]
-  const kind = Math.floor(rnd() * 12)
+  const kind = Math.floor(rnd() * 13)
   return (doc: Doc) => {
     const slides = doc.slides
     const sl = pick(slides)
@@ -109,6 +109,28 @@ export function randomMutation(r: Mutator, rnd: () => number): (doc: Doc) => voi
         const el = pick(els)
         el.x = Math.floor(rnd() * 1600)
         el.y = Math.floor(rnd() * 900)
+        break
+      }
+      case 12: {
+        // REMOVE a property. The generator has never done this, and that gap
+        // is not hypothetical: a `set` op with `v` ABSENT crashed every
+        // receiving replica in a shipped release (scripts/test-crdt-delprop.ts),
+        // and 300 seeds of this rig missed it for months because assigning is
+        // the only mutation it knew. A property-based rig explores exactly the
+        // mutations it was taught, so an untaught one is a permanent blind spot
+        // rather than an unlikely one.
+        const els = slides.flatMap((s: any) => s.elements)
+        if (!els.length) break
+        const el = pick(els)
+        // optional properties only: deleting a required one is not a document
+        // any editor could produce, so it would be testing an impossible input
+        // OPTIONAL properties only. `rotation` and `opacity` are required in
+        // model.ts, so deleting them would test a document no editor could
+        // produce — an impossible input, whose failures teach nothing.
+        const removable = ['radius', 'shadow', 'link', 'group', 'morphId']
+          .filter((k) => el[k] !== undefined)
+        if (!removable.length) break
+        delete el[pick(removable)]
         break
       }
       case 4: {

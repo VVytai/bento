@@ -23,6 +23,8 @@ export interface RenderOpts {
   titleOf?: (pageId: string) => string | undefined
   /** collapsed toggles render OPEN — print always passes this */
   forceOpen?: boolean
+  /** rendering to paper: no controls, because paper has no buttons */
+  printing?: boolean
   /**
    * Has the READER agreed to load this remote url?
    *
@@ -88,6 +90,20 @@ export function renderBlocks(page: Page, doc: SpacesDoc, opts: RenderOpts = {}):
       node.appendChild(body)
       stack.push([b.id, body])
       list = null
+    } else if (kind) {
+      // A LIST ITEM OWNS ITS INDENTED CHILDREN.
+      //
+      // Tab already wrote `parent` (editor.indent), and nothing rendered it:
+      // only registry containers opened a body, so an indented bullet came out
+      // flat and Tab was a key that did nothing you could see. The <li> IS the
+      // host — that is what HTML nesting is — so a child list starts inside it
+      // and `list.under` changing is what makes the grouping open a fresh
+      // <ul>/<ol> at the deeper level.
+      //
+      // Not `container: true` in the registry: a list item does not take a body
+      // div, it takes children directly, and the gutter/inline-host rules that
+      // `container` implies are wrong for it.
+      stack.push([b.id, node])
     }
   }
   return frag
@@ -370,7 +386,15 @@ export function paintCode(code: HTMLElement, text: string, lang?: unknown): bool
 }
 
 export function resolveSrc(src: string, doc: SpacesDoc): string {
-  if (src.startsWith('asset:')) return doc.assets?.[src.slice(6)] ?? ''
+  // hasOwn, not a bare index: `assets['toString']` returns a FUNCTION, which is
+  // truthy, so the `?? ''` never fired and the stringified function was assigned
+  // to img.src. Same class as the icon lookup — an author-supplied key reaching
+  // a lookup table through the prototype chain.
+  if (src.startsWith('asset:')) {
+    const key = src.slice(6)
+    const table = doc.assets
+    return table && Object.hasOwn(table, key) ? table[key] : ''
+  }
   return src
 }
 
@@ -408,7 +432,10 @@ function remoteImagePlaceholder(src: string, b: Block, opts: RenderOpts): HTMLEl
     box.appendChild(a)
   }
 
-  if (opts.editable !== false || opts.allowRemote) {
+  // `allowRemote` is passed by print too, so this clause was always truthy there
+  // and paper carried a live "Load this image" button. Print asks for it
+  // explicitly instead.
+  if (opts.printing !== true && (opts.editable !== false || opts.allowRemote)) {
     const btn = document.createElement('button')
     btn.type = 'button'
     btn.className = 'sp-btn sp-remote-load'

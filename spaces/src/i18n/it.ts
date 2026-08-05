@@ -215,4 +215,5 @@ export const it: Catalog = {
   "Drag to resize · double-click to reset": "Trascina per ridimensionare · doppio clic per reimpostare",
   "Show the page list ([)": "Mostra l'elenco delle pagine ([)",
   "Hide the page list ([)": "Nascondi l'elenco delle pagine ([)",
+  "{n} note name(s) appear more than once, so links naming them all went to the first.": "{n} nome/i di nota compaiono più volte, quindi i link con quel nome puntano tutti al primo.",
 }

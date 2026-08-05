@@ -215,4 +215,5 @@ export const ja: Catalog = {
   "Drag to resize · double-click to reset": "ドラッグで幅を変更 · ダブルクリックで既定に戻す",
   "Show the page list ([)": "ページ一覧を表示（[）",
   "Hide the page list ([)": "ページ一覧を隠す（[）",
+  "{n} note name(s) appear more than once, so links naming them all went to the first.": "{n} 件のノート名が重複しているため、その名前のリンクはすべて最初のノートに向いています。",
 }

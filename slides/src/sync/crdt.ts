@@ -895,7 +895,15 @@ export class SyncState {
       // stale guard: the parked value must belong to the CURRENT register —
       // a newer set that applied elsewhere supersedes it
       if (cmpReg(ent.r, r) !== 0) continue
-      dbg(id, `stash-replay ${k} := ${JSON.stringify(ent.v).slice(0, 40)}`)
+      // String(): a REMOVAL parks an entry with no `v`, and
+      // JSON.stringify(undefined) is undefined — `.slice` on that throws, and
+      // dbg's argument is built eagerly whether or not debugging is on. This is
+      // the SAME defect fixed at the `set` site above, in the second place it
+      // occurs: the fix went where the bug was found rather than everywhere the
+      // pattern was, and the rig covered the found site only. Reached whenever a
+      // property removal is stashed during a node's dead window and replayed on
+      // resurrection.
+      dbg(id, `stash-replay ${k} := ${String(JSON.stringify(ent.v)).slice(0, 40)}`)
       if ('v' in ent) node[k] = clone(ent.v)
       else delete node[k]
       if (k === 'html') delete this.txt[id]

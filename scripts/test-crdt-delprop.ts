@@ -96,5 +96,24 @@ for (const [label, extra] of REMOVALS) {
   ok(threw === null, `a removal for an unknown node pends without throwing${threw ? ` (got ${threw})` : ''}`)
 }
 
+// ---- the SECOND place the same defect lived ---------------------------------
+// The original fix went to the `set` handler, where the bug was found. The
+// identical line — JSON.stringify(v) sliced, with dbg's argument built eagerly
+// whether or not debugging is on — also sat in replayStash, and stayed there:
+// the fix went where the bug was, not everywhere the pattern was.
+//
+// IT IS NOT PINNED HERE, and that is deliberate rather than an omission. Two
+// hand-built resurrection scenarios failed to reach the line (they passed with
+// the fix REVERTED, which makes them worse than no test at all). What does
+// reach it is the convergence rig, once its generator was taught to remove
+// properties — measured: `node scripts/test-sync.ts` throws
+// "Cannot read properties of undefined (reading 'slice')" with the fix
+// reverted, and passes 45,368 checks with it.
+//
+// So the guard for this site is scripts/lib/sync-fixtures.ts case 12, and the
+// lesson is the generator's, not this file's: a property-based rig explores
+// exactly the mutations it was taught, and BOTH instances of this bug shipped
+// because removal was not one of them.
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

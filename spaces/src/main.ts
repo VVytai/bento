@@ -23,6 +23,7 @@ import {
   type Plan, type PlanError,
 } from './agent'
 import { starterDoc } from './starter'
+import { textOf } from './sanitize'
 import { Store } from './store'
 import { Editor } from './editor'
 import { downloadMarkdown } from './about'
@@ -288,7 +289,10 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
       const out: Array<{ pageId: string; title: string; blockId: string }> = []
       for (const p of store.doc.pages) {
         for (const b of p.blocks) {
-          const text = (b.html ?? '').replace(/<[^>]+>/g, '')
+          // textOf DECODES entities; a tag-strip does not. On a block reading
+          // "a &amp; b" the old regex searched "a &amp; b", so it missed the
+          // text the reader can see and matched text that is not there.
+          const text = textOf(b.html)
           if (text.toLowerCase().includes(needle)) out.push({ pageId: p.id, title: p.title, blockId: b.id })
         }
       }
