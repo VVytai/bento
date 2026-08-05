@@ -357,7 +357,7 @@ export class Grid {
     // number. Hiding a column is document state but still editorial, and
     // renumbering every reference behind it would be a silent rewrite.
     this.cellValues = this.hasCellFormulas()
-      ? recalcCells(this.cellSource(), this.store.doc.modified, this.computed).values
+      ? recalcCells(this.cellSource(), this.store.doc.modified, this.columnVectors()).values
       : EMPTY_CELLS
 
     // Conditional formats are evaluated over the WHOLE column, not the painted
@@ -424,6 +424,31 @@ export class Grid {
     this.table.innerHTML = body.join('') + this.outline()
     this.foot.innerHTML = this.totalsRow()
     this.wire()
+  }
+
+  /**
+   * Every column as a vector, under BOTH its id and its name.
+   *
+   * A cell formula has to be able to say `SUMIFS(value, region, "North")` —
+   * naming columns is half of what makes one worth writing. Only the COMPUTED
+   * columns were being passed, so every reference to an ordinary column was an
+   * unknown name: `SUMIFS` then matched nothing and returned 0, `XLOOKUP` gave
+   * #N/A, and a formula that mentioned no column at all (a PMT, say) worked
+   * perfectly — which is exactly the pattern that makes this look like four
+   * unrelated bugs instead of one.
+   */
+  private columnVectors(): Map<string, Vec> {
+    const s = this.sheet
+    const n = rowCount(s)
+    const out = new Map<string, Vec>()
+    const put = (k: string, v: Vec) => { out.set(k, v); out.set(k.toLowerCase(), v) }
+    for (const c of s.columns) {
+      const comp = this.computed.get(c.id)
+      const v = comp ?? Array.from({ length: n }, (_, i) => readCell(s.data[c.id], i) as never)
+      put(c.id, v)
+      put(c.name, v)
+    }
+    return out
   }
 
   /** The formula stored at a canonical position, if any. */
