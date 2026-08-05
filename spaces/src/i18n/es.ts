@@ -216,4 +216,11 @@ export const es: Catalog = {
   "Show the page list ([)": "Mostrar la lista de páginas ([)",
   "Hide the page list ([)": "Ocultar la lista de páginas ([)",
   "{n} note name(s) appear more than once, so links naming them all went to the first.": "{n} nombre(s) de nota se repiten, así que los enlaces con ese nombre fueron todos al primero.",
+  "Turn into…": "Convertir en…",
+  "Change this block’s type": "Cambiar el tipo de este bloque",
+  "Add below": "Añadir debajo",
+  "Move up": "Subir",
+  "Move down": "Bajar",
+  "Duplicate": "Duplicar",
+  "Delete": "Eliminar",
 }

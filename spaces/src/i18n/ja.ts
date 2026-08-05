@@ -216,4 +216,11 @@ export const ja: Catalog = {
   "Show the page list ([)": "ページ一覧を表示（[）",
   "Hide the page list ([)": "ページ一覧を隠す（[）",
   "{n} note name(s) appear more than once, so links naming them all went to the first.": "{n} 件のノート名が重複しているため、その名前のリンクはすべて最初のノートに向いています。",
+  "Turn into…": "種類を変更…",
+  "Change this block’s type": "このブロックの種類を変更します",
+  "Add below": "下に追加",
+  "Move up": "上へ移動",
+  "Move down": "下へ移動",
+  "Duplicate": "複製",
+  "Delete": "削除",
 }

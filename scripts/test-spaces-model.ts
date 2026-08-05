@@ -1065,5 +1065,43 @@ for (const [label, input, err] of [
     'the preview is size-budgeted, with a title card as the fallback')
 }
 
+// ---- a block can be moved, duplicated and deleted, on every device --------
+// Four actions existed NOWHERE: move up, move down, duplicate, delete.
+// Deletion was Backspace-into-the-previous-block; reordering was drag-only —
+// and the drag gutter was display:none on touch, so on a phone a block could
+// not be reordered or removed at all.
+{
+  const fsb = await import('node:fs')
+  const rdb = (f: string) => fsb.readFileSync(new URL(`../spaces/src/${f}`, import.meta.url), 'utf8')
+  const ed = rdb('editor.ts'), css = rdb('styles.css')
+
+  ok(/private blockActions\(/.test(ed), 'the block actions are declared as ONE list')
+  for (const label of ['Turn into', 'Add below', 'Move up', 'Move down', 'Duplicate', 'Delete']) {
+    ok(new RegExp(`t\\('${label}`).test(ed), `…including ${label}`)
+  }
+  ok(/openBlockMenu\(/.test(ed) && /this\.blockActions\(id\)/.test(ed),
+    'and the menu is built from that list rather than a second copy')
+
+  // the gutter must SURVIVE the drawer breakpoint, or none of it is reachable
+  const narrow = css.slice(css.indexOf('@media (max-width: 820px)'))
+  ok(!/\.sp-gutter \{ display: none/.test(narrow), 'the gutter is not hidden on touch')
+  ok(/\.sp-gutter \{ opacity: 1/.test(narrow), '…it is shown rather than hovered')
+  ok(/sp-sheet/.test(css) && /isDrawer\(\)/.test(ed),
+    'and the menu becomes a bottom sheet where a 5px anchor would be unusable')
+
+  // a disabled action is shown, not removed — a menu that changes shape is one
+  // you have to re-read every time
+  ok(/sp-off/.test(css) && /a\.off/.test(ed), 'unavailable actions are disabled, not hidden')
+
+  // THE SUBTREE RULES. Each of these silently loses or orphans work.
+  ok(/never drop a block inside its own subtree/.test(ed), 'a block cannot be moved into itself')
+  ok(/AFTER the target's whole SUBTREE/.test(ed),
+    'a move lands after the target\'s whole subtree, not between a container and its children')
+  ok(/if \(c\.parent && remap\.has\(c\.parent\)\) c\.parent = remap\.get\(c\.parent\)/.test(ed),
+    'a duplicate rewrites its copies\' parent links, so the copy owns the copies')
+  ok(/if \(!page\.blocks\.length\) page\.blocks\.push\(newBlock\('p'\)\)/.test(ed),
+    'deleting the last block leaves something to type into')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

@@ -656,7 +656,7 @@ export class Editor {
     grip.innerHTML = ICONS.grip
     grip.title = t('Drag to move, click for block options')
     grip.setAttribute('aria-label', t('Block options'))
-    grip.addEventListener('click', () => this.openSlash(blockId, grip))
+    grip.addEventListener('click', () => this.openBlockMenu(blockId, grip))
     grip.addEventListener('dragstart', (e) => {
       e.dataTransfer?.setData('text/bento-block', blockId)
       node.classList.add('sp-dragging')
@@ -691,6 +691,144 @@ export class Editor {
   }
 
   /** Move a block (and anything nested under it) to sit after another. */
+  /**
+   * What you can do to a block, declared ONCE.
+   *
+   * Four of these existed NOWHERE, on any device: move up, move down,
+   * duplicate, delete. Deletion was Backspace-into-the-previous-block and
+   * reordering was drag-only — and the drag gutter is hidden on touch, so on a
+   * phone a block could not be reordered or removed at all.
+   *
+   * One list, so the desktop menu and the touch sheet cannot drift — the same
+   * reasoning as the topbar's secondary actions.
+   */
+  private blockActions(id: string): Array<{ icon: IconName; label: string; hint: string; run: () => void; off?: boolean }> {
+    const s = this.store
+    const page = s.page
+    const blocks = page?.blocks ?? []
+    const at = blocks.findIndex((b) => b.id === id)
+    // a block moves past its SIBLINGS; a child cannot jump out of its parent by
+    // stepping, which would silently re-home it
+    const owner = blocks[at]?.parent
+    const sibs = blocks.filter((b) => b.parent === owner)
+    const si = sibs.findIndex((b) => b.id === id)
+
+    return [
+      { icon: 'text', label: t('Turn into…'), hint: t('Change this block’s type'),
+        run: () => this.openSlash(id) },
+      { icon: 'plus', label: t('Add below'), hint: '⏎', run: () => this.insertAfter(id) },
+      { icon: 'up', label: t('Move up'), hint: '', off: si <= 0,
+        run: () => { if (si > 0) this.moveBefore(id, sibs[si - 1].id) } },
+      { icon: 'down', label: t('Move down'), hint: '', off: si < 0 || si >= sibs.length - 1,
+        run: () => { if (si >= 0 && si < sibs.length - 1) this.moveBlock(id, sibs[si + 1].id) } },
+      { icon: 'copy', label: t('Duplicate'), hint: '', run: () => this.duplicateBlock(id) },
+      { icon: 'trash', label: t('Delete'), hint: '⌫', run: () => this.deleteBlock(id) },
+    ]
+  }
+
+  /** The block actions, as a menu. Anchored on a wide screen, a sheet on a phone. */
+  private openBlockMenu(id: string, anchor: HTMLElement): void {
+    if (this.store.readOnly || this.reading) return
+    this.closeOverlay()
+    const sheet = this.isDrawer()
+    const pop = el('div', sheet ? 'sp-pop sp-sheet' : 'sp-pop')
+    pop.setAttribute('role', 'menu')
+    this.trapAndClose(pop, () => this.focusBlock(id))
+    for (const a of this.blockActions(id)) {
+      const item = this.menuItem(a.icon, a.label, a.hint, () => { this.closeOverlay(); a.run() })
+      if (a.off) { item.setAttribute('aria-disabled', 'true'); item.classList.add('sp-off') }
+      pop.append(item)
+    }
+    this.overlay = pop
+    document.body.append(pop)
+    if (sheet) pop.classList.add('sp-sheet-in')
+    else place(pop, anchor)
+    const away = (ev: MouseEvent) => {
+      if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
+    }
+    setTimeout(() => document.addEventListener('mousedown', away), 0)
+  }
+
+  /** Move `id` to sit BEFORE `target` — the inverse of moveBlock's "after". */
+  private moveBefore(id: string, target: string): void {
+    const page = this.store.page
+    if (!page) return
+    const before = page.blocks.findIndex((b) => b.id === target)
+    // the block that precedes the target is what `after` needs; at the top of a
+    // sibling run there is none, so splice to the front instead
+    const prev = page.blocks.slice(0, before).reverse().find((b) => b.parent === page.blocks[before]?.parent)
+    if (prev) this.moveBlock(id, prev.id)
+    else this.moveToFront(id)
+  }
+
+  private duplicateBlock(id: string): void {
+    const s = this.store
+    const page = s.page
+    if (!page) return
+    const at = page.blocks.findIndex((b) => b.id === id)
+    if (at < 0) return
+    // the SUBTREE, with fresh ids and the parent links rewritten to match, or a
+    // duplicated toggle's copy would adopt the original's children
+    const remap = new Map<string, string>()
+    const group: Block[] = []
+    const take = (owner: string) => {
+      for (const b of page.blocks) {
+        if (b.parent !== owner) continue
+        group.push(b)
+        take(b.id)
+      }
+    }
+    group.push(page.blocks[at])
+    take(id)
+    const copies = group.map((b) => {
+      const fresh = { ...JSON.parse(JSON.stringify(b)), id: newBlock(b.type).id } as Block
+      remap.set(b.id, fresh.id)
+      return fresh
+    })
+    for (const c of copies) if (c.parent && remap.has(c.parent)) c.parent = remap.get(c.parent)
+    s.commit(() => { page.blocks.splice(at + group.length, 0, ...copies) })
+    this.paintPage()
+    this.focusBlock(copies[0].id)
+  }
+
+  private deleteBlock(id: string): void {
+    const s = this.store
+    const page = s.page
+    if (!page) return
+    const at = page.blocks.findIndex((b) => b.id === id)
+    if (at < 0) return
+    // children go with their owner, or they re-home at the top of the page and
+    // reappear in a document the author believed they had emptied
+    const doomed = new Set([id])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const b of page.blocks) {
+        if (b.parent && doomed.has(b.parent) && !doomed.has(b.id)) { doomed.add(b.id); grew = true }
+      }
+    }
+    const before = page.blocks[at - 1]?.id
+    s.commit(() => {
+      page.blocks = page.blocks.filter((b) => !doomed.has(b.id))
+      // a page is never left with nothing to type into
+      if (!page.blocks.length) page.blocks.push(newBlock('p'))
+    })
+    this.paintPage()
+    this.focusBlock(before ?? page.blocks[0]?.id)
+  }
+
+  private moveToFront(id: string): void {
+    const page = this.store.page
+    if (!page) return
+    const at = page.blocks.findIndex((b) => b.id === id)
+    if (at <= 0) return
+    this.store.commit(() => {
+      const [b] = page.blocks.splice(at, 1)
+      page.blocks.unshift(b)
+    })
+    this.paintPage()
+  }
+
   private moveBlock(moved: string, after: string): void {
     const s = this.store
     const page = s.page
@@ -707,7 +845,23 @@ export class Editor {
     s.commit(() => {
       const group = [moved, ...kids].map((id) => page.blocks.find((b) => b.id === id)!).filter(Boolean)
       for (const b of group) page.blocks.splice(page.blocks.indexOf(b), 1)
-      const at = page.blocks.findIndex((b) => b.id === after) + 1
+      // AFTER the target's whole SUBTREE, not merely after the target.
+      // Landing immediately after a container put the block between that
+      // container and its children — the array stayed pre-order but the child
+      // no longer followed its parent contiguously, so the renderer's forward
+      // pass popped the open container and drew the child at root. Measured:
+      // moving the first block down past a toggle un-nested the toggle's body.
+      const tgt = page.blocks.findIndex((b) => b.id === after)
+      let at = tgt + 1
+      if (tgt >= 0) {
+        const under = new Set([after])
+        while (at < page.blocks.length) {
+          const p = page.blocks[at].parent
+          if (!p || !under.has(p)) break
+          under.add(page.blocks[at].id)
+          at++
+        }
+      }
       page.blocks.splice(at, 0, ...group)
     })
     this.paintPage()

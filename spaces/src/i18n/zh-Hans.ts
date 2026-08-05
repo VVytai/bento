@@ -216,4 +216,11 @@ export const zh_Hans: Catalog = {
   "Show the page list ([)": "显示页面列表（[）",
   "Hide the page list ([)": "隐藏页面列表（[）",
   "{n} note name(s) appear more than once, so links naming them all went to the first.": "有 {n} 个笔记名称重复，因此指向该名称的链接都指向了第一个。",
+  "Turn into…": "转换为…",
+  "Change this block’s type": "更改此块的类型",
+  "Add below": "在下方添加",
+  "Move up": "上移",
+  "Move down": "下移",
+  "Duplicate": "创建副本",
+  "Delete": "删除",
 }

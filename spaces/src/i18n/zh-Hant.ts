@@ -216,4 +216,11 @@ export const zh_Hant: Catalog = {
   "Show the page list ([)": "顯示頁面清單（[）",
   "Hide the page list ([)": "隱藏頁面清單（[）",
   "{n} note name(s) appear more than once, so links naming them all went to the first.": "有 {n} 個筆記名稱重複，因此指向該名稱的連結都指向了第一個。",
+  "Turn into…": "轉換為…",
+  "Change this block’s type": "變更此區塊的類型",
+  "Add below": "在下方新增",
+  "Move up": "上移",
+  "Move down": "下移",
+  "Duplicate": "建立副本",
+  "Delete": "刪除",
 }

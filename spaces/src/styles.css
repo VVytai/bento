@@ -421,7 +421,13 @@ button.sp-callout-chip:hover { text-decoration: underline; text-underline-offset
   [dir='rtl'] .sp-side.sp-open { inset: 0 0 0 auto; }
   .sp-scrim { position: fixed; inset: 0; background: rgb(20 30 45 / .3); z-index: 45; }
   .sp-main { padding: 26px 18px 45vh; }
-  .sp-gutter { display: none; }         /* no hover on touch; long-press later */
+  /* THE GUTTER STAYS ON TOUCH. It used to be display:none here, on the
+     reasoning that there is no hover — but hover was how you reached the only
+     controls a block has, so hiding it meant a block could not be reordered or
+     deleted on a phone AT ALL. It is shown rather than hovered, and sized for
+     a thumb. */
+  .sp-gutter { opacity: 1; position: static; display: flex; justify-content: flex-end; margin-bottom: 2px; }
+  .sp-gutter .sp-ghost { width: 40px; height: 34px; }
   .sp-title { font-size: 27px; }
 }
 
@@ -771,3 +777,21 @@ body.sp-col-resizing { cursor: col-resize; user-select: none; }
 @media (max-width: 820px) {
   .sp-panel-toggle { display: inline-flex; }
 }
+
+/* A disabled action is shown, not hidden: "move up" missing from the top block
+   is a menu that changes shape, and a menu that changes shape is one you have
+   to re-read every time. */
+.sp-dditem.sp-off { opacity: .38; pointer-events: none; }
+
+/* On a phone a popover anchored to a 5px gutter button is unusable, so the
+   block menu is a sheet at the bottom edge — within reach of a thumb, and it
+   cannot be positioned off-screen. */
+.sp-pop.sp-sheet {
+  position: fixed; inset-inline: 8px; bottom: max(8px, env(safe-area-inset-bottom));
+  top: auto; width: auto; max-height: 62vh; border-radius: 14px;
+  padding: 8px; box-shadow: 0 -8px 40px rgb(20 30 45 / .28);
+  transform: translateY(8px); opacity: 0;
+  transition: transform .16s ease, opacity .16s ease;
+}
+.sp-pop.sp-sheet.sp-sheet-in { transform: none; opacity: 1; }
+.sp-pop.sp-sheet .sp-dditem { padding-block: 13px; }
