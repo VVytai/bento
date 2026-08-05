@@ -233,7 +233,13 @@ export function mountPanels(host: PanelsHost): Panels {
   for (const side of ['left', 'right'] as const) {
     const el = side === 'left' ? left : right
     const pref = shut[side]
-    if (pref ?? window.innerWidth < PHONE_W) el.classList.add('dp-shut')
+    // A width of ZERO means "not laid out yet", not "phone". A background or
+    // freshly-created tab reports 0 before first layout, and `0 < 700` then
+    // collapsed both panels on a desktop — with no stored preference to
+    // explain it, so it looked like the panels had simply not shipped.
+    const vw = window.innerWidth
+    const phone = vw > 0 && vw < PHONE_W
+    if (pref ?? phone) el.classList.add('dp-shut')
   }
   updateChevrons()
 
