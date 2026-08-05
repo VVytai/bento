@@ -943,7 +943,12 @@ export class DashSync {
       // same cells as everyone who received it.
       for (const col of named) {
         if (sheet.data[col]) continue
-        ;(this.stash[rowNode(sh, rid)] ??= {})[vKey(col)] = { v: clone(vals[col] ?? null), r: clone(birth) }
+        const st = (this.stash[rowNode(sh, rid)] ??= {})
+        // Same rule as the remote path: a parked write NEWER than this insert
+        // out-stamps the insert's claim on the column and must survive it.
+        const cur = st[vKey(col)]
+        if (cur && regNewer(cur.r, birth)) continue
+        st[vKey(col)] = { v: clone(vals[col] ?? null), r: clone(birth) }
       }
     }
     for (const { sh, col, birth, enc, rids, vals } of this.localCols.splice(0)) {
@@ -1148,6 +1153,13 @@ export class DashSync {
    * from their position in the adopted baseline. That derivation is the reason
    * a million-row workbook costs nothing to sync until somebody edits it.
    */
+  /** Exposed for the convergence rig's sortedness invariant — not an app
+   *  surface. The rig asserts, after every apply, that a sheet's `rids` really
+   *  is sorted by (key, rid); a binary search over a list that is not sorted
+   *  lands anywhere, which is how row order diverges while every register
+   *  agrees. */
+  rowOrderKey(sh: string, rid: number): string { return this.rowKey(sh, rid) }
+
   private rowKey(sh: string, rid: number): string {
     const explicit = this.rpos[rowNode(sh, rid)]
     if (explicit !== undefined) return explicit
@@ -1181,6 +1193,37 @@ export class DashSync {
     return lo
   }
 
+  /**
+   * Move a row that is already in the sheet to where its (new) key says it
+   * belongs.
+   *
+   * Only a resurrection can change a live row's key, so this is rare — but it
+   * has to rebuild the column arrays, because a row's VALUES are addressed by
+   * position and moving the rid alone would hand every row below the move
+   * somebody else's numbers. `permuteRows` is the same routine the snapshot
+   * merge uses: one pass per column, dictionaries kept intact, `pack` columns
+   * left alone.
+   */
+  private relocateRow(sheet: TableSheet, sh: string, rid: number): void {
+    const flat = rleExpand(sheet.rids)
+    const at = flat.indexOf(rid)
+    if (at < 0) return
+    flat.splice(at, 1)
+    const key = this.rowKey(sh, rid)
+    let lo = 0
+    let hi = flat.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      const other = flat[mid]
+      const k = this.rowKey(sh, other)
+      if (k < key || (k === key && other < rid)) lo = mid + 1
+      else hi = mid
+    }
+    if (lo === at) return
+    flat.splice(lo, 0, rid)
+    permuteRows(sheet, flat)
+  }
+
   private applyRins(doc: DashDoc, op: RinsOp, res: ApplyResult): void {
     const sheet = tableOf(doc, op.sh)
     const stamp: Reg = [op.l, op.a]
@@ -1190,6 +1233,7 @@ export class DashSync {
       const node = rowNode(op.sh, rid)
       const birth = this.births[node]
       if (birth && !newer(op.l, op.a, birth)) continue // an older create
+      const wasKey = this.rpos[node]
       this.births[node] = stamp
       this.rpos[node] = op.ord[i]
       this.rnamed[node] = Object.keys(op.vals ?? {})
@@ -1198,7 +1242,31 @@ export class DashSync {
       // A delete still out-stamps this insert. The key is recorded above
       // regardless, so ops waiting on this row can resolve now.
       if (!sheet || this.dead(node)) { this.drainPending(doc, node); continue }
-      if (rleHas(sheet.rids, rid)) continue // already here (two routes, one row)
+      if (rleHas(sheet.rids, rid)) {
+        // ALREADY HERE — and the winning insert has just given the row a NEW
+        // key, so the row has to MOVE to match it. Recording the key and
+        // leaving the row where it sat is what broke row order at six actors
+        // (rig seed 116).
+        //
+        // The asymmetry is exact and invisible in the sync state, because the
+        // key both replicas end up holding is the same one. A row deleted and
+        // then resurrected by TWO actors gets two competing `rins`, and the
+        // higher (lamport, actor) wins the key everywhere. But a replica that
+        // received the loser FIRST already has the row in the document, so the
+        // winner arrives down this branch and only updated `rpos`; a replica
+        // that received the winner first placed the row by binary search at the
+        // winning key and then discarded the loser at the "an older create"
+        // gate. Same `rpos`, same births, same tombs — two different sequences.
+        //
+        // Worse than one row in the wrong place: `rids` is now no longer sorted
+        // by (key, rid), and `rowIndexFor` is a BINARY SEARCH that assumes it
+        // is. Every later insert on that replica lands somewhere arbitrary, so
+        // one stale key spreads into a wholly different row order. That is why
+        // it took six actors to see — it needs two concurrent resurrections of
+        // one row plus a later insert to amplify.
+        if (wasKey !== op.ord[i]) this.relocateRow(sheet, op.sh, rid)
+        continue
+      }
       const idx = this.rowIndexFor(sheet, op.sh, op.ord[i], rid)
       const vals: Record<string, unknown[]> = {}
       for (const [col, arr] of Object.entries(op.vals ?? {})) vals[col] = [clone(arr[i])]
@@ -1221,7 +1289,20 @@ export class DashSync {
       // column, which is what tells the arriving column to stand down.
       for (const col of named) {
         if (sheet.data[col]) continue
-        ;(this.stash[node] ??= {})[vKey(col)] = { v: clone(vals[col]?.[0] ?? null), r: clone(stamp) }
+        const st = (this.stash[node] ??= {})
+        // NEVER clobber a parked entry that is NEWER than this insert. The
+        // insert claims the column, but a write minted after it out-stamps the
+        // claim, and the parked copy may be the only one left: on the author of
+        // that write the value was applied straight to a live document and was
+        // never pended anywhere, so overwriting it here deleted it outright,
+        // while every replica that received the write while the column was
+        // buried still had it queued on the column node and replayed it when
+        // the column came back. Rig seed 163 (ACTORS=6, STEPS=250): five
+        // replicas holding a number and its own author holding a blank.
+        // parkColumn has always carried the equivalent rule.
+        const cur = st[vKey(col)]
+        if (cur && regNewer(cur.r, stamp)) continue
+        st[vKey(col)] = { v: clone(vals[col]?.[0] ?? null), r: clone(stamp) }
       }
       this.drainPending(doc, node)
     }
@@ -1329,8 +1410,30 @@ export class DashSync {
       if (this.dead(colNode(sh, col)) || (isVKey(k) && !sheet.data[col])) { keep[k] = ent; continue }
       const claims = !isVKey(k) || named.has(col)
       const r = this.cellAuth(sh, rid, k, claims)
-      if (!r) continue
-      if (claims && !regNewer(r, birth)) continue
+      // The authority the value is being weighed under.
+      //
+      // When the row's payload CLAIMS this column the two are competing
+      // assignments and only a strictly newer one may survive the rebirth.
+      //
+      // When it does NOT claim it, the parked entry IS the last word for the
+      // cell, and asking `cellAuth(…, fromRow:false)` for a verdict was the
+      // seed-374/184 bug. `rnamed` records only the CURRENT birth's claim, so a
+      // row resurrected TWICE — the first insert naming the column, the second
+      // (from a peer who did not have the column yet) not naming it —
+      // overwrites the record that the first insert ever claimed anything.
+      // After that the parked entry's stamp is the older birth, `cellAuth`
+      // returns the bare cell register (or undefined, when the value only ever
+      // arrived in a row payload), the stale guard below sees two different
+      // stamps and drops the value — while the author of the second
+      // resurrection, which never held a parked copy because it never processed
+      // the first insert, keeps the number it already had in the document. The
+      // MINORITY replica was right: an insert that does not name a column makes
+      // no claim on it, so nothing has superseded the parked value and it must
+      // come back. Only something strictly NEWER than the parked stamp can
+      // displace it.
+      const auth = claims ? r : (r && regNewer(r, ent.r) ? r : ent.r)
+      if (!auth) continue
+      if (claims && !regNewer(auth, birth)) continue
       // THE COLUMN'S OWN BIRTH IS THE OTHER ASSIGNMENT, and it has to be
       // weighed here as well as in reconcileParked — this is where the two
       // readers of the stash disagreed.
@@ -1356,10 +1459,10 @@ export class DashSync {
       // to apply it, because replayStashRow runs inside applyRins and has
       // already written the document by the time the batch reconciles.
       const cb = this.births[colNode(sh, col)]
-      if (cb && !regNewer(r, cb)) continue
+      if (cb && !regNewer(auth, cb)) continue
       // stale guard: the parked value must belong to the CURRENT authority — a
       // newer write that landed elsewhere supersedes it
-      if (cmpReg(ent.r, r) !== 0) continue
+      if (cmpReg(ent.r, auth) !== 0) continue
       dbg(node, `stash-replay ${k} := ${JSON.stringify(ent.v)}`)
       if (isVKey(k)) {
         if (sheet.data[col]) applyPatch(doc, { op: 'setCells', sheet: sh, col, rids: [rid], v: [clone(ent.v ?? null)] })
@@ -1664,7 +1767,17 @@ export class DashSync {
         if (this.dead(colNode(sh, col))) continue // may yet be dug up
         const live = isVKey(k) ? !!sheet.data[col] : sheet.columns.some((c) => c.id === col)
         if (!live) continue // the column's insert has not landed here yet
-        const auth = this.cellAuth(sh, rid, k, !isVKey(k) || this.rowNames(node, col))
+        const claims = !isVKey(k) || this.rowNames(node, col)
+        const r = this.cellAuth(sh, rid, k, claims)
+        // Same rule replayStashRow applies, and it has to be the same rule or
+        // the two readers of the stash disagree again: when the row's current
+        // birth does not CLAIM this column, the parked entry is the cell's last
+        // word and only something strictly newer displaces it. Asking for a
+        // register that may never have existed (the value arrived in an earlier
+        // insert's payload, and `rnamed` has since been overwritten by a second
+        // resurrection) dropped the value here too — on every replica except
+        // the second resurrector. Seeds 374 and 184.
+        const auth = claims ? r : (r && regNewer(r, st[k].r) ? r : st[k].r)
         // The column's own birth beats anything parked before it: a value a
         // row was holding for a column that has since been (re)created belongs
         // to the creation, not to the row.

@@ -1,8 +1,9 @@
 # bento/dash collaboration — design, and what it loses
 
-*Design document, August 2026. Status: **engine and rig implemented**
-(`dash/src/sync/crdt.ts`, `scripts/test-dash-sync.ts`); session, transport and
-People panel implemented but **not yet mounted by the app** (see "What this
+*Design document, August 2026. Status: **engine and rig implemented, and the
+rig is green** (`dash/src/sync/crdt.ts`, `scripts/test-dash-sync.ts` — no open
+convergence failure, §7); session, transport and People panel implemented but
+**not yet mounted by the app** (see "What this
 needs from the rest of dash"). Companion to `docs/collab-design.md`, which is
 the authoritative spec for the wire protocol, the relay and the key chain —
 dash speaks that protocol unchanged. This document covers only what is
@@ -153,6 +154,18 @@ resurrects the row by out-stamping its tombstone. Values written by others
 during the row's dead window are parked and replay if they out-stamp the
 resurrection.
 
+**Two people undo the same row delete.** The higher (lamport, actor) wins, and
+its insert decides two separate things: where the row sits (its order key) and
+what the row's payload says about each column it NAMES. Both are absolute —
+a replica that had already put the row back at the loser's key MOVES it, and
+a replica that had already applied the loser's payload takes the winner's.
+
+A column the winning insert does **not** name is untouched by it. The two
+undoers' documents need not hold the same columns (one may not have heard of a
+column the other has), so an insert can only ever claim what it carried; for
+everything else the cell's last writer still stands. Both halves of that rule
+were bugs before they were rules — see §7.
+
 **Two people add columns.** Both survive; order by fractional key.
 
 **Column delete vs edits inside it.** Delete wins. See §6.
@@ -186,6 +199,11 @@ write older than itself, wherever that write is being held — in the document, 
 a parked stash entry, or in an op still waiting on the buried column. All three
 readers apply the same rule (`resetColumnValues`, `reconcileParked` and
 `replayStashRow`); the last of those did not, and that was the seed-307 bug.
+
+The converse is equally load-bearing and cost two more bugs (§7): a write NEWER
+than the assignment survives it, and the parked copy is the only record of it
+that its own AUTHOR has — every other replica still holds the op itself, queued
+on the buried column. So nothing may overwrite a parked entry that outranks it.
 
 This is the one place dash refuses to be clever, deliberately. Cell values live
 in the document, not in the sync layer, so a resurrected column could only come
@@ -291,7 +309,12 @@ steps concurrently is not expressible today.
 ## 7. Convergence rig
 
 `node scripts/test-dash-sync.ts`, modelled on `scripts/test-sync.ts`.
-`SEEDS` / `STEPS` / `ACTORS` / `SEED_ONLY` / `DBG_NODE` / `DIFF_WIDTH`.
+`SEEDS` (a COUNT, default 60) / `STEPS` (160) / `ACTORS` (3) / `SEED_ONLY` /
+`DBG_NODE` / `DIFF_WIDTH` / `TRACE_SHAPE` / `TRACE_ORDER`. Write the assignments
+INLINE — zsh does not word-split an unquoted `$cfg`, so `env $cfg node …` passes
+the whole string as one variable name and silently applies only the first. If two
+different configurations report the same check count, the variables are not
+reaching the rig.
 
 N simulated replicas mutate through the SAME patches the editor commits, ops
 travel over per-(from,to) FIFO queues in random interleavings, and at
@@ -300,29 +323,48 @@ identical. Plus targeted cases: per-cell LWW, dictionary interning, the row
 index (concurrent inserts at one place, insert beside a row someone deleted),
 delete-wins, undo resurrection with a dead-window edit, column add/remove/
 reorder, rid-aligned column data, sheet delete, gap buffering, log catch-up,
-and two-way snapshot merge of offline forks.
+two-way snapshot merge of offline forks, and the five hand-built cases named in
+the closed-seed accounts below (a column re-added by undo out-stamping a value
+parked in its dead window; undo not truncating a dictionary a collaborator grew;
+a row resurrected twice taking the winning insert's place; a second
+resurrection that does not name a column keeping its value; a row insert not
+clobbering a newer value parked for a buried column).
 
 It also asserts, after every single apply on every replica, that **every column
 array is exactly as long as the sheet has rows** — columnar storage addresses
 cells by position, so a column one entry short returns the next row's number
 for every row below the gap, silently. That check found a real store bug (§8).
 
-Status:
+`TRACE_ORDER=1` adds the second structural invariant, after every apply: **a
+sheet's `rids` is sorted by (order key, rid)**. That is the fractional index's
+whole contract, and `rowIndexFor` is a binary search that assumes it. One row
+left at a stale key does not merely sit in the wrong place — it makes every
+later insert on that replica land arbitrarily, which is how a single missed
+move becomes a wholly different row order. It is off by default because it
+costs a scan per apply; run it whenever anything touches row placement.
+
+Status (all measured on the current engine):
 
 | configuration | result |
 |---|---|
-| `SEEDS=60 STEPS=120 ACTORS=3` | ALL PASS (23,071 checks) |
-| `SEEDS=200 STEPS=200 ACTORS=3` | ALL PASS (23,631 checks) |
-| `SEEDS=200 STEPS=200 ACTORS=4` | ALL PASS (24,031 checks) |
-| `SEEDS=300 STEPS=250 ACTORS=4` | ALL PASS (24,631 checks) |
-| `SEEDS=400 STEPS=300 ACTORS=5` | ALL PASS (26,031 checks) |
-| `SEEDS=500 STEPS=200 ACTORS=4` | **1 failure of 25,075 checks** (seed 374) |
-| `SEEDS=300 STEPS=250 ACTORS=5` | **3 failures of 24,303 checks** (seed 184) |
-| `SEEDS=600 STEPS=400 ACTORS=6` | **4 failures of 23,982 checks** (seed 116) |
+| `SEEDS=200 STEPS=200 ACTORS=3` | ALL PASS (23,660 checks) |
+| `SEEDS=300 STEPS=250 ACTORS=4` | ALL PASS (24,660 checks) |
+| `SEEDS=800 STEPS=300 ACTORS=4` | ALL PASS (27,660 checks) |
+| `SEEDS=400 STEPS=300 ACTORS=5` | ALL PASS (26,060 checks) |
+| `SEEDS=200 STEPS=250 ACTORS=6` | ALL PASS (24,860 checks) |
+| `SEEDS=600 STEPS=400 ACTORS=6` | ALL PASS (28,860 checks) |
+| `SEEDS=1000 STEPS=250 ACTORS=6` | ALL PASS (32,860 checks) |
+| `SEEDS=120 STEPS=300 ACTORS=7` | ALL PASS (24,300 checks) |
+| `TRACE_ORDER=1 SEEDS=100 STEPS=300 ACTORS=7` | ALL PASS (24,060 checks) |
+| `TRACE_ORDER=1 SEEDS=300 STEPS=400 ACTORS=8` | ALL PASS (27,060 checks) |
 
-**Seeds 124 and 307 are closed.** They looked like one failure class and were
-two, both invisible in the sync state (registers, births, tombs, positions and
-version vectors all agreed on both sides; only the workbook differed by a cell).
+**No open failure class.** Every seed named below is closed, and each has a
+hand-built deterministic case in the rig rather than a seed number, verified to
+fail when — and only when — its own fix is reverted.
+
+**Seeds 124 and 307.** They looked like one failure class and were two, both
+invisible in the sync state (registers, births, tombs, positions and version
+vectors all agreed on both sides; only the workbook differed by a cell).
 
 * **124 was not a dead-window bug at all** — the column in question was never
   deleted. It was `dictLen`: an undo truncating a dictionary a collaborator had
@@ -333,31 +375,44 @@ version vectors all agreed on both sides; only the workbook differed by a cell).
   every replica reaching the same rebirth through `resetColumnValues` had
   correctly blanked. See §6.2.
 
-Both now have hand-built deterministic cases in the rig rather than a seed
-number ("a column re-added by undo out-stamps a value parked in its dead
-window", "undo does not truncate a dictionary a collaborator grew"), each
-verified to fail when its own fix is reverted.
+**Seed 116 — row ORDER diverged at six actors.** Three replicas materialised
+three different sequences while every register agreed. `applyRins`'s
+already-here branch recorded the winning insert's order key and left the row
+sitting where the LOSING insert had put it. Two actors resurrecting one row
+produce two inserts; a replica that received the loser first has the row in the
+document when the winner arrives and took that branch, while a replica that
+received the winner first placed the row by binary search at the winning key and
+discarded the loser at the "an older create" gate. Same `rpos` on both, two
+sequences — and then the first replica's `rids` was no longer sorted, so every
+later insert compounded it. The branch now MOVES the row (`relocateRow`,
+rebuilding the column arrays through `permuteRows`, since a row's values are
+addressed by position). Six actors were needed because it takes two concurrent
+resurrections of one row plus a later insert to become visible.
 
-**Two open failure classes remain, both pre-existing and both reproducible.**
-Neither was introduced by the above; both fail identically on the engine as it
-stood before.
+**Seeds 374 and 184 — a value dropped by everyone except the second
+resurrector.** A row resurrected twice: the first insert's payload named a
+column, the second's (from an actor who had not yet heard of that column) did
+not. `rnamed` holds only the CURRENT birth's claim, so the winning insert erased
+the record that the first had ever claimed the column; the parked value's
+authority — the first birth — became unrecognisable, `cellAuth(…, fromRow:false)`
+returned the bare cell register (or nothing at all, when the value had only ever
+arrived in a row payload), the stale guard saw two different stamps and dropped
+it. The author of the second resurrection kept the number because it had never
+parked a copy. **The minority replica was right**: an insert makes no claim on a
+column it does not name, so nothing superseded the value. `replayStashRow` and
+`reconcileParked` now weigh a non-claiming rebirth against the PARKED stamp, and
+only something strictly newer displaces it.
 
-1. **Row ORDER diverges at six actors** (seed 116). Values follow their rows
-   correctly, structure and sync state agree, but three replicas materialise
-   three different row sequences — a baseline row and an inserted row swap.
-   This is the fractional-key path, not the value path.
-   `SEED_ONLY=116 STEPS=250 ACTORS=6 node scripts/test-dash-sync.ts`
-   (clean at ACTORS=4 and ACTORS=5 for the same seed and step count.)
-2. **A row resurrected twice, by two different actors, keeps a value only on
-   the second resurrector** (seeds 374, 184). The first insert's payload names
-   a column, the second's does not; `rnamed` is overwritten by the newer
-   insert, so on the receivers `cellAuth(..., fromRow:false)` finds no register
-   and the parked value is dropped — while the AUTHOR of the second
-   resurrection keeps it. Same neighbourhood as 307, a different asymmetry.
-   `SEED_ONLY=374 STEPS=200 ACTORS=4 node scripts/test-dash-sync.ts`
-   `SEED_ONLY=184 STEPS=250 ACTORS=5 node scripts/test-dash-sync.ts`
-
-**Both should be closed before collaboration is enabled by default.**
+**Seed 163 — the same family, found while sweeping the two above.** A write is
+parked at its row's death; the row is then resurrected by an insert whose
+payload names that column while the column itself is buried, and the "park what
+the insert carried" loop overwrote the newer entry with the insert's own older
+value. Every replica but one recovers anyway, because the write reached them
+while the column was dead and is still queued on the column node — but its
+AUTHOR applied it straight into a live document and the parked copy was its only
+record, so the author alone lost it. Both park loops (`applyRins`'s and
+`settle`'s local twin) now refuse to clobber an entry that outranks the insert,
+the rule `parkColumn` has always carried.
 
 ---
 
@@ -399,14 +454,16 @@ real hole rather than a stylistic one.
 
 ### model.ts
 
-6. **A durable rid watermark.** `rowcol.ts` already flags this: `nextRidFloor`
-   derives the next rid from the current maximum, so two replicas inserting
-   concurrently mint the SAME rid for DIFFERENT rows — and rid is now identity.
-   Either stamp `sheet.nextRid` on every insert (the field is read already), or
-   partition the space by actor. **This must land before collab is enabled**;
-   it is the one item on this list that is a correctness precondition rather
-   than an improvement. The rig sidesteps it by giving each replica its own rid
-   range.
+6. **Partitioning the rid space by actor.** Half of this has landed: `sheet.nextRid`
+   is a durable monotonic watermark now (`store.ts` raises it on every structural
+   edit, `rowcol.nextRidFloor` reads it, and `crdt.settleWatermark` joins the two
+   replicas' values with MAX at every settle point, since a plain counter does not
+   converge). What is still open is the concurrent case the watermark cannot
+   reach: two replicas inserting at the same time both mint the next rid, for
+   DIFFERENT rows, and rid is identity. **This must land before collab is
+   enabled**; it is the one item on this list that is a correctness precondition
+   rather than an improvement. The rig sidesteps it by giving each replica its
+   own rid range.
 
 ### main.ts
 

@@ -181,6 +181,28 @@ function checkShape(r: Replica, where: string): void {
     }
   }
 }
+/**
+ * A sheet's `rids` must be SORTED by (order key, rid), always.
+ *
+ * That is the fractional index's whole contract: order is a pure function of
+ * the keys, and `rowIndexFor` binary-searches the live list on the strength of
+ * it. Let the list fall out of sort once and every later insert lands somewhere
+ * arbitrary — the row order diverges while every register, birth and tomb still
+ * agrees, which is exactly what class 1 looked like from the outside.
+ * TRACE_ORDER=1 asserts it after every apply and names the first inversion.
+ */
+function checkOrder(r: Replica, where: string): void {
+  for (const s of tables(r.doc)) {
+    const rids = ridsOf(s)
+    for (let i = 1; i < rids.length; i++) {
+      const ka = r.state.rowOrderKey(s.id, rids[i - 1])
+      const kb = r.state.rowOrderKey(s.id, rids[i])
+      if (ka < kb || (ka === kb && rids[i - 1] < rids[i])) continue
+      ok(false, `${where} @${r.actor}: ${s.id} out of order at ${i}: rid ${rids[i - 1]} (${ka}) before rid ${rids[i]} (${kb})`)
+      return
+    }
+  }
+}
 const ridsOf = (s: TableSheet): number[] => _internals.rleExpand(s.rids)
 const dataCols = (s: TableSheet): string[] => s.columns.filter((c) => s.data[c.id]).map((c) => c.id)
 
@@ -245,6 +267,7 @@ class Replica {
     // a local change can be what a parked remote op was waiting for
     this.state.settle(this.doc)
     checkShape(this, 'commit')
+    if (process.env.TRACE_ORDER) checkOrder(this, 'commit')
     this.undoStack.push(inverse)
     this.log.push(...ops)
     return ops
@@ -268,6 +291,7 @@ class Replica {
     }
     this.state.settle(this.doc)
     checkShape(this, 'undo')
+    if (process.env.TRACE_ORDER) checkOrder(this, 'undo')
     this.log.push(...ops)
     return ops
   }
@@ -300,6 +324,7 @@ class Replica {
   receive(ops: Op[]) {
     this.state.apply(this.doc, ops)
     checkShape(this, 'receive')
+    if (process.env.TRACE_ORDER) checkOrder(this, 'receive')
     for (const o of ops) if (!this.log.some((x) => x.a === o.a && x.s === o.s)) this.log.push(o)
   }
 
@@ -673,6 +698,149 @@ const cellAt = (r: Replica, col: string, rid: number): unknown => {
   ok(A.fingerprint() === B.fingerprint(), 'undo-vs-interning converged')
   ok(cellAt(B, 'region', 4) === 'JAPAN', `the collaborator's string survived the undo: ${cellAt(B, 'region', 4)}`)
   ok(cellAt(B, 'region', 1) === 'EMEA', `the undo still restored its own cell: ${cellAt(B, 'region', 1)}`)
+}
+{
+  // Regression for the row-ORDER divergence that random seed 116 found at six
+  // actors, built by hand so the interleaving can be read.
+  console.log('a row resurrected twice takes the WINNING insert\'s place…')
+  //
+  // Baseline s1 is rids 1…6 with order keys 8r Hi QZ ZQ iH r8 (spreadKey(i,6)).
+  //
+  //   C  inserts row 3001 between rid 2 and rid 3       [1,C]  key 'LC'
+  //   A  deletes rid 3, having never heard of 3001      [1,A]
+  //   B  deletes rid 3, having never heard of 3001      [1,B]
+  //   A  undoes  → rins rid 3 at index 2                [2,A]  key 'QA'
+  //        A's shadow is 1,2,4,5,6 — no 3001 — so the key is minted against
+  //        rid 4, and 'QA' lands AFTER 3001.
+  //   B  hears 3001, THEN undoes → rins rid 3 at index 2 [2,B] key 'JB'
+  //        B's shadow is 1,2,3001,4,5,6, so the key is minted against 3001 and
+  //        lands BEFORE it.
+  //
+  // [2,B] out-stamps [2,A] on the actor tiebreak, so rid 3 belongs at 'JB',
+  // before 3001, on every replica. D hears A's insert first and therefore has
+  // the row in the document ALREADY when B's winning insert arrives; E hears
+  // B's first and discards A's at the "an older create" gate. Both end holding
+  // the same `rpos`, the same births and the same tombs — and, before the fix,
+  // two different row sequences, because the already-here branch recorded the
+  // new key without moving the row. Worse, D's `rids` was then no longer sorted
+  // by (key, rid), so every later insert's binary search landed arbitrarily.
+  const A = new Replica('A', 1000)
+  const B = new Replica('B', 2000)
+  const C = new Replica('C', 3000)
+  const D = new Replica('D', 4000)
+  const E = new Replica('E', 5000)
+  const cIns = C.commit([{ op: 'insertRows', sheet: 's1', rids: [3001], at: [2], values: { amount: [55] } }])
+  const aDel = A.commit([{ op: 'deleteRows', sheet: 's1', rids: [3] }])
+  const bDel = B.commit([{ op: 'deleteRows', sheet: 's1', rids: [3] }])
+  const aIns = A.undo()
+  B.receive(cIns)
+  const bIns = B.undo()
+  // D: the loser's insert first, so the row is already present when the winner
+  // arrives. E: the winner's insert first.
+  for (const ops of [cIns, aDel, aIns, bDel, bIns]) D.receive(ops)
+  for (const ops of [cIns, bDel, bIns, aDel, aIns]) E.receive(ops)
+  for (const ops of [cIns, aDel, aIns, bDel, bIns]) for (const r of [A, B, C]) r.receive(ops.filter((o) => o.a !== r.actor))
+  const want = [1, 2, 3, 3001, 4, 5, 6].join(',')
+  for (const r of [A, B, C, D, E]) {
+    ok(ridsOf(sheet1(r)).join(',') === want, `${r.actor} row order: ${ridsOf(sheet1(r))}`)
+    checkOrder(r, 'twice-resurrected')
+  }
+  ok(D.fingerprint() === E.fingerprint(), 'loser-first and winner-first replicas agree')
+  ok(A.fingerprint() === D.fingerprint(), 'and so does every other replica')
+}
+{
+  // Regression for the value loss random seeds 374 and 184 found. Same
+  // symptom as 307 (identical sync state, one cell different) and a different
+  // asymmetry: nothing is deleted twice here except the ROW.
+  console.log('a second resurrection that does not name a column keeps its value…')
+  //
+  //   A  adds column `note`, values n1…n6            [1,A] ins + [2,A] cell
+  //   B  hears it
+  //   A  deletes rid 2                               [3,A]
+  //   A  undoes → rins rid 2, payload NAMES `note`   [4,A]  (note = 'n2')
+  //   C  edits its own title three times             [1,C]…[3,C]
+  //   C  deletes rid 2 — C has never heard of `note` [4,C]
+  //   C  undoes → rins rid 2, payload does NOT name `note` [5,C]  ← wins
+  //
+  // C's insert wins the birth race, so `rnamed` for the row is rewritten to
+  // C's three columns and the record that [4,A] ever claimed `note` is gone.
+  // On every replica that processed A's pair first, 'n2' was parked under the
+  // [4,A] authority at C's delete; the replay then asked
+  // `cellAuth(…, fromRow:false)` for a verdict, got the bare cell register
+  // [2,A], failed the stale guard and dropped the value — leaving a blank.
+  // C itself never held a parked copy (it discards [4,A] as an older create
+  // and gets 'n2' straight from the pended cell op when the column finally
+  // lands), so the MINORITY replica was the correct one: an insert that does
+  // not name a column makes no claim on it, and nothing superseded the value.
+  const A = new Replica('A', 1000)
+  const B = new Replica('B', 2000)
+  const C = new Replica('C', 3000)
+  const D = new Replica('D', 4000)
+  const E = new Replica('E', 5000)
+  const aCol = A.commit([{ op: 'addColumn', sheet: 's1', column: { id: 'note', name: 'Note', type: 'text' }, data: { enc: 'raw', v: ['n1', 'n2', 'n3', 'n4', 'n5', 'n6'] } }])
+  B.receive(aCol)
+  const aDel = A.commit([{ op: 'deleteRows', sheet: 's1', rids: [2] }])
+  const aIns = A.undo()
+  const cT: Op[] = []
+  for (let i = 0; i < 3; i++) cT.push(...C.commit([{ op: 'setTitle', title: `t${i}` }]))
+  const cDel = C.commit([{ op: 'deleteRows', sheet: 's1', rids: [2] }])
+  const cIns = C.undo() // [5,C] — out-stamps A's [4,A] resurrection
+  // D takes A's pair before C's; E takes C's first. Neither may lose 'n2'.
+  for (const ops of [aCol, aDel, aIns, cT, cDel, cIns]) D.receive(ops)
+  for (const ops of [cT, cDel, cIns, aCol, aDel, aIns]) E.receive(ops)
+  for (const ops of [aCol, aDel, aIns, cT, cDel, cIns]) for (const r of [A, B, C]) r.receive(ops.filter((o) => o.a !== r.actor))
+  for (const r of [A, B, C, D, E]) {
+    ok(ridsOf(sheet1(r)).includes(2), `${r.actor}: the row is back`)
+    ok(cellAt(r, 'note', 2) === 'n2', `${r.actor}: the uncarried column keeps its value: ${cellAt(r, 'note', 2)}`)
+  }
+  ok(D.fingerprint() === E.fingerprint(), 'both delivery orders agree')
+  ok(C.fingerprint() === D.fingerprint(), 'and the second resurrector agrees with them')
+}
+{
+  // Regression for the third asymmetry of the same family, found by random
+  // seed 163 at six actors while sweeping the two above.
+  console.log('a row insert does not clobber a NEWER value parked for a buried column…')
+  //
+  //   B  deletes rid 2                                  [1,B]
+  //   B  undoes  → rins rid 2, payload names `region`    [2,B]
+  //   C  removes the `region` column                     [1,C]
+  //   C  undoes  → the column comes back                 [2,C]
+  //   A  (hearing none of it) types four titles          [1,A]…[4,A]
+  //   A  writes region:2 = '9917'                        [5,A]  ← newest
+  //   A  then receives, in this order: B's delete, C's column removal,
+  //      B's resurrection, C's column undo.
+  //
+  // A's write out-stamps everything, so '9917' is the answer on every replica.
+  // Every OTHER replica gets there without trying: the write reaches them while
+  // the column is buried, `applyCell` parks the op on the column node, and the
+  // column's return replays it. A is the author — its write went straight into
+  // a live document and was never queued anywhere, so the parked copy made at
+  // the row's death is the only record it has. B's resurrection then walked the
+  // columns its payload named and overwrote that copy with the payload's own
+  // (older) value, and the column's return read a stash entry whose stamp no
+  // longer matched the cell's authority and blanked the cell. Five replicas
+  // with a number, its author with a blank.
+  const A = new Replica('A', 1000)
+  const B = new Replica('B', 2000)
+  const C = new Replica('C', 3000)
+  const D = new Replica('D', 4000)
+  const bDel = B.commit([{ op: 'deleteRows', sheet: 's1', rids: [2] }])
+  const bIns = B.undo()
+  const cDel = C.commit([{ op: 'removeColumn', sheet: 's1', col: 'region' }])
+  const cAdd = C.undo()
+  const aOps: Op[] = []
+  for (let i = 0; i < 4; i++) aOps.push(...A.commit([{ op: 'setTitle', title: `t${i}` }]))
+  const aWrite = A.commit([{ op: 'setCells', sheet: 's1', col: 'region', rids: [2], v: ['9917'] }])
+  // the order that leaves A holding nothing but the parked copy
+  for (const ops of [bDel, cDel, bIns, cAdd]) A.receive(ops)
+  for (const ops of [bDel, bIns, cDel, cAdd, aOps, aWrite]) D.receive(ops)
+  for (const ops of [bDel, bIns, cDel, cAdd, aOps, aWrite]) for (const r of [A, B, C]) r.receive(ops.filter((o) => o.a !== r.actor))
+  for (const r of [A, B, C, D]) {
+    ok(sheet1(r).columns.some((c) => c.id === 'region'), `${r.actor}: the column came back`)
+    ok(cellAt(r, 'region', 2) === '9917', `${r.actor}: the newest write survived: ${cellAt(r, 'region', 2)}`)
+  }
+  ok(A.fingerprint() === D.fingerprint(), 'the write\'s author agrees with a replica that only received it')
+  ok(B.fingerprint() === C.fingerprint(), 'and the row and column undoers agree too')
 }
 {
   console.log('column add/remove and reorder converge…')
