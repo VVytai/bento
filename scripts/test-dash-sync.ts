@@ -606,6 +606,75 @@ const cellAt = (r: Replica, col: string, rid: number): unknown => {
   ok(cellAt(A, 'amount', 2) === cellAt(B, 'amount', 2), 'one value after resurrection')
 }
 {
+  // Regression for the divergence random seeds 124/307 found, built by hand so
+  // it can be read. TWO independent asymmetries lived under the same symptom
+  // (identical sync state, workbooks differing by one or two cells) and each
+  // one gets its own case, because each one fails on its own.
+  console.log('a column re-added by undo out-stamps a value parked in its dead window…')
+  // The interleaving, minimal (three replicas because it needs a delete and a
+  // write from DIFFERENT actors — per-actor delivery is contiguous, so one
+  // actor cannot hand B its write after its own delete):
+  //
+  //   C  deletes row 2                       [1,C]
+  //   A  writes amount:2 = 5555              [1,A]
+  //   B  hears the delete, then the write  → the value PARKS (its row is dead)
+  //   C  undoes the delete                   [2,C]  (row 2 comes back)
+  //   B  removes the amount column           [2,B]
+  //   B  undoes that                         [3,B]  ← the column's REBIRTH
+  //   B  finally hears C's resurrection      [2,C]
+  //
+  // A column insert is a whole-column assignment, so [3,B] supersedes the [1,A]
+  // write. Every replica that reaches the rebirth through resetColumnValues
+  // says so. B reaches it through replayStashRow instead — the row reappears
+  // after the column does — and that path used to weigh the parked value only
+  // against the ROW's birth, so B alone restored a number nobody else had.
+  const A = new Replica('A', 1000)
+  const B = new Replica('B', 2000)
+  const C = new Replica('C', 3000)
+  const cDel = C.commit([{ op: 'deleteRows', sheet: 's1', rids: [2] }])
+  const aWrite = A.commit([{ op: 'setCells', sheet: 's1', col: 'amount', rids: [2], v: [5555] }])
+  B.receive(cDel)
+  B.receive(aWrite) // row 2 is dead here: 5555 parks against [1,A]
+  const cBack = C.undo() // row 2 returns, carrying C's own values
+  const bDel = B.commit([{ op: 'removeColumn', sheet: 's1', col: 'amount' }])
+  const bBack = B.undo() // the column returns at a lamport ABOVE the parked write
+  B.receive(cBack)
+  for (const ops of [cDel, aWrite, cBack, bDel, bBack]) {
+    for (const r of [A, B, C]) r.receive(ops.filter((o) => o.a !== r.actor))
+  }
+  ok(A.fingerprint() === B.fingerprint(), 'column-rebirth vs parked value converged (A/B)')
+  ok(A.fingerprint() === C.fingerprint(), 'column-rebirth vs parked value converged (A/C)')
+  ok(sheet1(B).columns.some((c) => c.id === 'amount'), 'the column came back')
+  ok(ridsOf(sheet1(B)).includes(2), 'the row came back')
+  // The rebirth blanks it. What matters is that ALL THREE say the same thing;
+  // the value is asserted too so a future change cannot make them agree on the
+  // wrong answer by dropping the column entirely.
+  ok(cellAt(B, 'amount', 2) === null, `parked value loses to the column rebirth: ${cellAt(B, 'amount', 2)}`)
+  ok(cellAt(A, 'amount', 2) === null && cellAt(C, 'amount', 2) === null, 'and loses on every replica')
+}
+{
+  console.log('undo does not truncate a dictionary a collaborator grew…')
+  // The other half of the same symptom, and it needs no dead node at all.
+  //
+  // `setCells`'s inverse carries `dictLen`, the length the column's dictionary
+  // had before the edit, and store.ts honours it with `dict.length = dictLen`.
+  // Sound for one writer. Under collab a peer's write interns ITS strings into
+  // the same dictionary above that watermark, so the undo drops them and every
+  // cell pointing at them reads back null — on the undoing replica only, with
+  // not one register, birth or tomb moving. `local()` therefore disarms
+  // `dictLen` on the patch before the store sees it.
+  const [A, B] = pair()
+  const bWrite = B.commit([{ op: 'setCells', sheet: 's1', col: 'region', rids: [1], v: ['LATAM'] }])
+  const aWrite = A.commit([{ op: 'setCells', sheet: 's1', col: 'region', rids: [4], v: ['JAPAN'] }])
+  B.receive(aWrite) // 'JAPAN' interns ABOVE the watermark B's inverse recorded
+  const bUndo = B.undo() // restores region:1, and used to take 'JAPAN' with it
+  A.receive(bWrite)
+  A.receive(bUndo)
+  ok(A.fingerprint() === B.fingerprint(), 'undo-vs-interning converged')
+  ok(cellAt(B, 'region', 4) === 'JAPAN', `the collaborator's string survived the undo: ${cellAt(B, 'region', 4)}`)
+  ok(cellAt(B, 'region', 1) === 'EMEA', `the undo still restored its own cell: ${cellAt(B, 'region', 1)}`)
+}
+{
   console.log('column add/remove and reorder converge…')
   const [A, B] = pair()
   const oa = A.commit([{ op: 'addColumn', sheet: 's1', at: 1, column: { id: 'newA', name: 'New A', type: 'number' }, data: { enc: 'raw', v: [1, 2, 3, 4, 5, 6] } }])

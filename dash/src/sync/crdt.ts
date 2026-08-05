@@ -570,6 +570,40 @@ export class DashSync {
         // dictLen is a local undo artefact (it truncates a dictionary this edit
         // grew); shipping it would truncate the RECEIVER's dictionary, which
         // has a different length. Values are the wire format, never indices.
+        //
+        // It also has to be DISARMED HERE, on the patch the store is about to
+        // apply, and that is not tidiness — it is a silent data loss.
+        //
+        // A dictionary column's `idx` array points into a dictionary SHARED by
+        // every cell in the column, and `applyPatch` honours `dictLen` with a
+        // blunt `data.dict.length = p.dictLen`. That is sound for one writer:
+        // the only entries above the watermark are the ones this patch interned,
+        // and undo unwinds edits in the order they were made, so the dictionary
+        // is always exactly the length the inverse expects. Under collaboration
+        // it is false. A remote `cell` op that lands BETWEEN a local commit and
+        // its undo interns its own strings into the same dictionary, above the
+        // watermark the inverse recorded — so the undo drops them, and every
+        // cell pointing at them reads back null. It is asymmetric by
+        // construction: only the undoing replica truncates, only the values it
+        // did not author are lost, and NOTHING in the sync state changes — no
+        // register moves, no birth, no tomb — so the two replicas end up with
+        // identical sync states and different workbooks. That is exactly the
+        // shape of rig seeds 124 (ACTORS=4, STEPS=250) and 307 (ACTORS=5,
+        // STEPS=300): a text column with two blanks where a peer's values were,
+        // and every other field in agreement.
+        //
+        // The neighbouring guess — that the loss was in the column dead-window
+        // path (resetColumnValues/parkColumn) — was wrong; the column in both
+        // seeds was never deleted at all. The undo that loses the values need
+        // not even name the affected rows.
+        //
+        // Disarming costs the orphaned strings (the dictionary no longer shrinks
+        // back), which store.ts already calls "semantically right and no longer
+        // byte-identical". A live session has given that up regardless: two
+        // replicas intern in the order their ops arrive, so their dictionaries
+        // never matched byte-for-byte — which is why the rig's fingerprint
+        // compares materialized values, not encodings.
+        delete p.dictLen
         const o = push<CellOp>({ ...this.stamp(), op: 'cell', sh: p.sheet, col: p.col, rids: p.rids.slice(), v: clone(p.v) })
         p.rids.forEach((rid) => this.setReg(rowNode(p.sheet, rid), vKey(p.col), [o.l, o.a]))
         break
@@ -1297,6 +1331,32 @@ export class DashSync {
       const r = this.cellAuth(sh, rid, k, claims)
       if (!r) continue
       if (claims && !regNewer(r, birth)) continue
+      // THE COLUMN'S OWN BIRTH IS THE OTHER ASSIGNMENT, and it has to be
+      // weighed here as well as in reconcileParked — this is where the two
+      // readers of the stash disagreed.
+      //
+      // A cell sits under two whole-node assignments (cellAuth says so), yet
+      // this replay only ever compared the parked authority against the ROW's
+      // rebirth. So a value parked during the COLUMN's dead window was written
+      // back the moment its row reappeared, no matter how much newer the
+      // column's resurrection was. The asymmetry that follows is exact: the
+      // replica that had the value in hand (parked at delete time, or stashed
+      // because the write arrived while the row was dead) restored it, while
+      // every replica that reached the column's rebirth through
+      // resetColumnValues — which DOES apply the rule, `!regNewer(auth, birth)`
+      // — correctly blanked it. Same registers, same births, same tombs on both
+      // sides; one number more on one workbook. Rig seed 307 (ACTORS=5,
+      // STEPS=300): a column removed and re-added by undo at lamport 23/24, a
+      // value written to it at lamport 2 and parked, and the row carrying that
+      // cell resurrected at lamport 8 by a peer's own undo. The [24] rebirth
+      // supersedes both, and only the replay thought otherwise.
+      //
+      // reconcileParked has carried this rule from the start ("The column's own
+      // birth beats anything parked before it"); it simply never got the chance
+      // to apply it, because replayStashRow runs inside applyRins and has
+      // already written the document by the time the batch reconciles.
+      const cb = this.births[colNode(sh, col)]
+      if (cb && !regNewer(r, cb)) continue
       // stale guard: the parked value must belong to the CURRENT authority — a
       // newer write that landed elsewhere supersedes it
       if (cmpReg(ent.r, r) !== 0) continue

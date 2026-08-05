@@ -181,6 +181,12 @@ A column's death is final for its values. Writes to it during the delete's
 flight are dropped (their registers still advance, so replicas agree); undoing
 the delete restores the values **the undoer had**, and nobody else's.
 
+Re-adding the column is a whole-column assignment, so it also out-stamps every
+write older than itself, wherever that write is being held — in the document, in
+a parked stash entry, or in an op still waiting on the buried column. All three
+readers apply the same rule (`resetColumnValues`, `reconcileParked` and
+`replayStashRow`); the last of those did not, and that was the seed-307 bug.
+
 This is the one place dash refuses to be clever, deliberately. Cell values live
 in the document, not in the sync layer, so a resurrected column could only come
 back full if each replica restored what IT happened to hold — and no two
@@ -207,6 +213,18 @@ Two prices, both inherited and both real.
 when you made the change, and that inverse restores the value it displaced —
 which may since have been overwritten by someone else. Same compromise slides
 documents.
+
+*It no longer shrinks a dictionary back.* `setCells`'s inverse carries
+`dictLen`, and `applyPatch` honours it by truncating the column's dictionary to
+the length the edit found. That is exact for one writer and unsound for two: a
+peer's write interns ITS strings into the same dictionary above that watermark,
+so the truncation strands them and every cell pointing at one reads back null —
+on the undoing replica alone, with no register moving, which is a divergence
+rather than a lost undo. `local()` therefore deletes `dictLen` from the patch
+before the store sees it. The cost is the orphaned strings, which store.ts
+already calls "semantically right and no longer byte-identical"; a live session
+had given up byte-identical dictionaries anyway, since two replicas intern in
+the order their ops arrive. This was the seed-124 bug.
 
 *It can be refused outright.* An inverse names rows and columns that may no
 longer exist, and `committable()` (crdt.ts) refuses patches that name what is
@@ -289,39 +307,57 @@ array is exactly as long as the sheet has rows** — columnar storage addresses
 cells by position, so a column one entry short returns the next row's number
 for every row below the gap, silently. That check found a real store bug (§8).
 
-Status at the time of writing:
+Status:
 
 | configuration | result |
 |---|---|
-| `SEEDS=60 STEPS=120 ACTORS=3` | ALL PASS (23,062 checks) |
-| `SEEDS=200 STEPS=200 ACTORS=3` | ALL PASS (23,622 checks) |
-| `SEEDS=200 STEPS=200 ACTORS=4` | ALL PASS (24,022 checks) |
-| `SEEDS=300 STEPS=250 ACTORS=4` | **1 failure of 23,566 checks** (seed 124) |
-| `SEEDS=400 STEPS=300 ACTORS=5` | **1 failure of 25,278 checks** (seed 307) |
+| `SEEDS=60 STEPS=120 ACTORS=3` | ALL PASS (23,071 checks) |
+| `SEEDS=200 STEPS=200 ACTORS=3` | ALL PASS (23,631 checks) |
+| `SEEDS=200 STEPS=200 ACTORS=4` | ALL PASS (24,031 checks) |
+| `SEEDS=300 STEPS=250 ACTORS=4` | ALL PASS (24,631 checks) |
+| `SEEDS=400 STEPS=300 ACTORS=5` | ALL PASS (26,031 checks) |
+| `SEEDS=500 STEPS=200 ACTORS=4` | **1 failure of 25,075 checks** (seed 374) |
+| `SEEDS=300 STEPS=250 ACTORS=5` | **3 failures of 24,303 checks** (seed 184) |
+| `SEEDS=600 STEPS=400 ACTORS=6` | **4 failures of 23,982 checks** (seed 116) |
 
-**There is one open failure class, and it is not a decision.** Both failures
-are the same shape: a column DELETE and its UNDO interleaved with concurrent
-writes to that column's cells. The workbooks end up differing by one or two
-cells — the replica that authored the column re-add holds a value the others
-show blank. It is a divergence, not a crash or a corruption: row order,
-structure and every other column agree, and the shape invariant holds
-throughout.
+**Seeds 124 and 307 are closed.** They looked like one failure class and were
+two, both invisible in the sync state (registers, births, tombs, positions and
+version vectors all agreed on both sides; only the workbook differed by a cell).
 
-Reproduce:
+* **124 was not a dead-window bug at all** — the column in question was never
+  deleted. It was `dictLen`: an undo truncating a dictionary a collaborator had
+  grown, blanking cells the undoer never touched. See §6.4.
+* **307 was** the column dead window, in `replayStashRow`: a parked value was
+  weighed only against the ROW's rebirth, never against the COLUMN's, so the
+  replica whose row came back AFTER the column's undo restored a number that
+  every replica reaching the same rebirth through `resetColumnValues` had
+  correctly blanked. See §6.2.
 
-```
-SEED_ONLY=307 STEPS=300 ACTORS=5 node scripts/test-dash-sync.ts
-SEED_ONLY=124 STEPS=250 ACTORS=4 node scripts/test-dash-sync.ts
-```
+Both now have hand-built deterministic cases in the rig rather than a seed
+number ("a column re-added by undo out-stamps a value parked in its dead
+window", "undo does not truncate a dictionary a collaborator grew"), each
+verified to fail when its own fix is reverted.
 
-It is the residue of §6.2. Delete-wins already says a column's death is final
-for its values; what is not yet airtight is the moment of resurrection, where
-the values a replica still holds (in the document, in a parked entry, or in an
-op waiting on the buried column) must be weighed against the undo's own payload
-in the same order everywhere. **This should be closed before collaboration is
-enabled by default.** Everything in §6 is a considered trade; this is a bug
-with a known neighbourhood — `resetColumnValues` and `parkColumn` in
-`crdt.ts` — and a reproduction.
+**Two open failure classes remain, both pre-existing and both reproducible.**
+Neither was introduced by the above; both fail identically on the engine as it
+stood before.
+
+1. **Row ORDER diverges at six actors** (seed 116). Values follow their rows
+   correctly, structure and sync state agree, but three replicas materialise
+   three different row sequences — a baseline row and an inserted row swap.
+   This is the fractional-key path, not the value path.
+   `SEED_ONLY=116 STEPS=250 ACTORS=6 node scripts/test-dash-sync.ts`
+   (clean at ACTORS=4 and ACTORS=5 for the same seed and step count.)
+2. **A row resurrected twice, by two different actors, keeps a value only on
+   the second resurrector** (seeds 374, 184). The first insert's payload names
+   a column, the second's does not; `rnamed` is overwritten by the newer
+   insert, so on the receivers `cellAuth(..., fromRow:false)` finds no register
+   and the parked value is dropped — while the AUTHOR of the second
+   resurrection keeps it. Same neighbourhood as 307, a different asymmetry.
+   `SEED_ONLY=374 STEPS=200 ACTORS=4 node scripts/test-dash-sync.ts`
+   `SEED_ONLY=184 STEPS=250 ACTORS=5 node scripts/test-dash-sync.ts`
+
+**Both should be closed before collaboration is enabled by default.**
 
 ---
 
