@@ -178,12 +178,19 @@ export class Grid {
     return rid < 0 ? -1 : dataRow(this.sheet, rid)
   }
 
+  /** Fires whenever the grid points at a different sheet — the sheet list follows it. */
+  onSheetChange?: (id: string) => void
+
   /** Point the grid at a different sheet — an import adds one and shows it. */
   setSheet(id: string): void {
     this.sheetId = id
     this.sort = null
+    this.filters = []
+    this.sorts = []
     this.scroller.scrollTop = 0
+    this.sel = new Selection(rowCount(this.sheet), cols(this.sheet).length)
     this.paint()
+    this.onSheetChange?.(id)
   }
 
   get sheet(): TableSheet {

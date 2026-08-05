@@ -30,6 +30,7 @@ import {
 import { putRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
 import { mountAbout, rememberVersion } from './about.ts'
+import { mountPanels } from './panels.ts'
 import { dismissSplash, dismissSplashNow } from './splash.ts'
 import { t } from './i18n.ts'
 import {
@@ -285,6 +286,11 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     chartEl.hidden = false
     draw3d()
   })
+
+  // Sheets on the left, properties on the right — the suite's shared chrome.
+  // AFTER grid.onSelectionChange is set: mountPanels CHAINS that callback
+  // rather than replacing it, so the formula bar and status bar keep working.
+  mountPanels({ store, grid, body: app.querySelector<HTMLElement>('.dx-body')! })
 
   const notes: Notice[] = []
   if (frozen) {
