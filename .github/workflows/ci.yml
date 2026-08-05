@@ -117,6 +117,19 @@ jobs:
         # build rather than shipping a half-translated interface.
         run: node scripts/build-spaces-i18n.mjs --check
 
+      - name: Spaces agent-surface rig
+        # agent.ts is ~900 lines and shipped with no coverage at all: two of the
+        # five defects an adversarial review found in round 2 lived here,
+        # including a walk over author-supplied parent links that never
+        # returned. What this pins is what makes the surface trustworthy —
+        # validate() SILENT on documents that are correct but unusual (a false
+        # positive teaches an agent to ignore warnings), every write verb
+        # refusing what it cannot honour, no verb producing a document the app
+        # itself could not produce, and every walk terminating. The termination
+        # probes run in child processes with timeouts, because a hang cannot be
+        # reported by the process it hangs.
+        run: node scripts/test-spaces-agent.ts
+
       - name: Spaces shell size ceiling
         # A budget nobody measures is a wish. DECISIONS.md set a 100KB ceiling,
         # the round finished at 108KB, and the same entry claimed the ceiling
