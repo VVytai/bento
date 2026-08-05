@@ -615,12 +615,17 @@ function openFilterMenu(
       if (a === 'asc' || a === 'desc') grid.addSort(colId, a)
       else if (a === 'apply') {
         const v = input.value.trim()
+        // `v`, not `value` — and NO `as never`. The cast is what let this
+        // compile: filter.ts spells the payload `v`, so `{op:'greater',
+        // value:…}` reached the predicate with an undefined bound. Measured
+        // before the fix: "greater than 10000" left 0 of 8 rows, and `contains`
+        // matched everything, so the feature looked inert rather than wrong.
         grid.setFilter(colId, v === '' ? null : {
           col: colId,
           pred: numeric
-            ? { op: 'greater', value: Number(v.replace(/[,\s£$€¥%]/g, '')) }
-            : { op: 'contains', value: v },
-        } as never)
+            ? { op: 'greater', v: Number(v.replace(/[,\s£$€¥%]/g, '')) }
+            : { op: 'contains', v },
+        })
       } else if (a === 'clear') grid.clearView()
       else if (a === 'hide') store.commit(setHidden(grid.sheet, colId, true))
       else if (a === 'freeze') {
