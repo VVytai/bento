@@ -21,7 +21,7 @@
 
 import {
   bindRefs, cellDeps, cellKey, evalCell, isFormula, recalcCells, formulaBody,
-  type CellSource,
+  translateCellFormula, shiftSheetFormulas, type CellSource,
 } from '../dash/src/cellformula.ts'
 import { isErr, type Cell, type Vec } from '../dash/src/formula.ts'
 import { parseRef } from '../dash/src/a1.ts'
@@ -215,6 +215,43 @@ const code = (v: Cell): string => (isErr(v) ? String(v) : `not an error (${JSON.
   ok(val(g, 'C1') === 7 && val(g, 'C2') === 5 && val(g, 'C3') === 10, 'line totals')
   ok(val(g, 'C4') === 22,
     'and the total sums the COMPUTED line totals, which only works if the sum runs last')
+}
+
+// ------------------------------------- moving formulas, and moving the cells
+//
+// TWO RULES, and conflating them is the classic spreadsheet bug. Copying moves
+// the FORMULA and leaves the cells; inserting moves the CELLS and leaves the
+// formula. `$` is the tell: it pins against the first and not the second.
+{
+  ok(translateCellFormula('=A1*2', 1, 0) === '=A2*2',
+    'copied one row down, a relative reference follows')
+  ok(translateCellFormula('=A1*2', 0, 1) === '=B1*2', 'and one column right')
+  ok(translateCellFormula('=$A$1*2', 5, 5) === '=$A$1*2',
+    '$ PINS against a copy — that is the whole meaning of $')
+  ok(translateCellFormula('=$A1*2', 1, 1) === '=$A2*2',
+    'and it pins per-axis: $A holds the column, the row still moves')
+  ok(translateCellFormula('12', 3, 0) === '12', 'a plain value is not a formula and does not move')
+  ok(translateCellFormula('=A1', 0, 0) === '=A1', 'a zero offset is left exactly alone')
+}
+{
+  const shift = (f: string, axis: 'row' | 'col', at: number, n: number) =>
+    shiftSheetFormulas([['k', f]], axis, at, n)[0]?.[1] ?? f
+  ok(shift('=$A$5*2', 'row', 0, 1) === '=$A$6*2',
+    'inserting a row above $A$5 moves it to $A$6 — $ does NOT pin here, because the cell itself moved')
+  ok(shift('=A5', 'row', 9, 1) === '=A5', 'a row inserted BELOW a reference leaves it alone')
+  ok(shift('=A5', 'row', 4, -1) === '=#REF!',
+    'a reference INTO a deleted row is #REF! — never the row that slid up into the gap, which would be a wrong number wearing a right one\'s clothes')
+  ok(shift('=SUM(A1:A10)', 'row', 3, -3) === '=SUM(A1:A7)',
+    'a RANGE spanning the hole shrinks: the numbers under the heading are still there, there are just fewer of them')
+  ok(shift('=B1', 'col', 0, 1) === '=C1', 'and the same on the column axis')
+}
+{
+  // the pair that proves they are different rules and not one rule twice
+  const copied = translateCellFormula('=$A$1+B2', 2, 0)
+  const shifted = shiftSheetFormulas([['k', '=$A$1+B2']], 'row', 0, 2)[0][1]
+  ok(copied === '=$A$1+B4', 'copying two rows down: $A$1 pinned, B2 followed')
+  ok(shifted === '=$A$3+B4', 'inserting two rows at the top: BOTH moved')
+  ok(copied !== shifted, 'so the two operations genuinely differ on the same input')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

@@ -33,7 +33,8 @@ import { colToLetters } from './a1.ts'
 import { t } from './i18n.ts'
 import { resizeColumn, autoFitWidth, hiddenSet, readFrozen } from './rowcol.ts'
 import {
-  cellKey, isFormula, recalcCells, type CellSource,
+  cellKey, isFormula, recalcCells, translateCellFormula, shiftSheetFormulas,
+  type CellSource,
 } from './cellformula.ts'
 
 const ROW_H = 30
@@ -121,8 +122,60 @@ export class Grid {
     this.sheetId = opts.sheetId
     this.sel = new Selection(rowCount(this.sheet), cols(this.sheet).length)
     this.build()
-    this.store.on('doc', () => { this.sel.resize(rowCount(this.sheet), cols(this.sheet).length); this.paint() })
+    this.store.on('doc', () => {
+      // A structural edit invalidates the order VECTOR: it holds row indices,
+      // and insert/delete renumber the rows underneath them. Leaving it alone
+      // left the grid drawing blanks and rows in an order matching nothing.
+      if (this.store.lastTouched.structural || this.store.lastTouched.all) this.applyView()
+      this.sel.resize(this.store.order[this.sheet.id]?.length ?? rowCount(this.sheet),
+        cols(this.sheet).length)
+      this.paint()
+    })
     this.store.on('view', () => this.paint())
+  }
+
+  /**
+   * The patch that keeps every cell formula pointing at the right cells after
+   * `count` rows or columns are inserted at canonical index `at` (removed, if
+   * negative). Returns nothing when no formula moved.
+   *
+   * This must be committed IN THE SAME step as the structural patch. Two steps
+   * would put a document on screen — and on the undo stack, and over collab —
+   * in which the rows have moved and the formulas have not, which is a workbook
+   * of wrong numbers that each look perfectly reasonable.
+   */
+  shiftFormulas(axis: 'row' | 'col', at: number, count: number): Patch[] {
+    const s = this.sheet
+    const cells = s.cells
+    if (!cells) return []
+    const pairs: Array<[string, string]> = []
+    for (const k in cells) {
+      const f = cells[k]?.f
+      if (typeof f === 'string') pairs.push([k, f])
+    }
+    const moved = shiftSheetFormulas(pairs, axis, at, count)
+    if (!moved.length) return []
+    return [{
+      op: 'setOverrides', sheet: s.id,
+      keys: moved.map(([k]) => k),
+      v: moved.map(([k, f]) => ({ ...cells[k], f })),
+    }]
+  }
+
+  /**
+   * A VISIBLE row index → the sheet's own row index.
+   *
+   * These are the same number until somebody sorts or filters, and then they
+   * are not. Every structural op in rowcol.ts takes a CANONICAL index — it has
+   * to, because a document edit cannot be expressed in one reader's view — so
+   * anything acting on "the row the user clicked" has to convert here first.
+   * It did not, and right-clicking the top row of a Value-sorted grid and
+   * choosing Delete row deleted a DIFFERENT row: measured, £22,750 selected and
+   * £12,400 destroyed, with the re-sorted view hiding the evidence.
+   */
+  canonicalRow(visible: number): number {
+    const rid = ridAt(this.store, this.sheet, visible)
+    return rid < 0 ? -1 : dataRow(this.sheet, rid)
   }
 
   /** Point the grid at a different sheet — an import adds one and shows it. */
@@ -472,18 +525,113 @@ export class Grid {
     this.writeBlock(this.sel.cursor.row, this.sel.cursor.col, [[coerceForColumn(text, c.type)]])
   }
 
+  /**
+   * The clip this grid last copied — formulas and all.
+   *
+   * The SYSTEM clipboard carries values, because that is what every other
+   * application expects to receive: paste into Numbers or a mail message and
+   * `=D1*3` is not useful there, £37,200 is. But pasting back into a
+   * spreadsheet has to preserve the formula, so the copy is remembered here and
+   * a paste whose text still MATCHES what we wrote is recognised as our own.
+   * That is how Excel and Sheets behave, and the text comparison is what makes
+   * it honest: copy something else in between and the match fails, so a stale
+   * internal clip can never be pasted in place of what the user actually
+   * copied.
+   */
+  private clip: { tsv: string; block: Array<Array<{ v: unknown; f?: string }>> } | null = null
+
   copyTsv(): string {
     const b = this.sel.bounds()
-    return tsvFromRange((r, c) => this.valueAt(r, c),
+    const tsv = tsvFromRange((r, c) => this.valueAt(r, c),
       { anchor: { row: b.top, col: b.left }, head: { row: b.bottom, col: b.right } } as Range)
+    const s = this.sheet
+    const block: Array<Array<{ v: unknown; f?: string }>> = []
+    for (let r = b.top; r <= b.bottom; r++) {
+      const line: Array<{ v: unknown; f?: string }> = []
+      for (let c = b.left; c <= b.right; c++) {
+        const col = cols(s)[c]
+        const dr = dataRow(s, ridAt(this.store, s, r))
+        line.push({
+          v: this.valueAt(r, c),
+          f: col ? this.formulaAtPos(dr, s.columns.findIndex((x) => x.id === col.id)) : undefined,
+        })
+      }
+      block.push(line)
+    }
+    this.clip = { tsv, block }
+    this.clipTop = dataRow(s, ridAt(this.store, s, b.top))
+    this.clipLeft = s.columns.findIndex((x) => x.id === cols(s)[b.left]?.id)
+    return tsv
   }
 
   pasteTsv(text: string): void {
+    const cur = this.sel.cursor
+    // our own clip, still intact on the system clipboard? then formulas ride
+    // along, TRANSLATED by how far the block moved
+    if (this.clip && this.clip.tsv === text) {
+      this.writeClip(cur.row, cur.col, this.clip.block)
+      return
+    }
     const grid = parseTsv(text)
     if (!grid.length) return
-    const cur = this.sel.cursor
     this.writeBlock(cur.row, cur.col, grid)
   }
+
+  /**
+   * Paste a remembered block, translating each formula by the offset it moved.
+   *
+   * The offset is measured in CANONICAL positions, not visible ones: A1
+   * addresses name the document, so a block copied and pasted while a sort is
+   * on must shift by the distance the cells actually moved, not by the distance
+   * they appear to have moved.
+   */
+  private writeClip(
+    row: number, ci: number, block: Array<Array<{ v: unknown; f?: string }>>,
+  ): void {
+    const s = this.sheet
+    const vis = cols(s)
+    const srcTop = this.clipTop ?? row
+    const srcLeft = this.clipLeft ?? ci
+    const patches: Patch[] = []
+    const byCol = new Map<string, { rids: number[]; v: unknown[] }>()
+    const keys: string[] = []
+    const overs: Array<Record<string, unknown> | null> = []
+    block.forEach((line, dr) => {
+      line.forEach((cellv, dc) => {
+        const c = vis[ci + dc]
+        if (!c || c.formula) return
+        const rid = ridAt(this.store, s, row + dr)
+        if (rid < 0) return
+        const key = `${c.id}:${rid}`
+        if (cellv.f !== undefined) {
+          const dRow = dataRow(s, rid) - (srcTop + dr)
+          const dColIdx = s.columns.findIndex((x) => x.id === c.id) - (srcLeft + dc)
+          keys.push(key)
+          overs.push({ ...(s.cells?.[key] ?? {}), f: translateCellFormula(cellv.f, dRow, dColIdx) })
+        } else {
+          const e = byCol.get(c.id) ?? { rids: [], v: [] }
+          e.rids.push(rid); e.v.push(cellv.v)
+          byCol.set(c.id, e)
+          // pasting a plain value over a formula cell must REMOVE the formula
+          const had = s.cells?.[key]
+          if (had?.f !== undefined) {
+            const { f: _f, ...rest } = had
+            keys.push(key)
+            overs.push(Object.keys(rest).length ? rest : null)
+          }
+        }
+      })
+    })
+    for (const [col, e] of byCol) patches.push({ op: 'setCells', sheet: s.id, col, rids: e.rids, v: e.v })
+    if (keys.length) {
+      patches.push({ op: 'setOverrides', sheet: s.id, keys, v: overs as never, dropEmpty: true })
+    }
+    if (patches.length) this.store.commit(patches)
+  }
+
+  /** Canonical top-left of the remembered clip, for measuring the paste offset. */
+  private clipTop: number | null = null
+  private clipLeft: number | null = null
 
   /** Fill the selection down from its first row, continuing a series if there is one. */
   fillDownSelection(): void {

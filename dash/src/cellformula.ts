@@ -39,7 +39,10 @@
 // answer on every recalculation and nobody can tell which one was right.
 
 import { evaluate, isErr, FormulaError, type Cell, type Vec } from './formula.ts'
-import { expandRange, formatRef, mapRefs, REF_ERR, type CellRef } from './a1.ts'
+import {
+  expandRange, formatRef, mapRefs, rewriteFormulaRefs, shiftRefsForInsert,
+  REF_ERR, type CellRef,
+} from './a1.ts'
 
 /**
  * The sheet as a plain grid of positions, so this module never has to know
@@ -247,3 +250,53 @@ export const displayCell = (v: Cell): string =>
   v === null || v === undefined ? '' : isErr(v) ? String(v) : String(v)
 
 export const _internals = { formatRef, ERR_REF, ERR_BIG, ERR_CYCLE }
+
+// --- keeping references pointing at the right cells --------------------------
+//
+// The two halves of the problem a1.ts's header sets out, wired to the two
+// events that cause them. They are DIFFERENT rules and the difference is the
+// thing people get wrong:
+//
+//   COPY/FILL   the formula moved, the cells did not. References move WITH it,
+//               except the `$`-pinned ones. `=A1*2` copied a row down is
+//               `=A2*2` — that is the whole point of copying a formula.
+//   INSERT/DEL  the CELLS moved, the formula did not. Every reference moves,
+//               `$` included, because the cell it names physically moved. A
+//               reference INTO a deleted row becomes `#REF!`, never the row
+//               that slid up into the gap — a reference silently re-pointed at
+//               someone else's data is a wrong number wearing a right one's
+//               clothes.
+
+/**
+ * A formula moved by (dRow, dCol) — copy, paste and fill.
+ *
+ * Returns the source unchanged when it holds no references, so a workbook of
+ * constants pays nothing.
+ */
+export function translateCellFormula(src: string, dRow: number, dCol: number): string {
+  if (!isFormula(src) || (dRow === 0 && dCol === 0)) return src
+  return `=${rewriteFormulaRefs(formulaBody(src), dRow, dCol)}`
+}
+
+/**
+ * Every cell formula in a sheet, rewritten because `count` rows or columns were
+ * inserted at 0-based index `at` (or removed, when `count` is negative).
+ *
+ * Returns the keys whose source CHANGED, and their new text. Rewriting the
+ * unchanged ones too would work and would also put the whole sheet's formulas
+ * into one undo step's inverse for an edit that touched three of them.
+ */
+export function shiftSheetFormulas(
+  formulas: Iterable<[string, string]>,
+  axis: 'row' | 'col',
+  at: number,
+  count: number,
+): Array<[string, string]> {
+  const out: Array<[string, string]> = []
+  for (const [key, src] of formulas) {
+    if (!isFormula(src)) continue
+    const next = `=${shiftRefsForInsert(formulaBody(src), axis, at, count)}`
+    if (next !== src) out.push([key, next])
+  }
+  return out
+}

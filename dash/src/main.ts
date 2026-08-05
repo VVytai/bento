@@ -336,10 +336,17 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   })
   document.addEventListener('paste', (e) => {
     if ((e.target as HTMLElement)?.isContentEditable) return
+    const target = e.target as HTMLElement | null
+    if (target && target.tagName === 'INPUT') return
     const text = e.clipboardData?.getData('text/plain')
-    if (!text || !/[,;\t]/.test(text.split('\n')[0] ?? '')) return
+    if (!text) return
     e.preventDefault()
-    applyImport(store, findingsEl, grid, text, 'pasted')
+    // INTO THE CELLS, at the cursor — the gesture every spreadsheet has.
+    // This used to route every pasted block into the CSV importer, so ⌘V
+    // created a whole new sheet instead of filling the selection, and
+    // `grid.pasteTsv` sat there with no callers at all. Importing a file is
+    // what the Import button is for; ⌘V is paste.
+    grid.pasteTsv(text)
   })
 
   async function doSave(): Promise<void> {
@@ -630,14 +637,29 @@ function openCellMenu(store: Store, grid: Grid, row: number, ci: number, x: numb
   el.querySelectorAll<HTMLElement>('button').forEach((b) => {
     b.onclick = () => {
       const a = b.dataset.a
-      if (a === 'irow-above') store.commit(insertRowsAt(sheet, row, 1))
-      else if (a === 'irow-below') store.commit(insertRowsAt(sheet, row + 1, 1))
-      else if (a === 'drow') store.commit(deleteRowsAt(sheet, row, 1))
-      else if (a === 'icol') {
+      // `row` is a VISIBLE index and every structural op takes a canonical
+      // one. They differ the moment somebody sorts, and passing the wrong one
+      // deletes the wrong row — silently, because the view re-sorts over the
+      // evidence. Each edit also carries the reference shift for the cell
+      // formulas, in the SAME commit: a document where the rows have moved and
+      // the formulas have not is a workbook of plausible wrong numbers.
+      const at = grid.canonicalRow(row)
+      if (a === 'irow-above') {
+        store.commit([...insertRowsAt(sheet, at, 1), ...grid.shiftFormulas('row', at, 1)])
+      } else if (a === 'irow-below') {
+        store.commit([...insertRowsAt(sheet, at + 1, 1), ...grid.shiftFormulas('row', at + 1, 1)])
+      } else if (a === 'drow') {
+        store.commit([...deleteRowsAt(sheet, at, 1), ...grid.shiftFormulas('row', at, -1)])
+      } else if (a === 'icol') {
         const name = window.prompt(t('Column name'), t('New column')) || t('New column')
         const id = `c-${Math.floor(Date.now() % 1e8).toString(36)}`
-        store.commit(insertColumn(sheet, ci + 1, { id, name, type: 'text' }))
-      } else if (a === 'dcol' && col) store.commit(deleteColumn(sheet, col.id))
+        const cAt = sheet.columns.findIndex((c) => c.id === col?.id) + 1
+        store.commit([...insertColumn(sheet, cAt, { id, name, type: 'text' }),
+          ...grid.shiftFormulas('col', cAt, 1)])
+      } else if (a === 'dcol' && col) {
+        const cAt = sheet.columns.findIndex((c) => c.id === col.id)
+        store.commit([...deleteColumn(sheet, col.id), ...grid.shiftFormulas('col', cAt, -1)])
+      }
       else if (a === 'fill') grid.fillDownSelection()
       else if (a === 'clear') grid.clearSelection()
       else if (col && (a === 'cf-scale' || a === 'cf-bar' || a === 'cf-off')) {
