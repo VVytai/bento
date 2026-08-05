@@ -1014,3 +1014,8 @@ html, body {
 }
 .dg-head-row .dg-corner { padding: 0; }
 .dx-pop-on { color: var(--accent); font-weight: 600; }
+
+/* The ruled empty space past the last row — see grid.ts paintEmptyGrid. The
+   inner table must fill the scroller for the lattice to reach the bottom when
+   there are only a few rows, which is exactly the case it exists for. */
+.dg-table { min-height: 100%; }

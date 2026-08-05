@@ -538,7 +538,12 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   // boot — grid, panels, everything — and left only the panel markup behind,
   // with nothing in the console because nothing threw.
   const peopleEl = document.createElement('div')
-  app.querySelector('.dx-bar')!.appendChild(peopleEl)
+  // INSIDE the right-hand group, not after it. The bar's end group is what the
+  // responsive ladder measures and collapses; anything appended after it sits
+  // outside that arithmetic and pushes the whole toolbar — Save included —
+  // straight off the screen again.
+  const barEnd = app.querySelector<HTMLElement>('.dx-bar-end') ?? app.querySelector<HTMLElement>('.dx-bar')!
+  barEnd.insertBefore(peopleEl, barEnd.firstChild)
   mountPeople(peopleEl, sync, store)
   mountAbout(app, aboutHooks)
   // …and an EXPLICIT way in. mountAbout only arms the wordmark and the version

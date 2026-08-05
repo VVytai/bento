@@ -447,6 +447,7 @@ export class Grid {
             `data-col="${c.id}" data-ci="${ci}" style="${fz.st}${st}">${bar}<span class="dg-v">${esc(shown)}</span></div>`
         }).join('') + '</div>')
     }
+    this.paintEmptyGrid()
     this.head.innerHTML = this.header()
     this.table.innerHTML = body.join('') + this.outline()
     this.foot.innerHTML = this.totalsRow()
@@ -521,6 +522,52 @@ export class Grid {
     if (ci < 0) return undefined
     const k = cellKey(row, ci)
     return this.cellValues.has(k) ? this.cellValues.get(k) : undefined
+  }
+
+  /**
+   * Rule the EMPTY space past the last row and the last column.
+   *
+   * A spreadsheet's grid does not stop where the data stops — Excel and Sheets
+   * both rule the whole window, and that continuing lattice is a good part of
+   * what makes a grid read as a sheet rather than as a table someone put on a
+   * web page. dash drew rows only where rows existed, so an eight-row workbook
+   * ended in a large white rectangle.
+   *
+   * Painted as a BACKGROUND on the scrolling element rather than as filler
+   * rows: empty rows would be real DOM, would have to be virtualised, and would
+   * be selectable and editable — a grid you can type into a thousand rows below
+   * your data is a different product decision, and not one to make by accident.
+   * The background costs nothing and cannot be clicked.
+   *
+   * It lives on `.dg-table`, which scrolls WITH the content, so the lines stay
+   * aligned to the rows. `background-position` steps it down past the header,
+   * which is in normal flow above the sizer.
+   */
+  private paintEmptyGrid(): void {
+    const vis = cols(this.sheet)
+    const line = 'var(--grid-line, #edf0f4)'
+    // vertical rules at each column boundary, starting after the gutter
+    const stops: string[] = []
+    let x = GUTTER_W
+    stops.push(`transparent 0 ${x - 1}px`, `${line} ${x - 1}px ${x}px`)
+    for (const c of vis) {
+      const w = c.w ?? 130
+      stops.push(`transparent ${x}px ${x + w - 1}px`, `${line} ${x + w - 1}px ${x + w}px`)
+      x += w
+    }
+    const headH = ROW_H + 20
+    this.table.parentElement!.style.backgroundImage =
+      `repeating-linear-gradient(to bottom, transparent 0 ${ROW_H - 1}px, ${line} ${ROW_H - 1}px ${ROW_H}px),` +
+      `linear-gradient(to right, ${stops.join(',')}, transparent ${x}px)`
+    this.table.parentElement!.style.backgroundPosition = `0 ${headH}px, 0 0`
+    // The ruled area is exactly as WIDE as the sheet. Excel rules to the window
+    // edge because its columns go on forever; dash's do not, and ruling past
+    // the last one draws cells that cannot be typed into. So the row rules tile
+    // down within the sheet's width and stop, and past the final column is
+    // plain background — which is the truthful answer to "is there anything
+    // over there".
+    this.table.parentElement!.style.backgroundSize = `${x}px auto, auto auto`
+    this.table.parentElement!.style.backgroundRepeat = 'repeat-y, repeat-y'
   }
 
   /** Value at a VISIBLE position — what the clipboard and the status bar read. */
