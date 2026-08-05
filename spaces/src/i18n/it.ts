@@ -212,4 +212,7 @@ export const it: Catalog = {
   "Unsaved changes — ⌘S downloads an updated copy": "Modifiche non salvate — ⌘S scarica una copia aggiornata",
   "format v{v}": "formato v{v}",
   "Visit bento.page (opens in a new tab)": "Vai su bento.page (si apre in una nuova scheda)",
+  "Drag to resize · double-click to reset": "Trascina per ridimensionare · doppio clic per reimpostare",
+  "Show the page list ([)": "Mostra l'elenco delle pagine ([)",
+  "Hide the page list ([)": "Nascondi l'elenco delle pagine ([)",
 }

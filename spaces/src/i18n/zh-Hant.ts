@@ -212,4 +212,7 @@ export const zh_Hant: Catalog = {
   "Unsaved changes — ⌘S downloads an updated copy": "未儲存的變更 — ⌘S 會下載更新後的副本",
   "format v{v}": "格式 v{v}",
   "Visit bento.page (opens in a new tab)": "造訪 bento.page（在新分頁開啟）",
+  "Drag to resize · double-click to reset": "拖曳可調整寬度 · 雙擊還原預設",
+  "Show the page list ([)": "顯示頁面清單（[）",
+  "Hide the page list ([)": "隱藏頁面清單（[）",
 }

@@ -212,4 +212,7 @@ export const ja: Catalog = {
   "Unsaved changes — ⌘S downloads an updated copy": "未保存の変更 — ⌘S で更新版をダウンロードします",
   "format v{v}": "フォーマット v{v}",
   "Visit bento.page (opens in a new tab)": "bento.page を開く（新しいタブ）",
+  "Drag to resize · double-click to reset": "ドラッグで幅を変更 · ダブルクリックで既定に戻す",
+  "Show the page list ([)": "ページ一覧を表示（[）",
+  "Hide the page list ([)": "ページ一覧を隠す（[）",
 }

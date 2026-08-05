@@ -71,6 +71,12 @@ export class Editor {
   private readB: HTMLButtonElement | null = null
   private redoB!: HTMLButtonElement
   private dirtyDot!: HTMLElement
+  private paneTab: HTMLButtonElement | null = null
+  private static readonly PANE_MIN = 150
+  private static readonly PANE_MAX = 420
+  private static readonly PANE_DEFAULT = 244
+  private paneW = Editor.PANE_DEFAULT
+  private paneClosed = false
   onSave: (() => void) | null = null
   onSaveAs: ((suffix: string) => void) | null = null
   onPrint: (() => void) | null = null
@@ -78,7 +84,14 @@ export class Editor {
   constructor(root: HTMLElement, store: Store) {
     this.root = root
     this.store = store
+    // the reader's panel, restored — never the document's
+    try {
+      const w = Number(localStorage.getItem('bento-sp-pane'))
+      if (Number.isFinite(w) && w > 0) this.paneW = Math.min(Editor.PANE_MAX, Math.max(Editor.PANE_MIN, w))
+      this.paneClosed = localStorage.getItem('bento-sp-pane-closed') === '1'
+    } catch { /* storage throws on a locked-down origin; the defaults are fine */ }
     this.build()
+    if (this.paneClosed) this.sidebar.classList.add('sp-pane-closed')
     this.store.on('tree', () => this.paintTree())
     this.store.on('page', () => { this.paintPage(); this.paintTree() })
     this.store.on('doc', () => { this.status(t('Edited')); this.syncHistoryButtons(); this.syncDirty() })
@@ -232,8 +245,10 @@ export class Editor {
     this.main = el('main', 'sp-main')
 
     const body = el('div', 'sp-body')
-    body.append(this.sidebar, this.main)
+    body.append(this.sidebar, this.makeResizer(), this.main)
     this.root.append(bar, body)
+    this.applyPaneWidth()
+    this.syncPaneChevron()
 
     this.paintTree()
     this.paintPage()
@@ -332,7 +347,94 @@ export class Editor {
   }
 
   /** Open/close the page drawer on narrow screens, with a scrim to tap away. */
+  /**
+   * The strip between the page list and the page: drag to resize, chevron to
+   * collapse, double-click to reset. Slides' pattern, and its reasoning — the
+   * control that hides a panel belongs ON the panel's edge, where you are
+   * already looking, not in a toolbar across the room.
+   *
+   * The width is the reader's, so it lives in localStorage, never the document.
+   */
+  private makeResizer(): HTMLElement {
+    const handle = el('div', 'sp-resizer')
+    handle.title = t('Drag to resize · double-click to reset')
+
+    const tab = document.createElement('button')
+    tab.className = 'sp-pane-tab'
+    tab.type = 'button'
+    tab.addEventListener('click', (e) => { e.stopPropagation(); this.togglePane() })
+    this.paneTab = tab
+    handle.append(tab)
+
+    handle.addEventListener('mousedown', (down) => {
+      if (down.target === tab) return          // the chevron is a click, not a drag
+      if (this.paneClosed) return
+      down.preventDefault()
+      const startX = down.clientX
+      const startW = this.paneW
+      this.sidebar.classList.add('sp-noanim')
+      document.body.classList.add('sp-col-resizing')
+      const move = (ev: MouseEvent) => {
+        // clientX is physical; which way widens depends on the edge the panel
+        // is docked to, and RTL swaps that over.
+        const dx = ev.clientX - startX
+        const widens = document.dir === 'rtl' ? -dx : dx
+        this.paneW = Math.min(Editor.PANE_MAX, Math.max(Editor.PANE_MIN, startW + widens))
+        this.applyPaneWidth()
+      }
+      const up = () => {
+        window.removeEventListener('mousemove', move)
+        window.removeEventListener('mouseup', up)
+        this.sidebar.classList.remove('sp-noanim')
+        document.body.classList.remove('sp-col-resizing')
+        try { localStorage.setItem('bento-sp-pane', String(this.paneW)) } catch { /* storage can throw */ }
+      }
+      window.addEventListener('mousemove', move)
+      window.addEventListener('mouseup', up)
+    })
+
+    handle.addEventListener('dblclick', () => {
+      this.paneW = Editor.PANE_DEFAULT
+      this.applyPaneWidth()
+      try { localStorage.setItem('bento-sp-pane', String(this.paneW)) } catch { /* storage can throw */ }
+    })
+    return handle
+  }
+
+  private applyPaneWidth(): void {
+    this.sidebar.style.setProperty('--sp-panew', `${this.paneW}px`)
+  }
+
+  private syncPaneChevron(): void {
+    if (!this.paneTab) return
+    // points the way it will MOVE the panel, which is the only thing a chevron
+    // can usefully mean
+    const rtl = document.dir === 'rtl'
+    const closing = this.paneClosed !== rtl
+    this.paneTab.innerHTML = closing ? ICONS.chevronRight : ICONS.chevronLeft
+    this.paneTab.title = this.paneClosed ? t('Show the page list ([)') : t('Hide the page list ([)')
+    this.paneTab.setAttribute('aria-label', this.paneTab.title)
+    this.paneTab.setAttribute('aria-expanded', String(!this.paneClosed))
+  }
+
+  /** Collapse or restore the page list. On a phone it is a drawer instead. */
+  togglePane(force?: boolean): void {
+    if (this.isDrawer()) { this.toggleSidebar(force); return }
+    this.paneClosed = force !== undefined ? !force : !this.paneClosed
+    this.sidebar.classList.toggle('sp-pane-closed', this.paneClosed)
+    this.syncPaneChevron()
+    try { localStorage.setItem('bento-sp-pane-closed', this.paneClosed ? '1' : '0') } catch { /* storage can throw */ }
+  }
+
+  private isDrawer(): boolean {
+    return window.matchMedia('(max-width: 820px)').matches
+  }
+
   private toggleSidebar(force?: boolean): void {
+    // Below the drawer breakpoint the panel is an overlay, not a column: the
+    // page needs the whole width, so collapsing to a 0px column would leave
+    // nothing to reopen it from.
+    if (!this.isDrawer()) { this.togglePane(force); return }
     const open = force ?? !this.sidebar.classList.contains('sp-open')
     this.sidebar.classList.toggle('sp-open', open)
     document.querySelector('.sp-scrim')?.remove()
@@ -975,6 +1077,10 @@ export class Editor {
     if (mod && e.key.toLowerCase() === 'p') { e.preventDefault(); this.openPrint(); return }
     if (mod && e.key.toLowerCase() === 'f') { e.preventDefault(); this.openFind(); return }
     if (mod && e.altKey && e.key.toLowerCase() === 'n') { e.preventDefault(); this.newPage(); return }
+    // `[` collapses the page list, as in slides. Bare, not modified: it only
+    // reaches here when nothing is being edited (the text path returns above,
+    // where `[` is the page-link trigger).
+    if (!mod && e.key === '[') { e.preventDefault(); this.togglePane(); return }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       if (e.shiftKey) s.redo(); else s.undo()

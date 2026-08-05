@@ -999,5 +999,39 @@ for (const [label, input, err] of [
     'markdown export quotes each LINE of a multi-line block')
 }
 
+// ---- the side panel behaves the way slides' does ---------------------------
+// Two apps in one suite should not teach two different panels. The control that
+// hides a panel belongs on the panel's own EDGE, and it must be visible without
+// hovering — the first version faded in on hover, so the way to hide the panel
+// was invisible until you happened to pass over a 5px strip.
+{
+  const fsp = await import('node:fs')
+  const ed = fsp.readFileSync(new URL('../spaces/src/editor.ts', import.meta.url), 'utf8')
+  const css = fsp.readFileSync(new URL('../spaces/src/styles.css', import.meta.url), 'utf8')
+  const ic = fsp.readFileSync(new URL('../spaces/src/icons.ts', import.meta.url), 'utf8')
+
+  ok(/makeResizer\(\)/.test(ed), 'the page list has a resizer strip')
+  ok(/col-resize/.test(css), '…that resizes')
+  ok(/dblclick[\s\S]{0,200}PANE_DEFAULT/.test(ed), '…double-click resets it to the default width')
+  ok(/PANE_MIN[\s\S]{0,400}PANE_MAX/.test(ed) || /Math\.min\(Editor\.PANE_MAX/.test(ed),
+    '…and the width is clamped')
+  ok(/localStorage\.setItem\('bento-sp-pane'/.test(ed),
+    'the width is the READER\'s — localStorage, never the document')
+
+  ok(/sp-pane-tab/.test(css) && /sp-pane-closed/.test(css), 'the panel collapses from a tab on the strip')
+  const tabRule = css.slice(css.indexOf('.sp-pane-tab {'), css.indexOf('}', css.indexOf('.sp-pane-tab {')))
+  ok(!/opacity:\s*0\b/.test(tabRule), 'the collapse chevron is visible without hovering')
+  ok(/\.sp-side\.sp-pane-closed \+ \.sp-resizer \.sp-pane-tab/.test(css),
+    '…and stays reachable when the panel is closed, docked to the edge')
+
+  // the drawer breakpoint keeps its overlay behaviour: a 0px column on a phone
+  // would leave nothing to reopen from
+  ok(/isDrawer\(\)[\s\S]{0,120}max-width: 820px/.test(ed), 'below 820px the panel is a drawer, not a column')
+
+  // the suite's undo/redo, not a circular arrow that reads as "reload"
+  ok(/M9 14 4 9l5-5/.test(ic) && /m15 14 5-5-5-5/.test(ic),
+    'undo/redo use the suite\'s glyphs')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

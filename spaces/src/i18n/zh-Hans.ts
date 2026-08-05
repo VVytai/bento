@@ -212,4 +212,7 @@ export const zh_Hans: Catalog = {
   "Unsaved changes — ⌘S downloads an updated copy": "未保存的更改 — ⌘S 会下载更新后的副本",
   "format v{v}": "格式 v{v}",
   "Visit bento.page (opens in a new tab)": "访问 bento.page（在新标签页打开）",
+  "Drag to resize · double-click to reset": "拖动可调整宽度 · 双击恢复默认",
+  "Show the page list ([)": "显示页面列表（[）",
+  "Hide the page list ([)": "隐藏页面列表（[）",
 }
