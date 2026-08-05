@@ -430,14 +430,11 @@ real hole rather than a stylistic one.
    see undo/redo, because those apply inverses through a private method. Today
    undo/redo therefore fall back to broadcasting a whole state snapshot:
    correct, and much heavier than the two ops it replaces.
-2. **`insertRows` must clamp the write, not just the splice.** `applyPatch`
-   splices `rids` and the column arrays at `at` (which `Array.splice` clamps)
-   and then writes the value at the RAW index, so an `at` past the end leaves a
-   hole and a column one entry longer than the sheet has rows. Reachable
-   exactly under collab: undo of a row delete carries the positions the rows
-   had, and a collaborator may have removed rows since. `writeCell(d,
-   Math.min(at, len), v)` fixes it; `committable()` refuses such patches
-   meanwhile.
+2. ~~**`insertRows` must clamp the write.**~~ **DONE.** `applyPatch` clamps the
+   write index to the splice position, so an `at` past the end no longer leaves
+   a hole and a column longer than the sheet has rows. It was reachable without
+   collab too — `window.bento.commit` is a public API.
+
 3. **`deleteRows` should take the row's overrides with it**, as
    `rowcol.deleteRowsAt` does. The inverse of `insertRows` is a bare
    `deleteRows`, so undoing an insert orphans any override added to the row in
