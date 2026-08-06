@@ -1049,16 +1049,21 @@ function mutantEngine(M: CrdtModule, name: MutantName): Engine {
   return {
     label: `mutant:${name}`,
     SyncState: Cls,
-    // crdt.ts's `static fromJSON` constructs `new SyncState(actor)` literally —
-    // not `new this(actor)` — so a subclass cannot be produced through it, and
-    // this returned an UNMUTATED engine. Every scenario that round-trips state
-    // therefore tested the baseline against itself while reporting mutant
-    // coverage, which is the one lie a self-test must not tell.
+    // `static fromJSON` used to construct `new SyncState(actor)` literally, so
+    // a subclass could not be produced through it and this returned an
+    // UNMUTATED engine — every scenario that round-trips state tested the
+    // baseline against itself while reporting mutant coverage, which is the
+    // one lie a self-test must not tell. The workaround was to re-point the
+    // prototype, a harness liberty taken only because that step's acceptance
+    // criterion was an empty product diff.
     //
-    // Re-pointing the prototype is a test-harness liberty, taken here rather
-    // than changing one word in the shipped engine: this step's whole
-    // acceptance criterion is that `git diff slides/ kernel/ server/` is empty.
+    // The engine now says `new this(actor)`, so a mutant restores as itself
+    // and the liberty is gone. The FROZEN BASELINE still has the old literal
+    // construction, which is exactly why this falls back rather than assuming:
+    // a mutant built on the baseline still needs the prototype repointed.
     fromJSON: (a, j) => {
+      const made = (Cls as { fromJSON?: (a: string, j: StateJSON) => unknown }).fromJSON?.(a, j)
+      if (made && Object.getPrototypeOf(made) === Cls.prototype) return made as EngineState
       const base = M.SyncState.fromJSON(a, j)
       Object.setPrototypeOf(base, Cls.prototype)
       return base as unknown as EngineState

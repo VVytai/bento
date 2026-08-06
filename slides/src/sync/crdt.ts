@@ -93,15 +93,11 @@ const shape = (parents: string, children: string): DocShape => {
 
 export const SLIDES_SHAPE = shape('slides', 'elements')
 
-/** The shape this module is bound to. Becomes a constructor argument in the
- *  next step; today it is exactly what the file hardcoded before. */
-const S: DocShape = SLIDES_SHAPE
-
 /** The parent array of a document, and the child array of a parent. Indexed
  *  access through the descriptor: `d['slides']` is the same lookup `d.slides`
  *  was, so these are byte-neutral by construction. */
-const P = (d: BentoDoc): Slide[] => (d as unknown as Record<string, Slide[]>)[S.parents]
-const C = (p: Slide): SlideElement[] => (p as unknown as Record<string, SlideElement[]>)[S.children]
+const P = (S: DocShape, d: BentoDoc): Slide[] => (d as unknown as Record<string, Slide[]>)[S.parents]
+const C = (S: DocShape, p: Slide): SlideElement[] => (p as unknown as Record<string, SlideElement[]>)[S.children]
 /**
  * …and the write-back form for the child array.
  *
@@ -110,7 +106,7 @@ const C = (p: Slide): SlideElement[] => (p as unknown as Record<string, SlideEle
  * future edit that reassigns it would be replacing the array the caller's
  * document still points at.
  */
-const setC = (p: Slide, v: SlideElement[]): void => { (p as unknown as Record<string, SlideElement[]>)[S.children] = v }
+const setC = (S: DocShape, p: Slide, v: SlideElement[]): void => { (p as unknown as Record<string, SlideElement[]>)[S.children] = v }
 
 export const DOC_NODE = '@doc'
 
@@ -314,7 +310,11 @@ export interface ApplyResult {
 
 const clone = <T>(v: T): T => (v === undefined ? v : JSON.parse(JSON.stringify(v)))
 
-export class SyncState {
+/**
+ * The engine, shape-injected. Not exported as the app-facing name — see
+ * `SyncState` below.
+ */
+export class SyncEngine {
   actor: string
   lamport = 0
   /** per-actor max contiguous sequence applied */
@@ -334,8 +334,14 @@ export class SyncState {
   /** out-of-order ops per actor awaiting their gap to fill */
   private gap: Record<string, Op[]> = {}
 
-  constructor(actor: string) {
+  /** The document shape. NO DEFAULT, deliberately: a default is how a spaces
+   *  call site silently gets slides' shape and corrupts a room that then has
+   *  no way to be repaired in the field. */
+  readonly S: DocShape
+
+  constructor(actor: string, shape: DocShape) {
     this.actor = actor
+    this.S = shape
   }
 
   /** actors with buffered out-of-order ops → catch-up should be requested */
@@ -366,8 +372,17 @@ export class SyncState {
     }
   }
 
-  static fromJSON(actor: string, j: SyncStateJSON): SyncState {
-    const s = new SyncState(actor)
+  /**
+   * `new this(actor)`, not `new SyncState(actor)`.
+   *
+   * The literal construction meant a SUBCLASS could not be produced through
+   * fromJSON — it silently handed back the base class. That is why
+   * scripts/test-sync-equiv.ts re-points prototypes to build its mutants, a
+   * harness liberty its own comment flags; with this, a mutant (and every
+   * app binding) restores as itself.
+   */
+  static fromJSON<T extends SyncEngine>(this: new (actor: string) => T, actor: string, j: SyncStateJSON): T {
+    const s = new this(actor)
     if (j.v !== SYNC_V) return s // pre-v2 state keyed elements by bare id — unusable
     s.lamport = j.lamport
     s.vv = j.vv ?? {}
@@ -397,11 +412,11 @@ export class SyncState {
    * keys) with the null register [0,''] that loses to every real op.
    */
   adopt(doc: BentoDoc) {
-    const ns = P(doc).length
-    P(doc).forEach((sl, i) => {
+    const ns = P(this.S, doc).length
+    P(this.S, doc).forEach((sl, i) => {
       if (!this.pos[sl.id]) this.pos[sl.id] = { p: DOC_NODE, o: spreadKey(i, ns), r: [0, ''] }
-      const ne = C(sl).length
-      C(sl).forEach((el, j) => {
+      const ne = C(this.S, sl).length
+      C(this.S, sl).forEach((el, j) => {
         const k = elKey(sl.id, el.id)
         if (!this.pos[k]) this.pos[k] = { p: sl.id, o: spreadKey(j, ne), r: [0, ''] }
       })
@@ -423,7 +438,7 @@ export class SyncState {
     }
 
     // ---- doc-level props
-    const SKIP_DOC = S.skipDoc
+    const SKIP_DOC = this.S.skipDoc
     const b = before as unknown as Record<string, unknown>
     const a = after as unknown as Record<string, unknown>
     for (const k of new Set([...Object.keys(b), ...Object.keys(a)])) {
@@ -453,30 +468,30 @@ export class SyncState {
     // ---- slides by id; elements by COMPOSITE key (slide + bare id) — the
     // same element id on many slides is the morph idiom, each copy is its
     // own node. A cross-slide move therefore diffs as del(old)+ins(new).
-    const bSlides = new Map(P(before).map((s) => [s.id, s]))
-    const aSlides = new Map(P(after).map((s) => [s.id, s]))
+    const bSlides = new Map(P(this.S, before).map((s) => [s.id, s]))
+    const aSlides = new Map(P(this.S, after).map((s) => [s.id, s]))
     const bEls = new Map<string, { sl: string; el: SlideElement }>()
     const aEls = new Map<string, { sl: string; el: SlideElement }>()
-    P(before).forEach((s) => C(s).forEach((el) => bEls.set(elKey(s.id, el.id), { sl: s.id, el })))
-    P(after).forEach((s) => C(s).forEach((el) => aEls.set(elKey(s.id, el.id), { sl: s.id, el })))
+    P(this.S, before).forEach((s) => C(this.S, s).forEach((el) => bEls.set(elKey(s.id, el.id), { sl: s.id, el })))
+    P(this.S, after).forEach((s) => C(this.S, s).forEach((el) => aEls.set(elKey(s.id, el.id), { sl: s.id, el })))
 
     // deleted slides (cascade the elements the deleter saw, minus survivors)
     for (const [id, sl] of bSlides) {
       if (aSlides.has(id)) continue
-      const cas = C(sl).map((e) => elKey(id, e.id)).filter((k) => !aEls.has(k))
+      const cas = C(this.S, sl).map((e) => elKey(id, e.id)).filter((k) => !aEls.has(k))
       const o = push<DelOp>({ ...this.stamp(), op: 'del', kind: 'slide', id, cas })
       this.tombs[id] = [o.l, o.a]
       this.stashNode(sl as unknown as Record<string, unknown>, id)
       cas.forEach((ek) => {
         this.tombs[ek] = [o.l, o.a]
-        const node = C(sl).find((e) => elKey(id, e.id) === ek)
+        const node = C(this.S, sl).find((e) => elKey(id, e.id) === ek)
         if (node) this.stashNode(node as unknown as Record<string, unknown>, ek)
         delete this.limbo[ek]
         delete this.txt[ek] // local tomb is the freshest stamp — always out-ranks
       })
     }
     // inserted (or resurrected) slides
-    const afterIds = P(after).map((s) => s.id)
+    const afterIds = P(this.S, after).map((s) => s.id)
     for (let i = 0; i < afterIds.length; i++) {
       const id = afterIds[i]
       if (bSlides.has(id)) continue
@@ -487,8 +502,8 @@ export class SyncState {
       this.pos[id] = { p: DOC_NODE, o: ord, r: [o.l, o.a] }
       delete this.txt[id]
       delete this.stash[id] // fresh birth voids parked values (receivers do this in replayStash)
-      const ne = C(sl).length
-      C(sl).forEach((el, j) => {
+      const ne = C(this.S, sl).length
+      C(this.S, sl).forEach((el, j) => {
         const k = elKey(id, el.id)
         this.births[k] = [o.l, o.a]
         this.pos[k] = { p: id, o: spreadKey(j, ne), r: [o.l, o.a] }
@@ -503,7 +518,7 @@ export class SyncState {
       const bp = prev as unknown as Record<string, unknown>
       const ap = sl as unknown as Record<string, unknown>
       for (const k of new Set([...Object.keys(bp), ...Object.keys(ap)])) {
-        if (k === S.children || k === 'id') continue
+        if (k === this.S.children || k === 'id') continue
         if (JSON.stringify(bp[k]) === JSON.stringify(ap[k])) continue
         const o = push<SetOp>({ ...this.stamp(), op: 'set', sl: id, k, v: clone(ap[k]) })
         this.regs[`${id} ${k}`] = [o.l, o.a]
@@ -528,7 +543,7 @@ export class SyncState {
       const prev = bEls.get(id)
       if (!prev) {
         if (this.births[id] && !this.dead(id) && this.pos[id]?.p === sl) continue // came with a fresh slide ins above
-        const sib = C(aSlides.get(sl)!).map((e) => elKey(sl, e.id))
+        const sib = C(this.S, aSlides.get(sl)!).map((e) => elKey(sl, e.id))
         const ord = this.keyAround(sl, sib, sib.indexOf(id))
         const o = push<InsOp>({ ...this.stamp(), op: 'ins', kind: 'element', id, sl, ord, node: clone(el) })
         this.births[id] = [o.l, o.a]
@@ -561,7 +576,7 @@ export class SyncState {
     // element order within each surviving slide (all ids — see slide pass)
     for (const [id, sl] of aSlides) {
       if (!bSlides.has(id)) continue
-      this.diffOrder(C(sl).map((e) => elKey(id, e.id)), id, 'element', push)
+      this.diffOrder(C(this.S, sl).map((e) => elKey(id, e.id)), id, 'element', push)
     }
 
     // remote ops that pended awaiting a seed can resolve against seeds this
@@ -750,14 +765,14 @@ export class SyncState {
   }
 
   private findSlide(doc: BentoDoc, id: string): Slide | undefined {
-    return P(doc).find((s) => s.id === id)
+    return P(this.S, doc).find((s) => s.id === id)
   }
   /** composite-key lookup: an element node only ever lives on its key's
    * slide (or in limbo) — the same bare id on other slides is other nodes */
   private findEl(doc: BentoDoc, key: string): SlideElement | undefined {
     const s = this.findSlide(doc, keySlide(key))
     const bare = keyEl(key)
-    return (s ? C(s) : undefined)?.find((e) => e.id === bare) ?? this.limbo[key]
+    return (s ? C(this.S, s) : undefined)?.find((e) => e.id === bare) ?? this.limbo[key]
   }
 
   private applySet(doc: BentoDoc, op: SetOp, res: ApplyResult) {
@@ -838,10 +853,10 @@ export class SyncState {
       // first ran it, so everyone must.
       const src = op.node as Slide
       this.insertSlideLevel(doc, op.id, op.ord, src, stamp, res)
-      const ne = C(src).length
-      C(src).forEach((e, j) => this.insertElement(doc, elKey(op.id, e.id), op.id, spreadKey(j, ne), e, stamp, res))
+      const ne = C(this.S, src).length
+      C(this.S, src).forEach((e, j) => this.insertElement(doc, elKey(op.id, e.id), op.id, spreadKey(j, ne), e, stamp, res))
       this.drainPending(doc, op.id)
-      C(src).forEach((e) => this.drainPending(doc, elKey(op.id, e.id)))
+      C(this.S, src).forEach((e) => this.drainPending(doc, elKey(op.id, e.id)))
     } else {
       this.insertElement(doc, op.id, op.sl!, op.ord, op.node as SlideElement, stamp, res)
       this.drainPending(doc, op.id)
@@ -862,11 +877,11 @@ export class SyncState {
     if (this.dead(id)) return // a delete still out-stamps this insert
     const existing = this.findSlide(doc, id)
     if (existing) {
-      this.assignNode(existing as unknown as Record<string, unknown>, src as unknown as Record<string, unknown>, id, stamp, ['id', S.children])
+      this.assignNode(existing as unknown as Record<string, unknown>, src as unknown as Record<string, unknown>, id, stamp, ['id', this.S.children])
     } else {
       const sl = clone(src)
-      setC(sl, []) // members materialize separately via insertElement
-      P(doc).push(sl)
+      setC(this.S, sl, []) // members materialize separately via insertElement
+      P(this.S, doc).push(sl)
       this.replayStash(sl as unknown as Record<string, unknown>, id, stamp)
     }
   }
@@ -897,7 +912,7 @@ export class SyncState {
       const el = clone(node)
       const p = this.pos[id].p
       const sl = this.findSlide(doc, p)
-      if (sl && !this.dead(p)) C(sl).push(el)
+      if (sl && !this.dead(p)) C(this.S, sl).push(el)
       else this.limbo[id] = el
       this.replayStash(el as unknown as Record<string, unknown>, id, stamp)
       live = el
@@ -1017,10 +1032,10 @@ export class SyncState {
       if (g && cmpReg(this.tombs[key] ?? [0, ''], g.sd) > 0) delete this.txt[key]
       const s = this.findSlide(doc, keySlide(key))
       const bare = keyEl(key)
-      const i = s ? C(s).findIndex((e) => e.id === bare) : -1
+      const i = s ? C(this.S, s).findIndex((e) => e.id === bare) : -1
       if (s && i >= 0) {
-        this.stashNode(C(s)[i] as unknown as Record<string, unknown>, key)
-        C(s).splice(i, 1)
+        this.stashNode(C(this.S, s)[i] as unknown as Record<string, unknown>, key)
+        C(this.S, s).splice(i, 1)
       }
     }
     bump(op.id)
@@ -1032,12 +1047,12 @@ export class SyncState {
         if (this.dead(eid)) removeElement(eid)
       }
       if (this.dead(op.id)) {
-        const i = P(doc).findIndex((s) => s.id === op.id)
+        const i = P(this.S, doc).findIndex((s) => s.id === op.id)
         if (i >= 0) {
-          const [gone] = P(doc).splice(i, 1)
+          const [gone] = P(this.S, doc).splice(i, 1)
           this.stashNode(gone as unknown as Record<string, unknown>, op.id)
           // survivors (concurrently inserted) park in limbo under their key
-          for (const el of C(gone)) {
+          for (const el of C(this.S, gone)) {
             const k = elKey(op.id, el.id)
             if (!this.dead(k)) this.limbo[k] = el
           }
@@ -1148,13 +1163,13 @@ export class SyncState {
       if (a !== b) return a < b ? -1 : 1
       return x < y ? -1 : 1
     }
-    P(doc).sort((s1, s2) => cmp(s1.id, s2.id))
-    const slideById = new Map(P(doc).map((s) => [s.id, s]))
+    P(this.S, doc).sort((s1, s2) => cmp(s1.id, s2.id))
+    const slideById = new Map(P(this.S, doc).map((s) => [s.id, s]))
     for (const [key, el] of Object.entries(this.limbo)) {
       const p = this.pos[key]?.p
       if (p && slideById.has(p) && !this.dead(p) && !this.dead(key)) {
         const dest = slideById.get(p)!
-        if (!C(dest).some((e) => e.id === el.id)) C(dest).push(el)
+        if (!C(this.S, dest).some((e) => e.id === el.id)) C(this.S, dest).push(el)
         else dbg(key, `limbo-restore DROP dup x=${(el as any).x}`)
         delete this.limbo[key]
         this.drainPending(doc, key)
@@ -1163,10 +1178,10 @@ export class SyncState {
     // elements never relocate across slides (the composite key pins them to
     // one slide for life) — only sort by pos key and dedupe within the slide
     // (a node whose data travelled two routes can transiently duplicate)
-    for (const sl of P(doc)) {
-      C(sl).sort((e1, e2) => cmp(elKey(sl.id, e1.id), elKey(sl.id, e2.id)))
-      setC(sl, C(sl).filter((e, i) => {
-        const dup = i > 0 && e.id === C(sl)[i - 1].id
+    for (const sl of P(this.S, doc)) {
+      C(this.S, sl).sort((e1, e2) => cmp(elKey(sl.id, e1.id), elKey(sl.id, e2.id)))
+      setC(this.S, sl, C(this.S, sl).filter((e, i) => {
+        const dup = i > 0 && e.id === C(this.S, sl)[i - 1].id
         if (dup) dbg(elKey(sl.id, e.id), `remat dedupe DROP x=${(e as any).x}`)
         return !dup
       }))
@@ -1223,12 +1238,12 @@ export class SyncState {
       }
     }
     // drop nodes that are dead under merged liveness
-    for (let i = P(doc).length - 1; i >= 0; i--) {
-      const sl = P(doc)[i]
+    for (let i = P(this.S, doc).length - 1; i >= 0; i--) {
+      const sl = P(this.S, doc)[i]
       if (this.dead(sl.id)) {
-        P(doc).splice(i, 1)
+        P(this.S, doc).splice(i, 1)
         this.stashNode(sl as unknown as Record<string, unknown>, sl.id)
-        for (const el of C(sl)) {
+        for (const el of C(this.S, sl)) {
           const k = elKey(sl.id, el.id)
           if (!this.dead(k)) this.limbo[k] = el
           else this.stashNode(el as unknown as Record<string, unknown>, k)
@@ -1236,11 +1251,11 @@ export class SyncState {
         res.structure = true
         res.changed = true
       } else {
-        for (let j = C(sl).length - 1; j >= 0; j--) {
-          const k = elKey(sl.id, C(sl)[j].id)
+        for (let j = C(this.S, sl).length - 1; j >= 0; j--) {
+          const k = elKey(sl.id, C(this.S, sl)[j].id)
           if (this.dead(k)) {
-            this.stashNode(C(sl)[j] as unknown as Record<string, unknown>, k)
-            C(sl).splice(j, 1)
+            this.stashNode(C(this.S, sl)[j] as unknown as Record<string, unknown>, k)
+            C(this.S, sl).splice(j, 1)
             res.structure = true
             res.changed = true
           }
@@ -1257,12 +1272,12 @@ export class SyncState {
     // keyed composite; remote limbo nodes count — they're invisible but
     // their data is real)
     const rEls = new Map<string, SlideElement>()
-    P(rdoc).forEach((s) => C(s).forEach((e) => rEls.set(elKey(s.id, e.id), e)))
+    P(this.S, rdoc).forEach((s) => C(this.S, s).forEach((e) => rEls.set(elKey(s.id, e.id), e)))
     for (const [key, el] of Object.entries(rstate.limbo ?? {})) if (!rEls.has(key)) rEls.set(key, el)
-    for (const sl of P(rdoc)) {
+    for (const sl of P(this.S, rdoc)) {
       if (this.dead(sl.id) || this.findSlide(doc, sl.id)) continue
       const copy = clone(sl)
-      setC(copy, C(copy)
+      setC(this.S, copy, C(this.S, copy)
         .filter((e) => !this.dead(elKey(sl.id, e.id)))
         .map((e) => {
           const lb = this.limbo[elKey(sl.id, e.id)]
@@ -1272,7 +1287,7 @@ export class SyncState {
           }
           return e
         }))
-      P(doc).push(copy)
+      P(this.S, doc).push(copy)
       res.changed = true
       res.structure = true
     }
@@ -1280,13 +1295,13 @@ export class SyncState {
       if (this.dead(key) || this.findEl(doc, key)) continue
       const p = this.pos[key]?.p
       const host = p ? this.findSlide(doc, p) : undefined
-      if (host && !this.dead(host.id)) C(host).push(clone(el))
+      if (host && !this.dead(host.id)) C(this.S, host).push(clone(el))
       else this.limbo[key] = clone(el)
       res.changed = true
       res.structure = true
     }
     // property registers: the winning side's value lives in its doc
-    const rSlides = new Map(P(rdoc).map((s) => [s.id, s]))
+    const rSlides = new Map(P(this.S, rdoc).map((s) => [s.id, s]))
     const rNode = (id: string): Record<string, unknown> | undefined =>
       id === DOC_NODE
         ? (rdoc as unknown as Record<string, unknown>)
@@ -1305,7 +1320,7 @@ export class SyncState {
       const dst = lNode(id)
       if (!src || !dst) continue
       const isSlide = rSlides.has(id) || !!this.findSlide(doc, id)
-      this.assignNode(dst, src, id, this.births[id], isSlide ? ['id', S.children] : ['id'])
+      this.assignNode(dst, src, id, this.births[id], isSlide ? ['id', this.S.children] : ['id'])
       res.changed = true
       if (isSlide) res.structure = true
     }
@@ -1563,4 +1578,19 @@ function longestIncreasing(keys: string[]): number[] {
     k = prev[k]
   }
   return out.reverse()
+}
+
+/**
+ * The engine bound to bento/slides.
+ *
+ * Every existing consumer — session.ts, online.ts, the rigs, and
+ * server/guestbook-daemon, which bundles this name straight from this path —
+ * constructs `new SyncState(actor)`. Keeping that exact surface is what makes
+ * the shape injection invisible to them; bento/spaces gets its own binding the
+ * same way, and neither can be constructed without saying which it is.
+ */
+export class SyncState extends SyncEngine {
+  constructor(actor: string) {
+    super(actor, SLIDES_SHAPE)
+  }
 }

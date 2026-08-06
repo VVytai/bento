@@ -354,3 +354,14 @@ jobs:
         # candidate is ever repointed at something that resolves back to the
         # baseline — the quiet way a gate stops gating.
         run: REQUIRE_LIVE=1 SEEDS=200 STEPS=60 ACTORS=4 node scripts/test-sync-equiv.ts
+
+      - name: CRDT document-shape seam
+        # The equivalence rig proves a NEGATIVE — that the parameterized engine
+        # still mints the bytes shipped files were written with — and a
+        # parameterization that quietly did nothing would pass it. This proves
+        # the positive: a second shape (pages→blocks) produces an engine that
+        # actually works, keys nodes on the composite pageId+blockId, and
+        # restores as itself. Also pins the constructor contract: the shape has
+        # no default, because a default is how a spaces call site silently ends
+        # up holding slides' shape.
+        run: node scripts/test-sync-shape.ts
