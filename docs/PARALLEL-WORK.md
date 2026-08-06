@@ -16,8 +16,10 @@ rules exist to keep N parallel workstreams from dissolving into merge hell.
   `src/i18n.ts` facade.
 - **Kernel zone — `kernel/src/`** — `save.ts` (splice + bento/enc),
   `autosave.ts`, `update.ts`, `anim.ts`, `charts.ts`, the `i18n.ts` engine,
-  `app.ts`, `doc.ts`; plus `slides/src/sync/` and `server/`, which are shared
-  in effect even though they still live app-side. See `docs/PLATFORM.md` §9.
+  `app.ts`, `doc.ts`, `sync/crdt.ts` (the CRDT engine); plus the rest of
+  `slides/src/sync/` (session, transport, blobs) and `server/`, which are
+  shared in effect even though they still live app-side. See
+  `docs/PLATFORM.md` §9.
   This zone is:
   **serialize, don't parallelize.** One coordinated change at a time, reviewed
   against the platform invariants. If your app task needs a kernel change,
