@@ -400,6 +400,34 @@ jobs:
         # two it did not catch were found by widening it.
         run: node scripts/test-dash-sync.ts
 
+      - name: dash validator rig
+        # 109 checks over the shapes that read as DATA rather than as damage —
+        # a column shorter than the sheet has rows, a dictionary index past the
+        # end of its dict. Nothing here refuses to load a workbook; the point is
+        # that the user is told, because neither of those looks wrong on screen.
+        run: node scripts/test-dash-validate.ts
+
+      - name: dash comments rig
+        # A thread anchors to colId + rid, never a position, so it survives a
+        # sort. The checks that matter are the ORPHAN ones: a deleted row must
+        # leave the thread dead and saying so, not silently re-pointed at
+        # whoever inherited the row number.
+        run: node scripts/test-dash-comments.ts
+
+      - name: dash recovery rig
+        # Every branch of the offer/no-offer decision, with no DOM and no
+        # IndexedDB in it. A snapshot that cannot be parsed is not offered — a
+        # Restore button that hands the app a document it will then refuse is a
+        # dead end wearing a live button.
+        run: node scripts/test-dash-recovery.ts
+
+      - name: dash i18n rig
+        # A core catalog ships inside every saved workbook and cannot be patched
+        # without a release, so drift has to fail here rather than in the field:
+        # a catalog key the source no longer contains is a dead translation, and
+        # a {placeholder} a translation dropped is a sentence with a hole in it.
+        run: node scripts/test-dash-i18n.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default

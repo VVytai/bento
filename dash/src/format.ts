@@ -18,11 +18,27 @@
 // into everyone else's file, or lets the author's chosen precision drift.
 
 import type { Column, ColumnType } from './model.ts'
+import { locale } from './i18n.ts'
 
-/** Viewer-scoped, never in the document. Falls back to the host's own locale. */
+/**
+ * Viewer-scoped, never in the document.
+ *
+ * PULLED, not pushed. This used to be a module variable somebody had to
+ * remember to set, and nobody ever did: it stayed `undefined` for the life of
+ * the app, `Intl` fell through to the browser, and choosing French in About
+ * gave French chrome above English-punctuated numbers. Pushing it from the
+ * language picker would have fixed that one call site and left the next one —
+ * `window.bento.i18n.setLocale` reaches the kernel directly and never passes
+ * through the app's facade at all. Asking at format time cannot go out of step
+ * with the answer.
+ *
+ * The override survives for tests, which need a locale without a global.
+ */
 let viewerLocale: string | undefined
 
 export const setViewerLocale = (l: string | undefined): void => { viewerLocale = l }
+
+const forNumbers = (): string | undefined => viewerLocale ?? locale()
 
 /**
  * Read the digit shape out of an Excel-style pattern. We support the part
@@ -66,7 +82,7 @@ export function formatValue(v: unknown, col: Pick<Column, 'type' | 'format'>): s
 
   // Intl does the punctuation, so the VIEWER's separators apply to the
   // AUTHOR's precision — the split this file exists to make.
-  const body = new Intl.NumberFormat(viewerLocale, {
+  const body = new Intl.NumberFormat(forNumbers(), {
     minimumFractionDigits: dp,
     maximumFractionDigits: dp,
     useGrouping: p.group || (!col.format && (t === 'money' || Math.abs(shown) >= 10_000)),

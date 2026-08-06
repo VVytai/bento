@@ -83,6 +83,28 @@
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
   }
+
+  /* …AND THE CHEVRON HAS TO BE ON TOP OF THE DRAWER IT CLOSES.
+     Docking is only half the job. The resizer strips stay in flow at x=0 and
+     x=vw-5, but an OPEN drawer is `position: absolute; z-index: 40` over the
+     same pixels — so the pull tab was painted underneath the panel it opens
+     and closes. MEASURED at 375px with both drawers open:
+     elementFromPoint on each chevron's centre returned `.dp-panel`, not the
+     button — both toggles unreachable, the grid completely covered, and
+     nothing left to shut them with but the `[` and `]` keys, which is not a
+     thing a phone has. (At boot this never showed, because a phone boots with
+     both drawers shut and the chevrons sit over the grid.)
+
+     The strip rides above the drawer instead. The tab does NOT move between
+     states — only its arrow flips — so the control a reader just used to open
+     a drawer is still under their thumb to close it, rather than 200px away at
+     an edge that depends on a width they may have dragged. */
+  #app .dp-resizer { z-index: 45; }
+
+  /* and it sits in its own gutter rather than on top of the first 16px of the
+     panel: a tab overlapping a sheet card reads as a rendering bug */
+  #app .dp-left:not(.dp-shut) { padding-left: 22px; }
+  #app .dp-right:not(.dp-shut) { padding-right: 22px; }
 }
 
 .dp-panel {

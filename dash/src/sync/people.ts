@@ -14,6 +14,7 @@
 // call site — see docs/dash-collab.md, "What this needs from main.ts".
 
 import '../sync.css'
+import { t } from '../i18n.ts'
 import type { Store } from '../store.ts'
 import type { SyncSession, Peer } from './session.ts'
 import { collabOf, onlineTransport, startSharing, stopSharing, sharingOn } from './online.ts'
@@ -85,9 +86,9 @@ export function mountPeople(host: HTMLElement, session: SyncSession, store: Stor
     return `<li>` +
       `<span class="dx-people-chip" style="background:${esc(p.color)}"></span>` +
       `<span class="dx-people-name">${esc(p.name)}</span>` +
-      (role ? `<span class="dx-people-role">${esc(role)}</span>` : '') +
+      (role ? `<span class="dx-people-role">${esc(t(role))}</span>` : '') +
       (p.pub ? `<span class="dx-people-key" title="${esc(p.pub)}">${esc(fingerprint(p.pub))}</span>` : '') +
-      (canRemove ? `<button class="dx-people-x" data-remove="${esc(p.pub!)}" title="Remove this device">✕</button>` : '') +
+      (canRemove ? `<button class="dx-people-x" data-remove="${esc(p.pub!)}" title="${esc(t('Remove this device from the session'))}">✕</button>` : '') +
       `</li>`
   }
 

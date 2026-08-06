@@ -105,6 +105,50 @@ const dataRow = (sheet: TableSheet, rid: number): number => {
   return -1
 }
 
+/**
+ * One footer aggregate, over the rows a `rows` vector selects.
+ *
+ * Pulled out of the grid's private `totalsRow` for one reason: this is the
+ * arithmetic that was wrong, and while it lived inside a DOM method the only
+ * way to check it was to open a browser and read a number off the screen. Now
+ * `scripts/test-dash-filter.ts` can assert it directly.
+ *
+ * `rows` is `store.order` — the view vector — or null for "every row". A SORT
+ * writes a permutation, and summing a permutation gives the same answer, so the
+ * one case this changes is the one that was broken: a FILTER, where the vector
+ * is shorter than the sheet.
+ *
+ * Non-numbers are skipped rather than counted as zero; `avg` divides by what it
+ * actually saw. An average over a column of five numbers and three blanks is an
+ * average of five things, and dividing by eight answers a question nobody
+ * asked.
+ *
+ * A `{ f }` custom-formula total is summed, which is what the DOM method did
+ * before this was lifted out — preserved deliberately rather than corrected,
+ * because changing it here would be a silent change of meaning in an unrelated
+ * fix. It is a separate question, and it is written down in the audit.
+ */
+export type TotalSpec = 'sum' | 'avg' | 'count' | 'min' | 'max' | { f: string }
+
+export function aggregate(
+  spec: TotalSpec,
+  read: (i: number) => unknown,
+  n: number,
+  rows: number[] | null,
+): number {
+  let acc = 0
+  let seen = 0
+  for (let j = 0; j < n; j++) {
+    const v = read(rows ? rows[j] : j)
+    if (typeof v !== 'number') continue
+    seen++
+    if (spec === 'min') acc = seen === 1 ? v : Math.min(acc, v)
+    else if (spec === 'max') acc = seen === 1 ? v : Math.max(acc, v)
+    else acc += v
+  }
+  return spec === 'avg' ? (seen ? acc / seen : 0) : spec === 'count' ? seen : acc
+}
+
 export class Grid {
   private host: HTMLElement
   private store: Store
@@ -278,7 +322,7 @@ export class Grid {
 
   private header(): string {
     const s = this.sheet
-    return `<div class="dg-cell dg-corner" data-all="1" title="Select all"></div>` +
+    return `<div class="dg-cell dg-corner" data-all="1" title="${esc(t('Select every cell in the sheet'))}"></div>` +
       `${cols(s).map((c, ci) => {
       const arrow = this.sort?.col === c.id ? (this.sort.dir === 'asc' ? ' ▲' : ' ▼') : ''
       const filtered = this.filters.some((f) => f.col === c.id)
@@ -303,41 +347,56 @@ export class Grid {
         // being one click away is what makes import's refusal to guess honest.
         `<span class="dg-hstrip">` +
         `<span class="dg-letter" title="${esc(t('Select column'))}">${colToLetters(ci)}</span>` +
-        `<button class="dg-type" data-retype="${c.id}" title="${esc(TYPE_LABEL[c.type])} — click to change">${esc(TYPE_LABEL[c.type])}</button>` +
+        `<button class="dg-type" data-retype="${c.id}" title="${esc(t('{type} — click to change').replace('{type}', t(TYPE_LABEL[c.type])))}">${esc(t(TYPE_LABEL[c.type]))}</button>` +
         `</span>` +
         `<span class="dg-hmain">` +
         `<span class="dg-name" title="${esc(c.formula ? `= ${c.formula}` : c.name)}">${esc(c.name)}${arrow}</span>` +
         (c.formula ? `<span class="dg-fx" title="${esc('= ' + c.formula)}">fx</span>` : '') +
-        (c.failed ? `<span class="dg-warn" title="${c.failed} value(s) could not be read as ${esc(TYPE_LABEL[c.type])}">!</span>` : '') +
-        `<span class="dg-filter" data-filter="${c.id}" title="Filter and sort">▾</span>` +
+        (c.failed ? `<span class="dg-warn" title="${esc(t('{n} value(s) could not be read as {type}').replace('{n}', String(c.failed)).replace('{type}', t(TYPE_LABEL[c.type])))}">!</span>` : '') +
+        `<span class="dg-filter" data-filter="${c.id}" title="${esc(t('Filter and sort this column'))}">▾</span>` +
         `</span>` +
-        `<span class="dg-grip" data-grip="${c.id}" title="Drag to resize, double-click to fit"></span>` +
+        `<span class="dg-grip" data-grip="${c.id}" title="${esc(t('Drag to resize, double-click to fit the widest value'))}"></span>` +
         `</div>`
     }).join('')}`
   }
 
+  /**
+   * The footer totals — over the rows the reader can SEE.
+   *
+   * This used to loop `0..rowCount(s)` and ignore `store.order` entirely. Filter
+   * the starter sheet to deals over £10,000 and the grid showed four rows worth
+   * £69,050 while the footer said, in bold, directly underneath them, £97,050 —
+   * the total including the four rows the filter had just removed. The status
+   * bar got it right ("4 of 8 rows") the whole time, so the two readouts on the
+   * same screen disagreed, and the bigger one was wrong.
+   *
+   * That is the exact failure this app claims to exist to prevent: a wrong
+   * answer that looks right. Someone filters to closed-won and reads off the
+   * pipeline.
+   *
+   * A SORT also writes `store.order` — the same rows in a different order — and
+   * summing a permutation gives the same answer, so reading the order vector is
+   * right for both and only the label distinguishes them. `dg-part` is set
+   * only when rows are actually excluded, because a footer that says "visible"
+   * on an unfiltered sheet trains people to stop reading it.
+   */
   private totalsRow(): string {
     const s = this.sheet
     if (!s.totals) return ''
-    const n = rowCount(s)
-    return `<div class="dg-cell dg-gutter"></div>` + `${cols(s).map((c, ci) => {
+    const all = rowCount(s)
+    const order = this.store.order[s.id]
+    const rows = order ?? null
+    const n = rows ? rows.length : all
+    const filtered = n < all
+    return `<div class="dg-cell dg-gutter"${filtered ? ` title="${esc(t('Totals cover the {n} row(s) the filter leaves showing, not all {all}.')
+      .replace('{n}', String(n)).replace('{all}', String(all)))}"` : ''}>${filtered ? '⌄' : ''}</div>` +
+      `${cols(s).map((c, ci) => {
       const spec = s.totals?.[c.id]
       const fz = this.freeze(ci)
       if (!spec) return `<div class="dg-cell${fz.cls}" style="${fz.st}width:${c.w ?? 130}px"></div>`
-      const data = s.data[c.id]
       const comp = this.computed.get(c.id)
-      let acc = 0
-      let seen = 0
-      for (let i = 0; i < n; i++) {
-        const v = comp ? comp[i] : readCell(data, i)
-        if (typeof v !== 'number') continue
-        seen++
-        if (spec === 'min') acc = seen === 1 ? v : Math.min(acc, v)
-        else if (spec === 'max') acc = seen === 1 ? v : Math.max(acc, v)
-        else acc += v
-      }
-      const out = spec === 'avg' ? (seen ? acc / seen : 0) : spec === 'count' ? seen : acc
-      return `<div class="dg-cell${fz.cls}" style="${fz.st}width:${c.w ?? 130}px;text-align:${alignFor(c.type)}">` +
+      const out = aggregate(spec, (i) => comp ? comp[i] : readCell(s.data[c.id], i), n, rows)
+      return `<div class="dg-cell${fz.cls}${filtered ? ' dg-part' : ''}" style="${fz.st}width:${c.w ?? 130}px;text-align:${alignFor(c.type)}">` +
         `<span class="dg-agg">${esc(String(spec))}</span> ${esc(formatValue(out, c))}</div>`
     }).join('')}`
   }
@@ -901,7 +960,7 @@ export class Grid {
     const top = b.top * ROW_H
     const height = (b.bottom - b.top + 1) * ROW_H
     return `<div class="dg-outline" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px">` +
-      `<span class="dg-handle" title="Drag to fill"></span></div>`
+      `<span class="dg-handle" title="${esc(t('Drag to fill the selection down or across'))}"></span></div>`
   }
 
   private wire(): void {

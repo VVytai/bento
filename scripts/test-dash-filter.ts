@@ -34,6 +34,7 @@ import {
 } from '../dash/src/filter.ts'
 import type { TableSheet } from '../dash/src/model.ts'
 import { readCell } from '../dash/src/store.ts'
+import { aggregate } from '../dash/src/grid.ts'
 
 let failures = 0
 let checks = 0
@@ -350,6 +351,47 @@ ok(eq(order([{ col: 'amount', pred: { op: 'topN', n: 0 } }], []), []),
     && sheet.rids.length === 1,
   'THE DOCUMENT IS UNTOUCHED: sorting and filtering are view state, so no ' +
     'checkpoint, no dirty flag, no collab op')
+}
+
+
+// ============================================ FOOTER TOTALS OVER A FILTER
+//
+// The bug this guards: `totalsRow` looped over every row in the sheet and never
+// read the view vector. Filter the starter sheet to deals over £10,000 and the
+// grid showed four rows worth £69,050 while the footer said £97,050, in bold,
+// directly underneath them — the total including the rows the filter had just
+// removed. The status bar said "4 of 8 rows" the whole time, so two readouts on
+// one screen disagreed and the bigger one was wrong.
+{
+  const vals: unknown[] = [10, 20, 'n/a', 30, 40, null, 50, 60]
+  const read = (i: number) => vals[i]
+  const all = vals.length
+
+  ok(aggregate('sum', read, all, null) === 210, 'with no view vector, sum covers the whole sheet')
+
+  // the four "visible" rows: indices 0, 3, 6, 7 → 10 + 30 + 50 + 60
+  const view = [0, 3, 6, 7]
+  ok(aggregate('sum', read, view.length, view) === 150,
+    'with a view vector, sum covers ONLY the rows it names — the whole bug, in one number')
+  ok(aggregate('avg', read, view.length, view) === 37.5, 'and avg averages the same population')
+  ok(aggregate('min', read, view.length, view) === 10 && aggregate('max', read, view.length, view) === 60,
+    'min and max come from the filtered rows too')
+  ok(aggregate('count', read, view.length, view) === 4, 'count counts what it saw')
+
+  // a SORT is a permutation: same rows, different order, so the answer cannot move
+  const sorted = [7, 6, 4, 3, 0, 1, 2, 5]
+  ok(aggregate('sum', read, sorted.length, sorted) === aggregate('sum', read, all, null),
+    'a sort is a permutation of the same rows, so every total is unchanged — only a FILTER moves them')
+
+  // blanks and text are skipped, never counted as zero
+  ok(aggregate('avg', read, all, null) === 35,
+    'avg divides by the numbers it actually saw (6), not by the row count (8) — an average over blanks is not an average')
+  ok(aggregate('count', read, all, null) === 6, 'and count agrees with it')
+
+  // an empty filter result must not invent a number
+  ok(aggregate('sum', read, 0, []) === 0 && aggregate('avg', read, 0, []) === 0,
+    'a filter matching nothing totals 0 rather than NaN')
+  ok(aggregate('min', read, 0, []) === 0, 'and min over nothing is 0, not Infinity')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

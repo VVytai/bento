@@ -360,25 +360,78 @@ html, body {
 .dx-insert-dd > .dx-menu > .dx-btn:hover { background: var(--hover); border-color: var(--muted); }
 .dx-insert-dd > .dx-menu .dx-i { color: inherit; }
 
-/* 1280, not slides' 1200. MEASURED: with every label showing, the insert group
-   ends at x=860 and the end group starts at x=1031 — 171px of slack in a
-   1440px window, so the fully-labelled bar needs ~1270px. A 1200px breakpoint
-   would have let the two groups collide for the 70px in between. Breakpoints
-   are measurements, not round numbers. */
-@media (max-width: 1280px) {
-  /* icons and tooltips take over. Save keeps its word: it is the control the
-     user names when it goes missing, and an unlabelled floppy is a guess. */
-  .dx-bar .dx-btn > span { display: none; }
-  .dx-bar .dx-btn-save > .dx-save-lab { display: inline; }
+/* The People chip is a CHIP, so it takes the bar's height, not its own.
+   sync.css re-lays it out for the bar but leaves the panel's `padding: 8px 10px`
+   standing, and 16px of vertical padding on the tallest thing in a flex row is
+   16px on the whole toolbar: MEASURED, .dx-bar was 62px tall against a 31px
+   button — the bar grew a row it never drew. Scoped through `#app` because
+   sync.css's own `.dx-bar .dx-people` rule is the same specificity and lives in
+   a different file, so which of them won would be decided by import order. */
+#app .dx-bar .dx-people { padding: 0; }
+
+/* …and the swatch for YOU is not news to you. sync.css says exactly that and
+   writes `.dx-bar .dx-people-me { display: none }` — then loses the duel to its
+   own `.dx-bar .dx-people-list li { display: flex }` two lines later, which is
+   more specific (0,2,1 beats 0,2,0). MEASURED: the li was 14px wide and painted
+   a green dot beside the grey "not sharing" one, so the bar reported a live
+   collaborator on a workbook that was not shared with anybody. Same failure
+   mode as the .dx-dirty note above: a rule that reads correctly and never
+   applies. */
+#app .dx-bar .dx-people-me { display: none; }
+
+/* ————— the ladder, and why each rung is where it is —————
+   RE-MEASURED. The old first rung was 1280, taken when the bar ended at About.
+   It has since gained the People chip (253px), the ? button (28px) and Save's
+   as-caret (24px), and nobody moved the number: MEASURED at 1920 with every
+   label showing, the bar's children come to 1527px + 24px of gaps + 24px of
+   padding = 1575px. Between 1281 and ~1389 that bar had nowhere left to go —
+   .dx-title bottoms out at its 60px min-width and everything else is
+   `flex: 0 0 auto` — so it OVERFLOWED: measured at 1300px, document.scrollWidth
+   was 1382 against a clientWidth of 1300, with About, ? and the version chip
+   hanging past the right edge. A control you have to scroll to reach is a
+   control that is missing, which is the one thing this whole section exists to
+   prevent.
+
+   One rung could not fix it honestly. Collapsing every label at 1575 would
+   leave a 1440px laptop — the commonest window this app will ever open in —
+   with a bar of nothing but icons. So the labels go in the order of how much
+   they are worth: first the ones whose icons are conventions everybody already
+   reads, then the ones that name features only dash has. */
+
+/* Rung 1 — the words a spreadsheet user does not need. Undo's arrow, About's
+   ⓘ and the database cylinder are learned glyphs; "Not sharing" is a state the
+   grey dot beside it already reports. MEASURED saving: 201px, so the bar now
+   needs ~1374px. Save keeps its word at every rung: it is the control the user
+   names when it goes missing, and an unlabelled floppy is a guess. */
+@media (max-width: 1600px) {
+  .dx-bar .dx-bar-end > .dx-btn > span,
+  .dx-bar .dx-data-dd > .dx-dd-trig > span { display: none; }
+  #app .dx-bar .dx-people-title { display: none; }
+}
+
+/* Rung 2 — Formula · Chart · 3D · Pivot · Dashboard · Story. These are the
+   labels worth keeping longest, because their icons are the ones nobody has
+   seen before; they hold on for 220px more than the rung above. MEASURED
+   saving: a further 289px, so the bar needs ~1085px and the title stops being
+   squeezed (at 1390 it had been crushed from 240px to its 60px floor — a
+   workbook name you cannot read is a name field that is not there). */
+@media (max-width: 1380px) {
+  .dx-bar .dx-insert-dd .dx-btn > span { display: none; }
   .dx-bar { gap: 6px; }
   .dx-btn { padding: 5px 8px; }
   .dx-title { flex: 0 1 200px; }
 }
 
-/* 900, and again it is a measurement: at 1041px the icon-only insert row still
-   left 214px of slack, so folding it there threw away a whole toolbar for
-   nothing. The row needs 827px; 900 keeps ~73px of margin over that. */
-@media (max-width: 900px) {
+/* 1040, and it used to be 900. The original note here rejected 1041 because
+   "the icon-only insert row still left 214px of slack" — and it was right at
+   the time. The People chip, ? and Save's caret have since eaten every pixel
+   of that slack: MEASURED with both rungs above applied, the icon-only bar now
+   needs 1037px to leave .dx-title its 200px. Below that the title is the only
+   elastic thing in the bar, so it alone paid, and at 901px it stood at 65px —
+   six characters of a workbook's name. The six insert icons are recoverable
+   from one ＋ menu; a name you cannot read is not recoverable from anywhere.
+   (No overflow either way — this rung buys legibility, not room.) */
+@media (max-width: 1040px) {
   /* below this the six icon buttons no longer clear the end group, so they
      become one ＋ menu. Their labels come back inside it. */
   .dx-insert-dd { display: block; position: relative; }
@@ -435,6 +488,15 @@ html, body {
    the button stays. Everything else here is load-bearing. */
 @media (max-width: 380px) {
   .dx-mark { display: none; }
+  /* …and the bar has since grown a ? button, which put it back over the edge:
+     MEASURED at 351px the bar came to 382px against a 351px viewport, with ?
+     hanging 31px past the right edge — Save and About still reachable, but the
+     body scrolling sideways, which is the thing this section exists to stop.
+     ? is what goes, because of everything in the bar it is the one control that
+     cannot do anything here: the panel it opens is a table of KEYBOARD
+     shortcuts, and this is a screen with no keyboard. Every other button does
+     the same job at 351px that it does at 1600. */
+  .dx-help-btn { display: none; }
 }
 
 /* ————— findings: what import refused to decide ————— */
@@ -553,6 +615,17 @@ html, body {
    as one more gridline. */
 .dg-head-row { top: 0; border-bottom: 2px solid var(--line-strong); }
 .dg-foot-row { bottom: 0; border-top: 2px solid var(--line-strong); font-weight: 600; }
+
+/* A TOTAL OVER A FILTERED SHEET SAYS SO. The number is now correct — it covers
+   the rows on screen — but "correct" is not the same as "unambiguous": £69,050
+   under a filtered table and £69,050 under a whole one are the same glyphs
+   answering different questions. The tint is the cheapest way to make the
+   footer and the status bar's "4 of 8 rows" visibly parts of one statement. */
+/* NOT .dg-filtered — that already means "this column carries a filter" on a
+   header. This means "this total covers part of the sheet", a different fact
+   about a different row. */
+.dg-foot-row .dg-cell.dg-part { color: var(--accent-ink, inherit); }
+.dg-foot-row .dg-gutter { color: var(--muted); font-weight: 400; cursor: default; }
 
 /* BOTH AXES. The grid drew vertical rules only and separated rows with a zebra
    stripe — the arrangement of a web table, not of a spreadsheet, and the single

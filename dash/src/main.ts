@@ -42,7 +42,7 @@ import { runPivot, mountPivot, defaultPivot, newPivotSheet, type PivotSpec } fro
 import { buildSheetPreview } from './preview.ts'
 import { installSaveMenu, adoptOpenedDoc } from './saveui.ts'
 import { dismissSplash, dismissSplashNow } from './splash.ts'
-import { t } from './i18n.ts'
+import { t, i18nApi } from './i18n.ts'
 import {
   parseDoc, docBytes, docBudget, rowCount, DOC_BUDGET_FSA, DOC_BUDGET_DOWNLOAD,
   type DashDoc, type ParseResult, type Column, type ColumnType, type TableSheet,
@@ -738,6 +738,9 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
       }
     },
     comments: () => flatComments(store.doc),
+    // Matches slides: 'x-pseudo' audits unswept strings without a reload, and a
+    // harness can read the locale it is about to be judged in.
+    i18n: i18nApi,
     addComment: () => comments.commentOnSelection(),
     stats: () => ({ rows: rowCount(store.doc), bytes: docBytes(store.doc), budget: docBudget(canWriteInPlace()) }),
   }
