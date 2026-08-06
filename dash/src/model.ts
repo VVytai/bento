@@ -186,6 +186,8 @@ export type Step =
   | { op: string; [k: string]: unknown }
 
 export interface TableSheet {
+  /** discussion threads — see the comments block at the foot of this file */
+  comments?: Comment[]
   id: string
   name: string
   kind: 'table'
@@ -234,6 +236,8 @@ export interface TableSheet {
  * hatch added later is permanently second-class (PLATFORM §3).
  */
 export interface CanvasSheet {
+  /** discussion threads — see the comments block at the foot of this file */
+  comments?: Comment[]
   id: string
   name: string
   kind: 'canvas'
@@ -261,6 +265,8 @@ export interface CanvasCell {
  * double the file.
  */
 export interface PivotSheet {
+  /** discussion threads — see the comments block at the foot of this file */
+  comments?: Comment[]
   id: string
   name: string
   kind: 'pivot'
@@ -808,5 +814,70 @@ export interface StoryStep {
 
 export interface Story {
   steps: StoryStep[]
+  [extra: string]: unknown
+}
+
+// --- comments -----------------------------------------------------------------
+//
+// Threads live on the SHEET (`Sheet.comments`), not on the document, so a sheet
+// delete takes its threads with it and an undo brings them back — for free,
+// through the `setSheet` patch that already carries the whole sheet. The sheet
+// id is deliberately NOT inside the anchor: it is implied by location, and a
+// second copy is a second source of truth that can disagree with the first.
+//
+// A CELL anchor is column identity plus ROW identity, never a position. Sorting
+// and filtering are view state, so a positional anchor points at a different
+// number the instant somebody clicks a column header — the same class of bug as
+// the canonical-versus-visible index that deleted the wrong row.
+
+/**
+ * What a comment is about.
+ *
+ * An OPEN union, like model.ts's `Policy` and `StoredPredicate`: a kind this
+ * build does not know must PARSE and must round-trip, so `resolveAnchor`
+ * reports it as `unknown` and the interface lists it as an anchor written by a
+ * newer build rather than dropping the thread.
+ */
+export type CommentAnchor =
+  /** one cell, by column identity and row identity — never by position */
+  | { kind: 'cell'; col: string; rid: number }
+  | { kind: 'column'; col: string }
+  | { kind: 'sheet' }
+  | { kind: string; [k: string]: unknown }
+
+export interface CommentReply {
+  id: string
+  author: string
+  /** ISO 8601, UTC. The reader's locale formats it; the file never carries one. */
+  at: string
+  text: string
+  [extra: string]: unknown
+}
+
+export interface Comment {
+  id: string
+  anchor: CommentAnchor
+  author: string
+  at: string
+  text: string
+  replies?: CommentReply[]
+  /**
+   * ABSENT means open. Resolving writes `true`; reopening DELETES the key
+   * rather than writing `false`, so resolve-then-reopen leaves the file exactly
+   * as it found it — `freezeAt`'s rule, and the reason a round trip through the
+   * interface produces no diff for every other reader to notice.
+   */
+  resolved?: boolean
+  /**
+   * What the anchor NAMED when the comment was written — the column's name, the
+   * 1-based row, and the cell's value as it was DISPLAYED.
+   *
+   * A legibility aid and never data: it is what lets an orphan say "on Amount,
+   * row 12, which read £22,750" instead of naming an id nobody recognises, and
+   * it is how a reader spots a comment that re-attached to a re-imported column
+   * that is no longer the same column. `value` is a formatted string precisely
+   * so nothing can be tempted to compute with it.
+   */
+  was?: { col?: string; row?: number; value?: string }
   [extra: string]: unknown
 }

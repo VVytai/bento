@@ -107,6 +107,21 @@ export type Action =
   | { kind: 'paste' }
   | { kind: 'undo' }
   | { kind: 'redo' }
+  /** Push the top row of the selection down through the rest of it (⌘D, ⌘↵). */
+  | { kind: 'fill' }
+  /**
+   * The three verbs below are NOT the grid's, and they are in this map anyway.
+   *
+   * A keyboard that cannot list itself is a keyboard nobody finds: every one of
+   * these is a key this application already claims, so leaving them out of the
+   * one place that says what a key means guarantees the shortcut card is a
+   * hand-written copy that drifts. Declaring them changes nothing at run time —
+   * `applyMotion` reports them unhandled, so whoever owns the verb still runs
+   * it (main.ts saves, help.ts opens the card, panels.ts toggles the panels).
+   */
+  | { kind: 'save' }
+  | { kind: 'help' }
+  | { kind: 'panel'; side: 'left' | 'right' }
 
 /** Structurally a KeyboardEvent, so a real event passes straight in. */
 export interface KeyLike {
@@ -127,6 +142,16 @@ const ARROWS: Record<string, [number, number]> = {
  * NULL IS THE IMPORTANT RETURN. A grid that claims every keystroke swallows the
  * ones that should start an edit (typing a digit), and one that claims a
  * modified key it does not implement turns a shortcut into a cursor move.
+ *
+ * THREE PRINTABLE KEYS ARE CLAIMED — '?', '[' and ']' — and none of them is
+ * claimed HERE: help.ts and panels.ts take them in the CAPTURE phase, before
+ * main.ts's typing route runs. They are declared anyway, because a keyboard
+ * described in three files is a keyboard described wrongly in two of them, and
+ * because main.ts's printable-key route should ask this map whether a key is
+ * spoken for before handing it to `grid.typeInto`. That question is what makes
+ * ⇧Space select a row: without it the printable route sees a space, opens a
+ * cell editor, and the binding below never runs (measured — ⇧Space typed a
+ * space into the cell for as long as it has existed).
  */
 export function keyToAction(e: KeyLike): Action | null {
   const shift = e.shiftKey === true
@@ -146,7 +171,10 @@ export function keyToAction(e: KeyLike): Action | null {
 
   switch (e.key) {
     case 'Tab': return { kind: 'tab', back: shift }
-    case 'Enter': return { kind: 'enter', back: shift }
+    // ⌘↵ FILLS rather than moving. It used to fall through to a plain Enter,
+    // which made the one key a spreadsheet user presses to push a value through
+    // a selected block a second, indistinguishable way of moving down one cell.
+    case 'Enter': return cmd ? { kind: 'fill' } : { kind: 'enter', back: shift }
     case 'Home': return { kind: 'home', whole: cmd, extend: shift }
     case 'End': return { kind: 'end', whole: cmd, extend: shift }
     case 'PageUp': return { kind: 'move', dr: -1, dc: 0, unit: 'page', extend: shift }
@@ -156,8 +184,36 @@ export function keyToAction(e: KeyLike): Action | null {
     // "empty these cells" in a grid.
     case 'Delete': case 'Backspace': return { kind: 'clear' }
     case 'F2': return { kind: 'edit' }
-    // A bare space types a space; only the modified forms select.
-    case ' ': return shift ? { kind: 'selectRow' } : cmd ? { kind: 'selectCol' } : null
+    // A bare space types a space; only the modified forms select. ⌘⇧Space is
+    // the whole sheet — Excel and Sheets both widen the selection one step at a
+    // time (cell → column → sheet) and a user who has learned that reaches for
+    // it before they reach for ⌘A.
+    case ' ': return cmd && shift ? { kind: 'selectAll' }
+      : shift ? { kind: 'selectRow' }
+        : cmd ? { kind: 'selectCol' } : null
+    /**
+     * '?' opens the shortcut card — and this entry alone opens nothing.
+     *
+     * '?' is PRINTABLE, and main.ts hands printable keys to `grid.typeInto`
+     * before it ever consults this map, so help.ts claims the keystroke in the
+     * CAPTURE phase exactly as panels.ts claims '[' and ']'. What this entry
+     * buys is that the card can describe the key that opens it without anybody
+     * typing the row by hand. The cost is one character that can no longer
+     * START a cell entry: F2 first (or double-click), then type it.
+     *
+     * ⌘? is deliberately NOT help. It is ⌘⇧/ on a US layout, and claiming a
+     * modified key we do not implement is how a shortcut becomes a dead key.
+     */
+    case '?': return cmd ? null : { kind: 'help' }
+    /**
+     * '[' and ']' are IMPLEMENTED IN panels.ts, in the capture phase. They are
+     * declared here so the keyboard has ONE description and the card stays
+     * generated; nothing reads this entry to toggle a panel. ⌘[ is not a panel
+     * toggle for the same reason ⌘? is not help — panels.ts ignores modified
+     * forms, so the map must too or the card advertises a key that does nothing.
+     */
+    case '[': return cmd ? null : { kind: 'panel', side: 'left' }
+    case ']': return cmd ? null : { kind: 'panel', side: 'right' }
   }
 
   if (!cmd) return null
@@ -171,8 +227,143 @@ export function keyToAction(e: KeyLike): Action | null {
     case 'v': return { kind: 'paste' }
     case 'z': return shift ? { kind: 'redo' } : { kind: 'undo' }
     case 'y': return { kind: 'redo' }
+    // ⌘D is the fill people actually press — ⌘↵ is Excel's, ⌘D is Sheets' and
+    // Excel's both. Unclaimed it is the browser's bookmark dialog, which is
+    // what a spreadsheet user gets today for reaching for fill-down.
+    case 'd': return { kind: 'fill' }
+    case 's': return { kind: 'save' }
+    // Sheets' shortcut-card key, and the one that does not cost a printable
+    // character. '?' above is the same verb for people who learned it in slides.
+    case '/': return { kind: 'help' }
   }
   return null
+}
+
+// --- Describing the map ------------------------------------------------------
+//
+// THE SHORTCUT CARD IS GENERATED FROM keyToAction, never written beside it.
+//
+// A hand-kept list of keys drifts inside one release and then teaches people
+// bindings that no longer exist — worse than no list, because a wrong list is
+// believed. So the card asks the map: probe it across the whole key space and
+// report what it answers. Add a case to the switch above and the row appears
+// with no other edit; delete one and the row disappears.
+//
+// The probe is EXHAUSTIVE rather than a curated list of keys to ask about,
+// because a curated list is the same maintenance burden with an extra step in
+// front of it. It is a few hundred pure function calls, run when the card
+// opens.
+//
+// What is NOT derivable, and must not be faked here: gestures that never reach
+// this map at all (a bare printable key opens the editor; double-click; the
+// fill handle). help.ts writes those as prose, clearly labelled as prose.
+
+/** One key combination, in the shape a shortcut card wants to draw. */
+export interface KeyChord {
+  key: string
+  /** 'either' = ⌘ or ctrl, which is the usual case — the map folds them. */
+  mod: 'none' | 'either' | 'meta' | 'ctrl'
+  shift: boolean
+  alt: boolean
+}
+
+/** Every key that produces one action, and the action itself. */
+export interface BindingRow {
+  /** the action's identity with direction left out: 'move.edge.extend', 'copy' */
+  sig: string
+  action: Action
+  chords: KeyChord[]
+}
+
+/**
+ * What an action IS, with the parts a key already expresses left out.
+ *
+ * ↑ and ↓ are ONE binding ("move one cell") because the arrow says which way,
+ * so dr/dc are not in the signature. ↓ and ⌘↓ are TWO, so `unit` is. Getting
+ * this wrong in either direction produces a card with four rows saying the same
+ * thing, or one row hiding a shortcut.
+ */
+export function actionSig(a: Action): string {
+  switch (a.kind) {
+    case 'move': return `move.${a.unit}${a.extend ? '.extend' : ''}`
+    case 'tab': case 'enter': return `${a.kind}${a.back ? '.back' : ''}`
+    case 'home': case 'end':
+      return `${a.kind}${a.whole ? '.whole' : ''}${a.extend ? '.extend' : ''}`
+    case 'panel': return `panel.${a.side}`
+    default: return a.kind
+  }
+}
+
+const FN_KEYS = Array.from({ length: 12 }, (_, i) => `F${i + 1}`)
+const NAMED_KEYS = [
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Tab', 'Enter', 'Escape', 'Home', 'End', 'PageUp', 'PageDown',
+  'Delete', 'Backspace', 'Insert', ...FN_KEYS,
+]
+// Printable ASCII, minus A–Z: the map folds case, so probing 'z' covers 'Z',
+// and probing both would report every letter shortcut twice.
+const PRINTABLE_KEYS = Array.from({ length: 0x7f - 0x20 }, (_, i) => String.fromCharCode(0x20 + i))
+  .filter((c) => !(c >= 'A' && c <= 'Z'))
+const PROBE_KEYS = [...NAMED_KEYS, ...PRINTABLE_KEYS]
+
+/**
+ * Every binding the map holds, grouped by what it does.
+ *
+ * `map` is a parameter so the rig can prove this is DERIVED: hand it a mapper
+ * with an extra binding and the extra binding must appear in the output. A
+ * hardcoded table passes every other test and fails that one.
+ */
+export function describeBindings(map: (e: KeyLike) => Action | null = keyToAction): BindingRow[] {
+  interface Found { key: string; mod: 'meta' | 'ctrl' | 'none'; shift: boolean; alt: boolean; action: Action }
+  const found: Found[] = []
+
+  for (const key of PROBE_KEYS) {
+    for (const mod of ['none', 'meta', 'ctrl'] as const) {
+      const ask = (shift: boolean, alt: boolean): Action | null =>
+        map({ key, shiftKey: shift, altKey: alt, metaKey: mod === 'meta', ctrlKey: mod === 'ctrl' })
+      const bare = (shift: boolean, alt: boolean): Action | null =>
+        map({ key, shiftKey: shift, altKey: alt })
+      const sameAs = (a: Action, other: Action | null): boolean =>
+        other !== null && actionSig(other) === actionSig(a)
+      for (const alt of [false, true]) {
+        for (const shift of [false, true]) {
+          const action = ask(shift, alt)
+          if (!action) continue
+          // A MODIFIER THAT DOES NOT CHANGE THE ANSWER IS NOT PART OF THE
+          // BINDING. ⇧Delete still clears and so does ⌘Delete; printing all
+          // three as though they were three shortcuts is noise the reader has
+          // to rule out one row at a time — and it is how a card ends up
+          // teaching ⌘Esc.
+          if (shift && sameAs(action, ask(false, alt))) continue
+          if (alt && sameAs(action, ask(shift, false))) continue
+          if (mod !== 'none' && sameAs(action, bare(shift, alt))) continue
+          found.push({ key, mod, shift, alt, action })
+        }
+      }
+    }
+  }
+
+  // ⌘ and ctrl are one binding wherever the map folds them (it does, today,
+  // everywhere) — but they are probed separately so that the day one of them
+  // means something different, the card says so instead of picking a winner.
+  const twin = (c: Found, want: 'meta' | 'ctrl'): Found | undefined => found.find((o) =>
+    o.mod === want && o.key === c.key && o.shift === c.shift && o.alt === c.alt &&
+    actionSig(o.action) === actionSig(c.action))
+
+  const rows: BindingRow[] = []
+  const bySig = new Map<string, BindingRow>()
+  const put = (action: Action, chord: KeyChord): void => {
+    const sig = actionSig(action)
+    let row = bySig.get(sig)
+    if (!row) { row = { sig, action, chords: [] }; bySig.set(sig, row); rows.push(row) }
+    row.chords.push(chord)
+  }
+  for (const c of found) {
+    if (c.mod === 'ctrl' && twin(c, 'meta')) continue          // emitted as 'either'
+    const mod = c.mod === 'meta' ? (twin(c, 'ctrl') ? 'either' : 'meta') : c.mod
+    put(c.action, { key: c.key, mod, shift: c.shift, alt: c.alt })
+  }
+  return rows
 }
 
 // --- Selection -------------------------------------------------------------

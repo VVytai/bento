@@ -49,6 +49,12 @@ import {
 } from './model.ts'
 import { Store } from './store.ts'
 import { starterDoc } from './starter.ts'
+import { validateDoc } from './validate.ts'
+import { mountHelp } from './help.ts'
+import { keyToAction } from './select.ts'
+import { mountComments, flatComments } from './comments.ts'
+import { mountRecovery } from './recovery.ts'
+import { mountDropOpen } from './dropopen.ts'
 import { Grid } from './grid.ts'
 import { importDelimited } from './import.ts'
 import { TYPE_LABEL } from './format.ts'
@@ -303,8 +309,10 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     // A bare printable key REPLACES the selected cell — the most-used gesture
     // in a spreadsheet, and the one that makes a grid feel like one. It has to
     // be tried before keyToAction, which returns null for printable keys
-    // precisely so that typing can reach here.
-    if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
+    // precisely so that typing can reach here — EXCEPT for the handful the map
+    // does claim. ⇧Space means select-the-row in every spreadsheet, and without
+    // that `!keyToAction(e)` it typed a space into the cell instead.
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1 && !keyToAction(e)) {
       if (grid.typeInto(e.key)) { e.preventDefault(); return }
     }
     if (grid.handleKey(e)) e.preventDefault()
@@ -392,6 +400,9 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   // AFTER grid.onSelectionChange is set: mountPanels CHAINS that callback
   // rather than replacing it, so the formula bar and status bar keep working.
   mountPanels({ store, grid, body: app.querySelector<HTMLElement>('.dx-body')! })
+
+  // Comments. AFTER mountPanels, which chains grid.onSheetChange.
+  const comments = mountComments({ store, grid, el: app.querySelector<HTMLElement>('.dx-grid')! })
 
   // --- pivot. A pivot is a DOCUMENT, not a view: "revenue by region by
   // quarter" is an argument about what the data means, somebody built it, and
@@ -551,7 +562,44 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   // the first thing the responsive rules drop. The ⓘ button is the real door;
   // the other two stay as shortcuts for whoever already found them.
   app.querySelector('[data-act="about"]')!.addEventListener('click', () => openAbout(aboutHooks))
+  // The keyboard, made findable: a ? button beside About, and the ? key. The
+  // card is GENERATED from select.ts's key map, so a binding added there shows
+  // up here with no edit.
+  mountHelp(app)
   void pruneOld()
+
+  // --- the READ half of autosave, and opening a file by dropping it ---------
+  //
+  // Recovery was WRITE-ONLY: `putRecovery` ran on every debounced edit and
+  // nothing ever read a snapshot back, so a crash lost work that was sitting
+  // in IndexedDB the whole time.
+  //
+  // And nothing intercepted a file drop, so dropping anything on the window
+  // hit the browser default and NAVIGATED AWAY from the workbook — taking
+  // unsaved edits with it. That, not convenience, is why dropopen exists.
+  //
+  // Both go through the same swap: `Grid.sheet` throws when the sheet id it
+  // holds is missing and it reads that from the FIRST `doc` listener, so a
+  // workbook with different sheet ids takes the chart and the dirty flag down
+  // with it. about.ts's `planReplace` is the fix, and it is shared, not copied.
+  const openHost = {
+    store,
+    showingSheet: () => grid.sheet.id,
+    showSheet: (id: string) => grid.setSheet(id),
+    afterSwap: (next: DashDoc) => {
+      // the chrome nothing else refreshes: the title field is written once at
+      // boot and thereafter only by its own input handler
+      titleEl.value = next.title
+      document.title = `${next.title} — ${appConfig().appName}`
+    },
+  }
+  void mountRecovery(openHost)
+  mountDropOpen({
+    ...openHost,
+    importText: (text: string, source: string) => applyImport(store, findingsEl, grid, text, source),
+    notice: (message: string) => showFindings(findingsEl, [{ message }] as never),
+    dirty: () => dirty,
+  })
 
   titleEl.addEventListener('input', () => {
     store.commit({ op: 'setTitle', title: titleEl.value })
@@ -609,6 +657,9 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     if (k === 's') { e.preventDefault(); void doSave() }
     else if (k === 'z' && !e.shiftKey) { e.preventDefault(); store.undo() }
     else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); store.redo() }
+    // ⌘D / ⌘Enter fill down. THE MAP decides which keys mean fill; a fill
+    // WRITES CELLS, which the selection model cannot do, so the verb lands here.
+    else if (keyToAction(e)?.kind === 'fill') { e.preventDefault(); grid.fillDownSelection() }
   })
   document.addEventListener('paste', (e) => {
     if ((e.target as HTMLElement)?.isContentEditable) return
@@ -660,9 +711,26 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     loadDoc: (json: string): boolean => {
       const r = parseDoc(json)
       if (!r.ok) return false
+      // Validate and REPORT, never refuse. The document is the user's data,
+      // and refusing to load a workbook whose columns disagree loses more than
+      // loading it and saying so.
+      const v = validateDoc(r.doc)
       store.replaceDoc(r.doc)
+      showFindings(findingsEl, v.findings.filter((f) => f.severity === 'fatal') as never)
       return true
     },
+    /** Check a workbook against itself — findings, never a refusal. */
+    validate: (json?: string) => {
+      if (json === undefined) return validateDoc(store.doc)
+      const r = parseDoc(json)
+      return r.ok ? validateDoc(r.doc) : {
+        ok: false,
+        counts: { fatal: 1, repairable: 0, suspicious: 0 },
+        findings: [{ code: `parse-${r.err}`, severity: 'fatal' as const, message: r.err }],
+      }
+    },
+    comments: () => flatComments(store.doc),
+    addComment: () => comments.commentOnSelection(),
     stats: () => ({ rows: rowCount(store.doc), bytes: docBytes(store.doc), budget: docBudget(canWriteInPlace()) }),
   }
 }

@@ -29,7 +29,7 @@
 // means rewriting the store.
 
 import { applySheetProps } from './rowcol.ts'
-import type { CellOverride, View, Column, ColumnData, DashDoc, Measure, Sheet, Step, TableSheet } from './model.ts'
+import type { CellOverride, Comment, View, Column, ColumnData, DashDoc, Measure, Sheet, Step, TableSheet } from './model.ts'
 
 type Listener = () => void
 export type StoreEvent = 'doc' | 'view' | 'selection'
@@ -157,6 +157,16 @@ export type Patch =
    * readers must agree on it.
    */
   | { op: 'setSheet'; id: string; sheet?: Sheet; at?: number }
+  /**
+   * One comment thread, by id. `comment: undefined` removes it.
+   *
+   * Per-thread rather than rewriting `Sheet.comments` through `setSheetProps`:
+   * that carried the WHOLE array in the inverse — about 75KB per keystroke at
+   * five hundred threads, against a 24MB history cap — and under collaboration
+   * it is a single LWW register, so two people adding a thread in the same
+   * moment keep one of them. Keyed by id, exactly as `setView` is.
+   */
+  | { op: 'setComment'; sheet: string; id: string; comment?: Comment; at?: number }
   /**
    * RESERVED. Both need the transform engine, which does not exist yet. They
    * are in the union now because the discriminant cannot be retrofitted once
@@ -521,6 +531,29 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       return {
         inverse: { op: 'setMeasure', name: p.name, measure: was, dropEmpty: !existed },
         touched: {},
+      }
+    }
+
+    case 'setComment': {
+      // ANY sheet kind, not just a table: a remark on a pivot is a remark.
+      const sheet = doc.sheets.find((sh) => sh.id === p.sheet) as
+        (Sheet & { comments?: Comment[] }) | undefined
+      if (!sheet) throw new Error(`no sheet "${p.sheet}"`)
+      const existed = sheet.comments !== undefined
+      sheet.comments ??= []
+      const at = sheet.comments.findIndex((c) => c.id === p.id)
+      const was = at < 0 ? undefined : sheet.comments[at]
+      if (p.comment === undefined) { if (at >= 0) sheet.comments.splice(at, 1) }
+      else if (at >= 0) sheet.comments[at] = p.comment
+      else if (typeof p.at === 'number' && p.at >= 0 && p.at <= sheet.comments.length) {
+        sheet.comments.splice(p.at, 0, p.comment)
+      } else sheet.comments.push(p.comment)
+      // add-then-remove must not leave `comments: []` behind — a round trip
+      // that changes the file is a diff every other reader has to explain
+      if (!existed && sheet.comments.length === 0) delete sheet.comments
+      return {
+        inverse: { op: 'setComment', sheet: p.sheet, id: p.id, comment: was, at: at < 0 ? undefined : at },
+        touched: { sheet: p.sheet },
       }
     }
 

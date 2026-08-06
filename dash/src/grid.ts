@@ -452,6 +452,11 @@ export class Grid {
     this.table.innerHTML = body.join('') + this.outline()
     this.foot.innerHTML = this.totalsRow()
     this.wire()
+    // AFTER wire(), so anything decorating cells finds the real nodes. The
+    // comments overlay used a MutationObserver on the sizer before this
+    // existed — correct, and a microtask on every paint for something the
+    // grid already knows.
+    this.onPaint?.()
   }
 
   /**
@@ -793,8 +798,11 @@ export class Grid {
     this.writeBlock(b.top, b.left, block)
   }
 
+  /** Fires after every repaint — how an overlay knows to re-place its markers. */
+  onPaint?: () => void
+
   /** Tell the app what is selected, for the formula bar and the status bar. */
-  private announce(): void {
+  announce(): void {
     if (!this.onSelectionChange) return
     const s = this.sheet
     const vis = cols(s)

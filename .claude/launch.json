@@ -2,16 +2,43 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "dash-dev",
+      "cwd": "dash",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5188",
+        "--strictPort"
+      ],
+      "port": 5188
+    },
+    {
       "name": "spaces-dev",
       "cwd": "spaces",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "--port", "5196", "--strictPort"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5196",
+        "--strictPort"
+      ],
       "port": 5196
     },
     {
       "name": "serve-spaces-built",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "5195", "--directory", "spaces/dist-single"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5195",
+        "--directory",
+        "spaces/dist-single"
+      ],
       "port": 5195
     },
     {

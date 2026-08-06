@@ -134,6 +134,28 @@ export function setRidBlock(base: number | null): void {
   ridBlock = base === null || base <= 1 ? null : { base, high: base - 1 }
 }
 
+/**
+ * Rows a COMMENT still names, live or not.
+ *
+ * A comment anchors to a rid and is deliberately never rewritten when its row
+ * is deleted — it becomes an orphan, kept and flagged, so that anything
+ * restoring the rid (an undo, a re-import, a collaborator) re-attaches the
+ * remark byte-identically. That is only safe while the rid is never handed to
+ * a DIFFERENT row: without this, a workbook whose rows were deleted by a build
+ * predating the watermark could mint one again, and somebody's sentence would
+ * reappear attached to a number it was never about.
+ *
+ * The same hazard the header above describes for overrides, and the same fix.
+ */
+function commentRids(sheet: TableSheet): number[] {
+  const out: number[] = []
+  for (const c of sheet.comments ?? []) {
+    const a = c?.anchor as { kind?: unknown; rid?: unknown } | undefined
+    if (a && a.kind === 'cell' && typeof a.rid === 'number' && Number.isFinite(a.rid)) out.push(a.rid)
+  }
+  return out
+}
+
 function nextRidFloor(sheet: TableSheet): number {
   const blk = ridBlock
   if (blk) {
@@ -152,6 +174,7 @@ function nextRidFloor(sheet: TableSheet): number {
       const rid = ridOfKey(k)
       if (Number.isFinite(rid) && inBlock(rid)) hi = Math.max(hi, rid)
     }
+    for (const rid of commentRids(sheet)) if (inBlock(rid)) hi = Math.max(hi, rid)
     blk.high = hi
     return hi + 1
   }
@@ -162,6 +185,7 @@ function nextRidFloor(sheet: TableSheet): number {
     const rid = ridOfKey(k)
     if (Number.isFinite(rid)) hi = Math.max(hi, rid)
   }
+  for (const rid of commentRids(sheet)) hi = Math.max(hi, rid)
   const stamped = sheet.nextRid
   if (typeof stamped === 'number' && Number.isFinite(stamped)) hi = Math.max(hi, stamped - 1)
   return hi + 1
