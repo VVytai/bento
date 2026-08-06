@@ -48,7 +48,10 @@ export function mountPeople(host: HTMLElement, session: SyncSession, store: Stor
       `<div class="dx-people-head">` +
       `<span class="dx-people-dot${live ? ' on' : ''}"></span>` +
       `<span class="dx-people-title">${live ? 'Live' : 'Not sharing'}</span>` +
-      `<button class="dx-btn dx-people-toggle">${live ? 'Stop sharing' : 'Start live session'}</button>` +
+      `<button class="dx-btn dx-people-toggle" title="${esc(live
+        ? t('Disconnect from the relay — collaborators stop seeing your edits')
+        : t('Put this workbook on the relay so people you send a copy to edit it live with you'))}">` +
+      `${live ? t('Stop sharing') : t('Start live session')}</button>` +
       `</div>` +
       `<ul class="dx-people-list">` +
       `<li class="dx-people-me"><span class="dx-people-chip" style="background:${esc(selfColor(session))}"></span>` +

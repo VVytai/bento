@@ -410,4 +410,9 @@ export const fr: Catalog = {
   "{type} — click to change": "{type} — cliquez pour changer",
   "{n} value(s) could not be read as {type}": "{n} valeur(s) n’ont pas pu être lues comme {type}",
   "Totals cover the {n} row(s) the filter leaves showing, not all {all}.": "Les totaux portent sur les {n} ligne(s) laissées par le filtre, pas sur les {all}.",
+  "Close the story editor": "Fermer l’éditeur d’histoire",
+  "Disconnect from the relay — collaborators stop seeing your edits": "Se déconnecter du relais — les collaborateurs cessent de voir vos modifications",
+  "Put this workbook on the relay so people you send a copy to edit it live with you": "Placer ce classeur sur le relais pour que les destinataires d’une copie le modifient en direct avec vous",
+  "Start live session": "Démarrer une session en direct",
+  "Stop sharing": "Arrêter le partage",
 }

@@ -410,4 +410,9 @@ export const ja: Catalog = {
   "{type} — click to change": "{type} — クリックして変更",
   "{n} value(s) could not be read as {type}": "{n} 件の値を {type} として読み取れませんでした",
   "Totals cover the {n} row(s) the filter leaves showing, not all {all}.": "合計はフィルターで表示されている {n} 行が対象です（全 {all} 行ではありません）。",
+  "Close the story editor": "ストーリーエディターを閉じる",
+  "Disconnect from the relay — collaborators stop seeing your edits": "リレーから切断します — 共同編集者にはあなたの編集が見えなくなります",
+  "Put this workbook on the relay so people you send a copy to edit it live with you": "このブックをリレーに接続し、コピーを渡した相手とリアルタイムで共同編集します",
+  "Start live session": "ライブセッションを開始",
+  "Stop sharing": "共有を停止",
 }

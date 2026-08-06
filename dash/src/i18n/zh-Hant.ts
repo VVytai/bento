@@ -410,4 +410,9 @@ export const zhHant: Catalog = {
   "{type} — click to change": "{type} — 按一下以變更",
   "{n} value(s) could not be read as {type}": "有 {n} 個值無法以 {type} 讀取",
   "Totals cover the {n} row(s) the filter leaves showing, not all {all}.": "合計僅包含篩選後顯示的 {n} 列，而非全部 {all} 列。",
+  "Close the story editor": "關閉故事編輯器",
+  "Disconnect from the relay — collaborators stop seeing your edits": "中斷與轉送伺服器的連線 — 協作者將看不到你的編輯",
+  "Put this workbook on the relay so people you send a copy to edit it live with you": "將此活頁簿接上轉送伺服器，讓收到副本的人與你即時共同編輯",
+  "Start live session": "開始即時協作",
+  "Stop sharing": "停止共用",
 }

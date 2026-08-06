@@ -410,4 +410,9 @@ export const zhHans: Catalog = {
   "{type} — click to change": "{type} — 单击以更改",
   "{n} value(s) could not be read as {type}": "有 {n} 个值无法按 {type} 读取",
   "Totals cover the {n} row(s) the filter leaves showing, not all {all}.": "合计仅包含筛选后显示的 {n} 行，而非全部 {all} 行。",
+  "Close the story editor": "关闭故事编辑器",
+  "Disconnect from the relay — collaborators stop seeing your edits": "断开与中继的连接 — 协作者将看不到你的编辑",
+  "Put this workbook on the relay so people you send a copy to edit it live with you": "将此工作簿接入中继，让收到副本的人与你实时共同编辑",
+  "Start live session": "开始实时协作",
+  "Stop sharing": "停止共享",
 }
