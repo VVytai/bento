@@ -29,7 +29,18 @@
 //  NOT PART OF ANY BUILD. Nothing under slides/, spaces/ or kernel/ imports
 //  it; it is loaded only by the rig, under node's type stripping.
 //
-//  THE ONLY EDIT MADE TO THE COPY is the import on the next line: the
+//  RE-FROZEN ONCE, deliberately, and this is the whole list of why it may
+//  ever happen again: assignNode built a dbg() argument around
+//  JSON.stringify(undefined) and threw on the property-removal path. That is
+//  a CRASH, not a byte — the engine mints exactly the same ops, state and
+//  document with the guard as without it — so applying the same one-line fix
+//  here keeps this file a faithful record of what the field was written with,
+//  while letting the rig run deeper than the crash allowed (it was found at
+//  400 seeds × 120 steps × 5 actors, and CI runs 200 × 60 × 4). A change that
+//  altered a minted byte would NOT qualify: that is the case this file exists
+//  to catch, and re-freezing to hide one would be the failure, not the fix.
+//
+//  THE OTHER EDIT MADE TO THE COPY is the import on the next line: the
 //  original reads `import type { BentoDoc, Slide, SlideElement } from
 //  '../model'`, which does not resolve from scripts/lib/. Types are erased
 //  before this file runs, so the substitution cannot change a single emitted
@@ -902,7 +913,7 @@ export class SyncState {
         dbg(id, `assign ${k} KEEP (reg ${JSON.stringify(r)} > birth ${JSON.stringify(birth)})`)
         continue // a newer set beats the assignment
       }
-      dbg(id, `assign ${k} := ${JSON.stringify(payload[k]).slice(0, 40)}`)
+      dbg(id, `assign ${k} := ${String(JSON.stringify(payload[k])).slice(0, 40)}`)
       if (payload[k] === undefined) delete node[k]
       else node[k] = clone(payload[k])
     }

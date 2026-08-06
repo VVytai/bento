@@ -11,6 +11,17 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **Fix: a live session could crash when two people created the same element at
+  the same moment.** Sharing an element id across slides is the morph idiom —
+  it is what id continuity is *for* — so two collaborators inserting one
+  concurrently is ordinary, not a collision. If one copy carried a property the
+  other did not (a shadow, a gradient fill, an outline, a group, a link), the
+  replica receiving the other's insert threw and the session stopped. Nothing
+  was lost from the file; the tab simply stopped keeping up. Same one-line
+  defect as the two before it in this engine — a debug string built eagerly
+  around a value that can legitimately be absent — and it is now pinned by a
+  test with a deterministic trigger rather than left to a random rig's depth.
+
 ## [1.0.16] — 2026-08-03
 
 - **Fix: the slide could open off-centre, pushed to one side and clipped.**

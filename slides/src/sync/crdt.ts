@@ -934,7 +934,14 @@ export class SyncState {
         dbg(id, `assign ${k} KEEP (reg ${JSON.stringify(r)} > birth ${JSON.stringify(birth)})`)
         continue // a newer set beats the assignment
       }
-      dbg(id, `assign ${k} := ${JSON.stringify(payload[k]).slice(0, 40)}`)
+      // String(...) is NOT belt-and-braces: `k` comes from the union of the
+      // local node's keys and the payload's, so `payload[k]` is undefined
+      // exactly on the property-REMOVAL path two lines below — and
+      // JSON.stringify(undefined) is undefined, not "undefined". dbg() builds
+      // its argument eagerly, so this threw whether or not anyone was
+      // debugging. Third occurrence of this one bug in this file; the other
+      // two already carry the same guard.
+      dbg(id, `assign ${k} := ${String(JSON.stringify(payload[k])).slice(0, 40)}`)
       if (payload[k] === undefined) delete node[k]
       else node[k] = clone(payload[k])
     }

@@ -166,7 +166,7 @@ const IS_NOOP = (BASELINE.SyncState as unknown) === (CANDIDATE.SyncState as unkn
  * Update this constant ONLY when deliberately re-freezing against a new
  * shipped engine, in a commit that says so.
  */
-const BASELINE_SHA = 'f72cc5b835446e24e61a17dd3e79532805b8e1e1afe6ea61d18844bab01f9dc7'
+const BASELINE_SHA = '476c018fe63f83ae4f66837688ea0701f5bdec31f7a9a16447245248173d81ad'
 {
   const { createHash } = await import('node:crypto')
   const { readFileSync } = await import('node:fs')
