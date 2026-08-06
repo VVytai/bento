@@ -7,15 +7,25 @@
 import './styles.css'
 import { configureApp, appConfig } from '../../kernel/src/app.ts'
 import {
-  capturePristine, readEmbeddedDoc, serializeFile, serializeAuto,
+  capturePristine, readEmbeddedDoc, serializeFile, serializeAuto, registerPreview,
   saveFile, parseEnvelope, canWriteInPlace, decryptEnvelope, setEncryptionPassword,
+  writeUpdatedFileAs,
   isEncryptionActive,
 } from '../../kernel/src/save.ts'
 import { putRecovery, getRecovery, clearRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
 import { t, applyDirection } from './i18n'
-import { parseDoc, docContentKey, uid, type SpacesDoc, type ParseResult } from './model'
+import { parseDoc, docContentKey, uid, newPage, type SpacesDoc, type ParseResult } from './model'
+import {
+  validateDoc, outlineDoc, statsDoc,
+  planInsertBlocks, planUpdateBlock, planRemoveBlocks, planMoveBlock, planUpdatePage, planRemovePage,
+  fieldsReport, issuesReport, planSetField, planNewIssue,
+  plainTitle, badTitle,
+  type Plan, type PlanError, type IssueQuery,
+} from './agent'
 import { starterDoc } from './starter'
+import { textOf } from './sanitize'
+import { buildSpacePreview } from './preview'
 import { Store } from './store'
 import { Editor } from './editor'
 import { downloadMarkdown } from './about'
@@ -25,6 +35,13 @@ configureApp({
   appName: 'bento/spaces',
   manifestUrl: 'https://bento.page/releases/spaces/manifest.json',
 })
+
+// Every save writes a still render of the home page into the shell, for the
+// readers that run no script: macOS QuickLook, iOS Files, Bento Tray, and any
+// preview pane that renders HTML without executing it. Without this the runtime
+// never inflates, the splash is never removed, and a saved space shows a boot
+// animation where its content should be. See preview.ts.
+registerPreview((doc) => buildSpacePreview(doc as unknown as SpacesDoc))
 
 capturePristine()
 applyDirection()
@@ -162,9 +179,20 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
   document.getElementById('bento-splash')?.remove()
 
   const store = new Store(doc)
-  if (frozen) store.readOnly = true
+  // `doc.readonly` was declared in the format and read by NOTHING: a space
+  // saved as a reading copy opened fully editable, so the one property the
+  // sender chose was the one the file did not keep. It is not a security
+  // boundary — anyone can edit the JSON — but a file that says it is a reading
+  // copy must behave like one for the person who opens it.
+  //
+  // `frozen` is the other, unrelated reason to lock: this build does not
+  // understand the file and must not rewrite it.
+  if (frozen || doc.readonly) store.readOnly = true
   const editor = new Editor(document.getElementById('app')!, store)
 
+  if (!frozen && doc.readonly) {
+    banner(t('This is a reading copy. It opens for reading; nothing you do here changes the file.'))
+  }
   if (frozen) {
     banner(frozen === 'version'
       ? t('This file was written by a newer version of bento/spaces. It is open read-only so nothing is lost.')
@@ -178,17 +206,34 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
   editor.onSaveAs = (suffix: string) => {
     if (suffix === '__markdown') { downloadMarkdown(store); return }
     store.endRun()
-    // forcePicker = "Save a copy…": it always asks where, and the kernel keeps
-    // the in-place handle pointed at the working file, so a later ⌘S does not
-    // start overwriting the copy
-    void saveFile(store.doc, true).then((res) => {
-      if (res === 'saved') editor.status(t('Copy saved'))
-    })
+    // "Save a copy…" must leave you editing the ORIGINAL. That is what the
+    // label promises, and the file you go on typing into should never silently
+    // become the backup you just took.
+    //
+    // This used to call saveFile(doc, true), under a comment claiming the
+    // kernel kept the in-place handle pointed at the working file. It does the
+    // opposite: saveFile ASSIGNS the picked handle to the module's in-place
+    // handle (kernel/src/save.ts), so every later ⌘S wrote to the copy while
+    // the original stayed frozen at the moment it was copied. The guarantee the
+    // comment described lives in writeUpdatedFileAs, whose keepHandle defaults
+    // to false — slides learned the same lesson when a share export became the
+    // ⌘S target and the next save overwrote it with the full document.
+    //
+    // The status line was dead too: saveFile returns 'saved-as' down the
+    // forcePicker path, never 'saved', so the confirmation never appeared.
+    void serializeAuto(store.doc)
+      .then((html) => writeUpdatedFileAs(html, store.doc, { suffix: suffix === 'copy' ? 'copy' : suffix }))
+      .then((ok) => { if (ok) editor.status(t('Copy saved — you are still editing the original')) })
   }
   async function doSave(): Promise<void> {
     store.endRun()
     editor.status(t('Saving…'))
     const res = await saveFile(store.doc)
+    if (res === 'saved' || res === 'saved-as' || res === 'downloaded') {
+      // the document is on disk now — the dot goes out
+      store.dirty = false
+      editor.syncDirty()
+    }
     if (res === 'saved') {
       void clearRecovery(store.doc.docId)
       // "Saved" is doing real work here: on a browser without file-system
@@ -218,6 +263,22 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
   void offerRecovery(doc, store, editor)
 
   // ---- the AI round-trip (PLATFORM §7) -----------------------------------
+  //
+  // Every write verb is ONE undoable step, and every one of them runs its plan
+  // FIRST: `store.commit` checkpoints undo before it mutates, so planning
+  // inside the commit would leave an undo entry behind for a patch that was
+  // refused. A refused patch changes nothing at all, including history.
+  function run<T extends object>(plan: Plan<T>): ({ ok: true } & T) | PlanError {
+    if (store.readOnly) {
+      return { ok: false, err: 'readonly', detail: 'this file is open read-only; nothing was changed' }
+    }
+    if (!plan.ok) return plan
+    const { apply, ...rest } = plan
+    store.commit(apply)
+    editor.repaint()
+    return rest as { ok: true } & T
+  }
+
   ;(window as any).bento = {
     format: doc.format,
     get doc() { return store.doc },
@@ -237,38 +298,80 @@ function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version')
       const out: Array<{ pageId: string; title: string; blockId: string }> = []
       for (const p of store.doc.pages) {
         for (const b of p.blocks) {
-          const text = (b.html ?? '').replace(/<[^>]+>/g, '')
+          // textOf DECODES entities; a tag-strip does not. On a block reading
+          // "a &amp; b" the old regex searched "a &amp; b", so it missed the
+          // text the reader can see and matched text that is not there.
+          const text = textOf(b.html)
           if (text.toLowerCase().includes(needle)) out.push({ pageId: p.id, title: p.title, blockId: b.id })
         }
       }
       return out
     },
+    /** what is WRONG or SUSPECT — see agent.ts */
+    validate: (target?: SpacesDoc) => validateDoc(target ?? store.doc),
+    /** the whole space as a tree, for orienting in one call */
+    outline: (target?: SpacesDoc) => outlineDoc(target ?? store.doc),
+    /** where the bytes are */
+    stats: (target?: SpacesDoc) => statsDoc(target ?? store.doc),
+
     /**
      * ONE undoable step. Without this an agent appending a paragraph has to
      * rewrite and reparse the whole space through loadDoc — clobbering
      * concurrent edits and flattening undo to a single entry.
+     *
+     * Keeps its original return shape (new ids, or null) because it shipped
+     * that way; the verbs below it return tagged results.
      */
     insertBlocks: (pageId: string, afterId: string | null, blocks: unknown[]) => {
-      const page = store.doc.pages.find((p) => p.id === pageId)
-      if (!page || !Array.isArray(blocks)) return null
-      const made = blocks.map((raw) => {
-        const src = (raw ?? {}) as Record<string, unknown>
-        return { ...src, id: uid('b'), type: String(src.type ?? 'p') }
-      })
-      store.commit(() => {
-        const at = afterId ? page.blocks.findIndex((b) => b.id === afterId) + 1 : page.blocks.length
-        page.blocks.splice(at < 1 ? page.blocks.length : at, 0, ...(made as any))
-      })
-      editor.repaint()
-      return made.map((m) => m.id)
+      const res = run(planInsertBlocks(store.doc, pageId, afterId ?? null, blocks))
+      return res.ok ? res.ids : null
     },
+    updateBlock: (id: string, patch: unknown) => run(planUpdateBlock(store.doc, id, patch)),
+    removeBlocks: (ids: unknown) => run(planRemoveBlocks(store.doc, ids)),
+    moveBlock: (id: string, to: unknown) => run(planMoveBlock(store.doc, id, to)),
+    updatePage: (id: string, patch: unknown) => run(planUpdatePage(store.doc, id, patch)),
+    removePage: (id: string, opts?: { descendants?: boolean }) =>
+      run(planRemovePage(store.doc, id, opts ?? {})),
+
+    // ---- the tracker: an issue is a page ---------------------------------
+    /** the schema in force — the option IDS a value must use */
+    fields: () => fieldsReport(store.doc),
+    /** the backlog as data, filtered by field value or by status phase */
+    issues: (query?: IssueQuery) => issuesReport(store.doc, query ?? {}),
+    /**
+     * One field, one undoable step, `value` and its readable `html` written
+     * TOGETHER — the only supported way to set a value, because a prop block
+     * written by hand through insertBlocks gets that pairing wrong, and it is
+     * the one thing that must never happen.
+     */
+    setField: (pageId: string, key: string, value: unknown) =>
+      run(planSetField(store.doc, pageId, key, value)),
+    newIssue: (spec?: unknown) => run(planNewIssue(store.doc, spec)),
+
+    /**
+     * A page carries one empty paragraph, exactly as the editor's own New page
+     * does. A page with no blocks has nothing to put a caret in — no gutter, no
+     * / menu, no way to type — so an agent creating one would hand a human a
+     * page they cannot write in.
+     */
     newPage: (title: string, parent?: string) => {
-      const page = { id: uid('p'), title: String(title ?? 'Untitled'), blocks: [], ...(parent ? { parent } : {}) }
-      store.commit(() => { store.doc.pages.push(page as any) })
+      if (store.readOnly) return null
+      // A TITLE, not something that stringifies into one. This takes a string
+      // where the verbs beside it take an object, so `newPage({ title: 'x' })`
+      // is the natural mistake — and it used to make a page called
+      // "[object Object]" and hand back its id, which is the exact failure the
+      // rest of this surface exists to avoid.
+      if (badTitle(title)) return null
+      // a parent that names nothing would silently make this a ROOT page; say
+      // no instead, so the caller finds out now rather than in the sidebar
+      if (parent && !store.doc.pages.some((p) => p.id === parent)) return null
+      const page = newPage(plainTitle(title) || 'Untitled', parent ? { parent } : {})
+      store.commit(() => { store.doc.pages.push(page) })
       editor.repaint()
       return page.id
     },
     loadDoc: (json: string): boolean => {
+      if (store.readOnly) return false
       const r = parseDoc(json)
       if (!r.ok) return false
       store.replaceDoc(r.doc)

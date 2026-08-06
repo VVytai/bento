@@ -14,6 +14,28 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-03 — Sync parameterization is gated on BYTE equivalence, not convergence
+
+Making `slides/src/sync/` serve spaces (`doc.pages[] → page.blocks[]`) by
+parameterizing it over a document-shape descriptor is the agreed approach — but
+`scripts/test-sync.ts` cannot police it. It proves CONVERGENCE: replicas of the
+SAME engine agree. An engine that converges beautifully with itself while
+minting different ops, position keys or lamport stamps than the shipped one
+sails straight through it, and then every bento/slides file in the field —
+each carrying persisted `SyncStateJSON` and talking to the deployed relay —
+silently splits from its own copies, unfixably.
+
+So the gate is `scripts/test-sync-equiv.ts`: run baseline and candidate off one
+seeded PRNG stream and assert the emitted BYTES are identical (op batches with
+field order, `SyncStateJSON`, materialized doc), per step, per actor, plus a
+scripted suite for `adopt`/`mergeSnapshot`/`fromJSON`/`missingFor`. It carries
+four convergent-but-different mutant engines as a self-test, because it passes
+trivially until the candidate import is repointed and a comparator that has
+never failed proves nothing. **No parameterization work merges without this rig
+green in LIVE mode.** Fixtures now live in `scripts/lib/sync-fixtures.ts`,
+shared by both rigs, so the two never drift into different opinions of what an
+edit is. Wired into CI beside the convergence rig.
+
 ## 2026-08-02 — dash budgets BYTES with consent, not rows with a refusal
 
 **Supersedes the hard stop proposed in the dash design doc §3.2** (refuse at
@@ -1253,6 +1275,247 @@ CI-testable, but the registry drifting from the tree is. It pins `appId`
 against each app's own `configureApp()` call and the manifest URL against the
 path the release publishes to.
 
+## 2026-08-05 — The board's order IS the page order, and a view's filter is two keys
+
+**Decision.** Dragging a card between columns sets that issue's field value.
+Dragging it *within* a column reorders `doc.pages`. There is **no per-view
+order field**, and nobody may add one in a drag handler. A view's filter is
+`filter: { is?: {key: string[]}, open?: boolean }` on the `view` block, and
+absent means everything.
+
+**Why order is the page array.** An issue IS a page, and pages are already an
+ordered list — the sidebar renders it, the markdown export walks it, and a
+saved file preserves it. A stored per-view order is a permanent format field
+that has to answer what happens to an issue no view has ever seen, what happens
+when two views disagree, and what a build that predates it does with the
+orphaned key. Reordering the pages answers none of those questions because it
+does not ask them. The consequence is deliberate and worth saying out loud: the
+board's order and the sidebar's order are the same order. `fields.ts
+reorderPages` is the whole mechanism, and it returns null when a drop changes
+nothing, which is what keeps a drag that went nowhere out of the undo stack.
+
+**Why `sort` is NOT implemented.** `sort: [...]` appears in the shape sketched
+in the ruling below. It is still unimplemented, and now it is not free: a
+stored sort and a hand-dragged order contradict each other, and which one wins
+is a format decision, not a rendering detail. Whoever needs sort settles that
+first. Until then a `sort` key round-trips untouched and is ignored.
+
+**Why the filter is two keys.** `is` (a field's values) and `open` (a phase).
+A filter language grows without limit and can never shrink — every operator is
+in files on other people's disks the moment it ships. These two answer the two
+questions a tracker is actually asked. Rules: an absent filter, an absent key
+and an empty value list all mean "no constraint", so every view block written
+before filters keeps working and an empty stored filter is deleted rather than
+kept; a value this build does not know is compared LITERALLY, so a filter a
+newer build wrote still selects what it meant; `open` is derived from
+`FieldOption.group` on the first field whose options declare one (never
+hardcoded to `status`), and an unknown value counts as OPEN, because hiding
+work this build cannot read is a loss and showing one issue too many is not; a
+filter key this build cannot evaluate is kept, is not applied, and the view
+SAYS SO — a count that is silently too high is the failure additivity would
+otherwise trade for.
+
+**Touch.** A phone cannot drag an HTML5 draggable, and the board is the
+tracker's main screen, so every card carries a status BUTTON that opens the
+same picker the issue's own header strip opens, through the same writer
+(`editor.applyField` → `fields.propHtml`). There is exactly one place where
+`value` and `html` are written, and there must stay exactly one.
+
+## 2026-08-05 — An issue is a page: the tracker format for bento/spaces
+
+**Decision.** bento/spaces gains an opinionated, Linear-shaped issue tracker.
+An ISSUE IS A PAGE. Its fields are `prop` BLOCKS. The schema those fields draw
+on is `doc.fields`. A saved view is a `view` BLOCK. Nothing about this is a new
+document type and nothing is a page-level key.
+
+**Why spaces rather than a new app.** A tracker is a pile of short documents
+with typed fields and a few saved queries over them. Spaces already has pages,
+rich bodies, links, backlinks, search, archive, print, i18n, nine languages and
+an agent surface — which is most of a tracker — and Linear's own model is
+"an issue is a document with fields". A separate app would rebuild all of it,
+and would land where Jira is: a tracker whose issues cannot hold a real
+document. The suite's other half, bento/dash, owns typed COLUMNS over rows;
+this owns typed FIELDS on documents. That is the seam.
+
+**The format.**
+
+    doc.fields: [                       // the schema, document-level
+      { key: 'status', label: 'Status', vt: 'select', options: [
+          { id: 'todo', label: 'Todo', color: '#…', group: 'unstarted' }, … ] },
+      { key: 'assignee', label: 'Assignee', vt: 'person' },
+      …
+    ]
+
+    // …and on an issue page, its values, as ordinary blocks:
+    { id:'b1', type:'prop', key:'status', value:'todo', html:'Status: Todo' }
+
+    // …and a board, which is also just a block:
+    { id:'v1', type:'view', layout:'board', groupBy:'status',
+      filter:{…}, sort:[…], html:'Board — all issues by status' }
+
+**Why values are blocks and the schema is not.** The ruling above already
+settled values: a `prop` block degrades losslessly on a build that predates it
+(render.ts's `default:` branch shows its `html`), and it is found by ⌘F, ⌘K,
+undo and the block registry for free, because every one of those iterates
+`page.blocks`. A page-level key renders as nothing and is invisible to all of
+them. But the SCHEMA is not a value: putting the status list on every issue
+would copy it into every page and let two pages disagree about what "Todo"
+means. Document-level is the only place it can live, and `doc.fields` is
+additive — a build that predates it ignores the key and still renders every
+`prop` block's `html`.
+
+**Every `prop` block carries a human-readable `html`.** That is what makes the
+format degrade rather than vanish, and it is not redundancy: it is the same
+discipline as the static preview and the markdown export. An older build, a
+thumbnailer, a grep, and a markdown export all see "Status: In progress"
+without knowing what a field is.
+
+**Fields render as a header strip, by CONVENTION not by a new container.**
+`prop` blocks that precede the first non-prop block on a page are drawn as a
+compact strip under the title; the same blocks later in the body render inline.
+No format flag says "this is a header" — the position does — so an older build
+shows the same information in the same order, just stacked.
+
+**What this buys the day collaboration lands.** Nothing needs doing. The CRDT
+syncs pages and blocks; properties ARE blocks, so per-field last-writer-wins
+falls out of the existing per-(node,key) registers, and two people changing
+status and assignee at the same time both win. Had properties been one object
+on the page, that would have been one register and one of the two edits would
+have been lost silently — which is the measured reason the ruling exists.
+
+**Deliberately NOT in this format.** No teams (a file IS the team boundary), no
+per-user permissions (the file is the capability, per PLATFORM §5), no
+notifications, no server-side automation. Those are Buzz's problem shape — a
+relay, signed events, agents as members — and Buzz is a Rust service with
+Postgres behind it. The thing Bento can do that neither Linear nor Buzz can is
+hand you the whole tracker as one file that opens offline, forever, with no
+account. That is the feature, and it is the reason the format has to stay
+small enough to keep that promise.
+
+## 2026-08-05 — The tracker's agent surface: written, warned about, never refused
+
+**Decision.** `window.bento` gains `fields()`, `issues(query?)`,
+`setField(pageId, key, value)` and `newIssue({title, ...fields})`, and
+`validate()` learns about fields. Three shapes are settled here because they are
+an API other work will be built on.
+
+**1. A value this build does not know is WRITTEN, and warned about — never
+refused.** The format is permanent and additive: a status a newer build declared
+has to round-trip through an older one, and a verb that refused it would make
+the older build unable to edit a document the newer one wrote. But an agent
+typing `'In progress'` where the option id is `'doing'` has made a mistake and
+silence would leave it confident, so the result carries
+`warning: {code:'unknown-option', options:[…]}` and `validate()` reports
+`unknown-field-value` at **info**. Refuse the shapes JSON cannot carry, warn
+about the vocabulary. The same reasoning makes `unknown-field-key` info, and
+`prop-html-stale` a warning — but that check STANDS DOWN when the value names no
+known option, because then the writer knew a label this build does not and its
+`html` is right where ours would be a guess.
+
+**2. An unknown key in an ARGUMENT is a typo, not additivity.** `newIssue` and
+`setField` refuse a key that is in no schema (`err: 'no-such-field'`). Unknown
+keys in a *document* are how a future build's data survives; unknown keys in a
+*call* are how an agent believes it set a priority it did not set.
+
+**3. "Open" means NOT FINISHED.** `issues({group:'open'})` is one predicate —
+not `done`, not `cancelled` — so a status with no phase and a status this build
+has never heard of both count as work, and a status naming no option reports
+`group:'unknown'` rather than being folded in with the rest. An issue wrongly
+shown in a backlog costs a glance; an issue wrongly hidden from one costs the
+issue.
+
+`setField` is the ONLY supported way to write a value, because it writes `value`
+and `html` together through fields.ts `propHtml()` — the same call the editor's
+own field picker makes, so the two cannot drift. Guarded by
+`scripts/test-spaces-agent.ts`; guide in `docs/spaces-agents.md`.
+
+## 2026-08-03 — bento/spaces: the format decisions that must precede parallel work
+
+Five independent design reviews of bento/spaces proposed overlapping feature
+sets. Most of it is schedulable in any order. These are not: each is a place
+where two workstreams would otherwise invent conflicting PERMANENT shapes for
+the same thing, and the format has no server and no migration. Settled here so
+nobody has to guess. Nothing below ships this round except where noted.
+
+**1. Properties, tags and table columns are BLOCKS — never keys on `Page`.**
+Three reviews proposed three incompatible shapes for the same data: prefixed
+keys on the page (`p:status`), a `prop` block, and `Page.tags: string[]`.
+Ruling: `{ type: 'prop', key, value, vt, html }`. A `prop` block degrades
+losslessly on an older build — render.ts's `default:` branch renders its html —
+whereas an unknown `col:` key on a Page renders as *nothing at all* and is
+invisible to search, find-and-replace, undo and the block registry, all of
+which iterate `page.blocks`. Tags stay literal text in `html` with a derived
+index; no `page.tags` array. A markdown importer preserves YAML front matter as
+a `code` block with `lang: 'yaml'` and never invents `page.meta`.
+
+**2. Containers are one mechanism, declared once.** Tables, callouts and
+columns are all "a block that holds blocks", and three agents each generalising
+`renderBlocks`' host stack would make render.ts the conflict magnet
+PARALLEL-WORK names by name. The contract: `container: true` in the BlockSpec;
+a container gets NO gutter and NO inline text host (inside a `<tr>` either one
+fabricates a phantom cell); a child whose parent chain does not resolve renders
+as a plain block, never a stray `<td>`; and list grouping resets at every
+container boundary, or a bullet before a table adopts the first bullet after it.
+
+**3. A render-time transform may never decorate EDITABLE content.** The
+rendered DOM *is* the model here: editor.ts:575 writes `b.html =
+host.innerHTML` on every input. So any injected decoration is captured into the
+file on the next keystroke — and then the allowlist deletes it. Verified:
+sanitize.ts removes an element that is in neither ALLOWED nor UNWRAP *together
+with its children* (the child-lifting happens only inside the UNWRAP branch),
+so a rendered `<math>` costs both the rendering and the source text. Rule:
+render-time transforms are gated on `opts.editable === false`, or use the CSS
+Custom Highlight API, which touches no DOM. Slides solved the same problem by
+swapping the raw token back while editing; spaces has no equivalent and must
+not grow one by accident. This binds tag chips, inline math, mention
+highlighting and pasted-markup decoration.
+
+**4. `#p/<page>/<block>` is a legal href, tolerated from today.** Shipped in
+this round — see the commit that made `resolveAnchor` the one resolver. It
+could not wait: sanitize.ts's allowlist already admits the two-segment form, so
+such links can arrive in a file this build did not write, and its own comment
+records why a NEW fragment form can never be added later (a stricter build
+strips it on the next edit that touches the block). Addressing — actually
+scrolling to the block — comes whenever it comes; tolerance had to be now.
+
+**5. `Page.stencil`, not `Page.template`.** `SpacesDoc.template` is declared
+and documented in two comments as "re-mint docId on every open", and
+implemented by nothing. Page-level templates get the name `stencil` so the two
+meanings can never collide, and `doc.template` must either be implemented or
+have its comments deleted. A dead field with a documented meaning is more
+dangerous than an undocumented one.
+
+**6. The effective-parent rule.** A block's effective parent is `b.parent` iff
+that block exists in the same page's array AND appears strictly earlier in it;
+otherwise the block is a root block. Same for pages. This is total (nothing
+vanishes), acyclic by construction (every effective edge points backwards in
+the materialised order), orphan-free, and — the point — a pure READ-TIME
+function that mutates nothing, so two replicas that agree on the array agree on
+the tree. It is what makes concurrent re-parenting safe under collaboration
+without restricting what anyone can drag, and `renderBlocks`' host stack
+already implements a narrower version of it.
+
+**Shell ceiling for the round: 100KB compressed** (from 73KB). Spaces is 1/8th
+of slides' size and that is a feature, not an accident.
+
+*Amended 2026-08-04, after the round landed at 105KB.* Callouts (+4), syntax
+highlighting (+5), markdown import (+15) and the agent surface (+8) came in 5KB
+over. Raised to **110KB** rather than trimmed, and the reasoning is recorded so
+the next person can disagree with it: import is the migration path and is worth
+more than its bytes; the agent surface is the "designed for AI" claim made
+executable rather than asserted; and at 105KB spaces is still a fifth of
+slides. What is NOT allowed is discovering the breach at release time — the
+ceiling is checked per feature from here, and the next one has 5KB, not 5KB and
+a shrug.
+
+*Corrected 2026-08-04, same day.* That sentence shipped with NO MECHANISM
+behind it, and a reviewer found the gap by reading the number rather than the
+build failing. It is real now: `scripts/size-budgets.json` holds the ceiling,
+`scripts/test-spaces-size.mjs` enforces it, and CI runs it. Raising the ceiling
+is expected; raising it SILENTLY is what the check stops — the budget moves in
+the commit that spends the bytes, where a reviewer can see it. Recording an
+intention and calling it a rule is how the 100KB ceiling got missed at all.
+
 ## 2026-08-03 — An encrypted space is never written to disk in the clear
 
 **Decision.** bento/spaces skips the autosave recovery snapshot while a space
@@ -1578,3 +1841,205 @@ feature that genuinely cannot be core (a licence that forbids bundling, or bytes
 that dwarf the shell even after a first-party rewrite), or a demonstrated need
 for third-party authorship. Absent those, the answer to "should this be an
 extension?" is "should this be core, a separate artifact, or a skill?"
+
+## 2026-08-03 — Callout tones are GitHub's five, and the tone is never hue alone
+
+**Decision.** `bento/spaces` gains a `callout` block whose `tone` is one of
+`note` `tip` `important` `warning` `caution` — GitHub's alert vocabulary,
+spelled the way GitHub spells it. That makes markdown export the identity
+function (`tone` ⇄ `> [!TONE]`) instead of a mapping table, and a mapping table
+is exactly the kind of thing that can be got wrong once and then never
+corrected, because the wrong tone is already in files on disks.
+
+**Five, and no `success`.** Docusaurus's set (note/tip/info/warning/danger) and
+MkDocs' thirteen were the alternatives. The format is additive, so a sixth tone
+can be added later — this build renders an unknown one neutrally, labels it with
+its own word and preserves the string — while removing or renaming one is
+impossible. When the decision is one-way, ship the smaller set.
+
+**The icon is DERIVED from the tone, with an optional stored override.** Storing
+it always would freeze today's glyphs into every document written today and let
+the tone and the mark disagree (a "warning" wearing 🎉). The override exists
+because a celebration is a callout too, and it never changes what the tone
+means, in the styling or in the export.
+
+**Meaning is carried by shape and by a word, never by hue.** Each tone's mark is
+a different silhouette (circle, bulb, square, triangle, octagon) and its name is
+rendered beside it as real text, translated. The tints are decoration: amber,
+red and green are precisely the hues most colour-blind readers cannot separate,
+and print drops backgrounds by default anyway. Body text stays `--ink`, not the
+tone colour — a box exists to make a sentence more readable, not less.
+
+**Nesting is a registry fact now.** `BlockSpec.container` is `'fold'` (toggle) or
+`'always'` (callout); `render.ts` opens a body element from that rather than
+testing for the type name, and `mdQuoteChildren` drives the `> ` marker every
+descendant line needs (a GitHub alert ends at the first line without one, and
+a blank line between two blocks of one alert closes the box). ⏎ inside a callout
+puts the next line INSIDE it and ⌫ on an empty line takes you out — deliberately
+not extended to `toggle`, because a fold can be shut and a caret inside a shut
+fold is a lost line.
+
+Details: `spaces/src/blocks.ts` (the registry entry, `CALLOUT_TONES`,
+`mdLayout`), `spaces/src/render.ts` (`toneLabel`), and the callout section of
+`scripts/test-spaces-model.ts`.
+## 2026-08-03 — Code highlighting is in-house, offsets-only, and render-time
+
+**Decision.** `bento/spaces` highlights code with its own ~350-line lexer
+(`spaces/src/highlight.ts`), not a library, in eight languages: JavaScript,
+TypeScript, Python, Shell, JSON, YAML, SQL, HTML/XML, CSS. Everything else
+renders plain, deliberately.
+
+**Why no library.** highlight.js is ~120KB and the useful subset of Prism is
+~30KB+; the whole spaces shell was 72KB compressed. Either is the largest thing
+in a product whose premise is that you can mail the file. Measured after
+shipping ours: the lexer + painter + chip + palette cost **4.0KB compressed**,
+and all eight vocabularies together a further **1.4KB** — ~180 bytes per
+language, because keyword lists are lowercase ASCII and deflate eats them. So
+the machinery is the cost and languages are nearly free, which inverts the
+instinct to "support fewer languages to save space". It also means the honest
+reason to stop at eight is testing, not bytes.
+
+**Which eight.** What a working notebook accumulates — shell one-liners, a
+config file, a snippet from the codebase — not a survey of languages. Adding a
+curly-brace language is one keyword list; resist it anyway, because a language
+nobody tested renders *nearly* right, which is worse than the plain fallback.
+An unknown tag is kept verbatim in `lang`, so a `rust` block round-trips,
+exports as ```` ```rust ````, and lights up by itself if the lexer learns it.
+
+**THE TOKENIZER RETURNS OFFSETS, NEVER STRINGS.** A token is `{kind, a, b}` into
+the caller's text and the tokens partition `[0, len)` exactly. That is the
+security property, not tidiness: code in a space is text someone mailed you, and
+a highlighter that cannot produce a character cannot produce markup, whatever
+the input does. The painter walks the ranges and builds nodes with
+`createTextNode`; there is no constructed markup string anywhere in the path and
+therefore no escaper to get wrong — which is how every other highlighter on the
+web does it, and why they all need one. `scripts/test-spaces-model.ts` asserts
+the partition across every language over a corpus that includes `</script>`,
+`<img onerror>`, unterminated strings and lone backslashes.
+
+**Colour never enters the document.** `Block.html` stays the html-escaped plain
+text it always was, so the same block is the same bytes whether or not the
+reading build can highlight it, and reading view and print get their colour from
+the same `renderBlock` call the editor uses. The editor's code host is therefore
+read as `textContent` (not `innerHTML`, which now contains the colour spans) and
+written through `sanitize.ts escText`, which escapes `&`, `<`, `>` and *not* `"`
+— matching the html serializer exactly, so an untouched block never serializes
+differently from the save before it.
+
+**Highlighting a live contenteditable: reconcile, do not replace.** The painter
+diffs the token stream against the existing child nodes and mutates only what
+differs. The point is that on `input` the browser has ALREADY applied the
+keystroke, so re-tokenising usually yields byte-identical nodes: measured in
+Chrome on the built shell, typing in the middle of a line produced **one
+`characterData` mutation (the browser's own) and zero `childList` mutations**,
+and the caret moved 76 → 77 — untouched rather than restored. Only a keystroke
+that moves a token boundary restructures anything; typing `"` produced
+`childList` records and the caret went 79 → 80, restored by character offset.
+An explicit save/restore on every keystroke would have been simpler and wrong:
+assigning `Text.data` is specified to collapse a live range inside it to offset
+0, so the restore has to exist — it just must not be the common path. IME
+composition is skipped until `compositionend`; the model keeps up regardless.
+
+**Found while building this: every markdown trigger was dead.** A space typed at
+the end of a contenteditable line is inserted as U+00A0 so it cannot collapse.
+Measured: after typing `## `, `host.textContent` is `['#','#',160]`, so
+`/^## $/` never matched — `# `, `- `, `1. `, `> `, `[] ` and `--- ` had never
+fired since 0.1.0. `autoformat` now normalises the NBSP before testing (never in
+the model). This surfaced because the ```` ```lang ```` fence needs the same
+trailing space; the bare ```` ``` ```` trigger was changed to be
+space-completed, both for consistency with every other rule in that table and
+because there is no keystroke left to type the language into otherwise.
+
+**A trailing newline in an edited code block is Chrome, and it is bounded.**
+Measured on a bare `pre-wrap` contenteditable with no Bento code involved:
+inserting multi-line text yields one trailing `\n` (the caret placeholder), and
+it does not accumulate — seeded with `abc\n` and typed into, the result is
+`abcy\n`, still one. Left alone; the previous `innerHTML` read produced the same
+byte.
+## 2026-08-03 — Imported frontmatter is kept verbatim, not turned into properties
+
+**Decision.** `spaces/src/markdown.ts` puts a note's leading `---` YAML into a
+`code` block with `lang: 'yaml'` and `frontmatter: true`, nested inside a
+collapsed `toggle` at the top of the page. Nothing in it is parsed, and no key
+becomes a document field. The page title comes from a leading `# Heading` or
+else from the FILE NAME — never from a `title:` key.
+
+**Why not properties.** Spaces has no properties model, and this is the first
+feature that meets one. A schema invented inside an importer would be derived
+from whichever keys one person's vault happens to use (`tags`, `aliases`,
+`cssclass`, `publish`), and once files carry it there is no server to migrate
+them: the format is permanent. That would settle a design by accident, in the
+one place with the least information about it.
+
+**Why verbatim beats dropping or hiding it.** The yaml is the author's text and
+some of it is load-bearing (`aliases`, `permalink`). Kept as a code block it is
+visible, searchable by ⌘K and ⌘F, printable (toggles always print open), and it
+exports back out as a fenced yaml block. `frontmatter: true` is an additive
+marker, which is what makes the eventual adoption a mechanical sweep — find the
+marked blocks, parse them then, delete the toggle — rather than an archaeology
+exercise over prose.
+
+**Why the title ignores `title:`.** `[[wikilinks]]` resolve by FILE NAME, which
+is what Obsidian, Foam and Logseq all do. A title taken from frontmatter that
+disagrees with the file name produces a page nobody can link to by the name
+their other 300 notes use.
+
+**What would reopen this.** A properties model shipping. At that point these
+blocks are the migration input, and the marker is what makes them findable.
+## 2026-08-03 — The spaces agent surface: plans, tagged results, and a validator that stays quiet
+
+**Decision.** `window.bento` in bento/spaces gains `validate()`, `outline()`,
+`stats()` and the patch verbs `updateBlock`, `removeBlocks`, `moveBlock`,
+`updatePage`, `removePage` (`spaces/src/agent.ts`). Five rules were settled
+along the way, and each is the kind another agent could reasonably reverse.
+
+**A validator earns its severities by being silent.** The bar is not "few false
+positives", it is ZERO findings on the space every new file opens with —
+asserted in `scripts/test-spaces-model.ts`, which is the only baseline of
+"idiomatic" available. The corollary is what is NOT checked: unknown property
+names. Slides warns about them because its element schema is closed; here
+unknown fields are the mechanism by which a future build's data survives an
+older one, so warning about them would fire on documents working exactly as
+designed. An agent that gets warnings for good documents stops reading them.
+
+**Plan, then apply.** Every write verb returns `{ok, apply}` and the wrapper in
+`main.ts` runs `store.commit(apply)`. `commit` checkpoints undo BEFORE it
+mutates, so validating inside the commit would leave a refused patch with an
+undo entry that undoes nothing. Verified in the browser: three refusals of three
+kinds, then one undo, reaches the state before the last real edit. The split
+also makes the whole write path testable in node — no store, no DOM.
+
+**Tagged results for the new verbs; the old two keep their shapes.**
+`insertBlocks` (ids | null) and `newPage` (id | null) shipped in 0.1.0 and are
+in a published guide, so they stay. Everything added returns
+`{ok:false, err, detail}`, because "it did nothing and told you nothing" is the
+failure mode this whole surface exists to remove. For the same reason a patch
+naming `id` (or `blocks` on a page) is REFUSED rather than ignored.
+
+**An agent cannot write what the app could not have written.** `html` is
+sanitized on the way IN, not only on the way to the screen; a `code` block's
+html is escaped text instead (the renderer shows its textContent, so sanitizing
+would delete the sample being shown), and only when it carries live tags, which
+keeps a replayed patch from double-escaping. Values JSON cannot carry — a
+function, a Date, a Map, a cycle — are refused rather than vanishing at save.
+
+**A page is never left with zero blocks.** MEASURED in the built shell: a page
+with `blocks: []` renders 0 editable hosts, 0 gutters and 0 block nodes — the
+caret, the gutter and the `/` menu all hang off a block, so nobody can ever type
+in it, and the editor cannot produce one (`mergeBack` refuses at the first
+block). So `newPage` mints a paragraph as `model.newPage` always did,
+`removeBlocks` refills a page it empties, and `validate()` calls a zero-block
+page an ERROR. The old `bento.newPage()` created exactly this page.
+
+*Amended 2026-08-04.* That was measured against the EDITOR, which still
+cannot produce one. The markdown importer landed in the same tree and produced
+them freely — one per folder without a folder note, one per empty file, plus
+the invented root — and then navigated to one, so the first thing a vault
+import showed you was a page you could not put a caret in. An invariant proved
+for one writer is not proved for the next one; `planImport` now guarantees it
+too, at the single point where it returns.
+
+**Cost.** +8,040 bytes on the shipped shell (73,787 → 81,827; compressed
+payload 72KB → 79KB). Most of it is the finding messages, which are the
+product: a code with no explanation is not actionable. Anyone tempted to shrink
+this should shorten prose, not drop checks.

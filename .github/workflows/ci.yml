@@ -117,6 +117,42 @@ jobs:
         # build rather than shipping a half-translated interface.
         run: node scripts/build-spaces-i18n.mjs --check
 
+      - name: Spaces undo rig
+        # Every checkpoint used to stringify the WHOLE document: measured on a
+        # 200-page, 2.5 MB handbook, fifty edits left an undo depth of NINE,
+        # because nine snapshots exhaust the 24 MB budget. A typing run now
+        # records only its PAGE. That is fast and deep — and it is only correct
+        # while the mutation touched nothing else, so `doc` stays the default
+        # and this rig covers the cases where a wrong scope silently loses
+        # work: mixed scopes, interleaved undo/redo, and two pages edited in
+        # turn. (Bundled: store.ts imports './model' extensionless.)
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-spaces-undo.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-spaces-undo.mjs"
+          node "$RUNNER_TEMP/test-spaces-undo.mjs"
+
+      - name: Spaces agent-surface rig
+        # agent.ts is ~900 lines and shipped with no coverage at all: two of the
+        # five defects an adversarial review found in round 2 lived here,
+        # including a walk over author-supplied parent links that never
+        # returned. What this pins is what makes the surface trustworthy —
+        # validate() SILENT on documents that are correct but unusual (a false
+        # positive teaches an agent to ignore warnings), every write verb
+        # refusing what it cannot honour, no verb producing a document the app
+        # itself could not produce, and every walk terminating. The termination
+        # probes run in child processes with timeouts, because a hang cannot be
+        # reported by the process it hangs.
+        run: node scripts/test-spaces-agent.ts
+
+      - name: Spaces shell size ceiling
+        # A budget nobody measures is a wish. DECISIONS.md set a 100KB ceiling,
+        # the round finished at 108KB, and the same entry claimed the ceiling
+        # was "checked per feature from here" while shipping no mechanism — so
+        # the breach was found by a reviewer reading the number rather than by
+        # the build that caused it. Raising the ceiling is fine and expected;
+        # raising it SILENTLY is what this stops.
+        run: node scripts/test-spaces-size.mjs
+
       - name: Spaces model rig
         # Properties that fail SILENTLY, and that a shipped file cannot be
         # talked out of once it exists:
@@ -266,6 +302,20 @@ jobs:
         # the decimal convention is decided per COLUMN from the whole column.
         run: node scripts/test-dash-import.ts
 
+      - name: bento/dash formula rig
+        # A wrong number is the worst failure a spreadsheet has, and the
+        # dangerous ones are plausible rather than loud: an error that becomes a
+        # zero, a cycle that resolves to something, a column computed before the
+        # column it depends on. All three are asserted, each with a control.
+        run: node scripts/test-dash-formula.ts
+
+      - name: bento/dash chart rig
+        # A tile names columns and derives its series at render, so the whole
+        # surface worth testing is the derivation. The failure that matters most
+        # is a missing value drawn as a zero — "we sold nothing" instead of "we
+        # do not know".
+        run: node scripts/test-dash-chart.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default
@@ -290,3 +340,16 @@ jobs:
       - name: CRDT convergence rig
         # 40 seeds locally; deeper on CI where the seconds are free.
         run: SEEDS=300 node scripts/test-sync.ts
+
+      - name: CRDT equivalence rig (baseline vs candidate, byte for byte)
+        # Convergence is the weaker property: an engine that converges with
+        # ITSELF while minting different bytes than the shipped engine passes
+        # the step above and silently splits every bento/slides file in the
+        # field. This step asserts byte-identity instead.
+        #
+        # IT PASSES TRIVIALLY TODAY — there is one engine, so the candidate
+        # import resolves to the baseline module and the run announces itself
+        # as a NO-OP. The signal in a NO-OP run is the self-test: four
+        # perturbed-but-convergent engines that this rig must catch. It goes
+        # live the moment sync parameterization repoints one import.
+        run: SEEDS=200 STEPS=60 ACTORS=4 node scripts/test-sync-equiv.ts

@@ -9,20 +9,33 @@
 
 import { checkForUpdates, applyUpdate, APP_VERSION, type ReleaseInfo } from '../../kernel/src/update.ts'
 import {
-  setEncryptionPassword, isEncryptionActive, saveFile,
+  setEncryptionPassword, isEncryptionActive,
   canWriteInPlace, openedFileName,
 } from '../../kernel/src/save.ts'
 import { clearVersions, clearRecovery } from '../../kernel/src/autosave.ts'
 import { t, localeChoices, locale, setLocale } from './i18n'
-import { inertBody } from './sanitize'
+import { inertBody, esc } from './sanitize'
+import { SPEC, mdLayout } from './blocks'
 import type { Store } from './store'
 
 export interface AboutHooks {
   store: Store
   onRepaint: () => void
+  /**
+   * "Save a copy…", supplied by the caller.
+   *
+   * NOT saveFile(doc, true) here. That path assigns the picked handle to the
+   * kernel's in-place handle, so every later ⌘S writes to the copy — the bug
+   * fixed in the topbar's copy button, which this second button then kept
+   * alive because the guard only read main.ts. One implementation, two
+   * buttons, and the assertion now reads every file.
+   */
+  onSaveCopy: () => void
+  /** open the markdown importer — the way IN, opposite the ways out below */
+  onImport?: () => void
 }
 
-export function openAbout({ store, onRepaint }: AboutHooks): void {
+export function openAbout({ store, onRepaint, onSaveCopy, onImport }: AboutHooks): void {
   const back = document.createElement('div')
   back.className = 'sp-overlay'
   const card = document.createElement('div')
@@ -54,6 +67,23 @@ export function openAbout({ store, onRepaint }: AboutHooks): void {
   }
 
   // ---- what this is ------------------------------------------------------
+  // The same head slides uses: the suite's mark, the app, the version, and a
+  // gentle route back to the site. A dialog that opens with a section heading
+  // does not tell you what you are looking at.
+  const head = document.createElement('div')
+  head.className = 'sp-about-head'
+  head.innerHTML =
+    '<a class="sp-about-logo" href="https://bento.page" target="_blank" rel="noopener">' +
+    '<svg viewBox="0 0 32 32" width="28" height="28" aria-hidden="true">' +
+    '<rect width="32" height="32" rx="7" fill="#16273E"/>' +
+    '<rect x="5" y="5" width="7" height="22" rx="2.5" fill="#5E7699"/>' +
+    '<rect x="14" y="5" width="13" height="10" rx="2.5" fill="#FF9E8A"/>' +
+    '<rect x="14" y="17" width="13" height="10" rx="2.5" fill="#F0EBE0"/>' +
+    '</svg><div><b>bento<span style="color:#FF9E8A">/</span>spaces</b>' +
+    `<span>v${APP_VERSION} · ${esc(t('format v{v}', { v: String(store.doc.version ?? 1) }))}</span></div></a>`
+  head.querySelector('a')?.setAttribute('title', t('Visit bento.page (opens in a new tab)'))
+  card.append(head)
+
   card.append(h(t('This file')))
   const blurb = document.createElement('p')
   blurb.className = 'sp-about-blurb'
@@ -150,6 +180,18 @@ export function openAbout({ store, onRepaint }: AboutHooks): void {
     pwNote.textContent = t('Password set. Save to write the space encrypted.')
   }))
 
+  // ---- the way in ---------------------------------------------------------
+  // Beside the ways out on purpose: a format that can only be left is a
+  // format nobody arrives in.
+  if (onImport) {
+    card.append(h(t('Bring notes in')))
+    card.append(button(t('Import Markdown…'), () => { close(); onImport() }))
+    const inNote = document.createElement('p')
+    inNote.className = 'sp-note'
+    inNote.textContent = t('A folder of .md files becomes pages, with the folder tree and the [[wikilinks]] intact.')
+    card.append(inNote)
+  }
+
   // ---- ways out ----------------------------------------------------------
   card.append(h(t('Take it elsewhere')))
   const exports = document.createElement('div')
@@ -159,7 +201,7 @@ export function openAbout({ store, onRepaint }: AboutHooks): void {
       void navigator.clipboard?.writeText(JSON.stringify(store.doc, null, 2))
     }),
     button(t('Export as Markdown'), () => downloadMarkdown(store)),
-    button(t('Save a copy…'), () => { void saveFile(store.doc, true) }),
+    button(t('Save a copy…'), () => { close(); onSaveCopy() }),
   )
   card.append(exports)
   const outNote = document.createElement('p')
@@ -194,26 +236,33 @@ export function toMarkdown(store: Store): string {
   const walk = (parent: string, depth: number) => {
     for (const page of store.index.children.get(parent) ?? []) {
       out.push(`${'#'.repeat(Math.min(depth + 1, 6))} ${page.title}`, '')
-      for (const b of page.blocks) {
-        const indent = b.parent ? '  ' : ''
+      // Indent, blockquote markers and what separates one block from the next
+      // are properties of the TREE, not of a block, so they come from the
+      // registry in one pass (blocks.ts mdLayout).
+      const layout = mdLayout(page.blocks)
+      page.blocks.forEach((b, i) => {
+        const { quote, indent, sep } = layout[i]
         const text = htmlToMd(b.html ?? '')
-        switch (b.type) {
-          case 'h1': out.push(`# ${text}`); break
-          case 'h2': out.push(`## ${text}`); break
-          case 'h3': out.push(`### ${text}`); break
-          case 'bullet': out.push(`${indent}- ${text}`); break
-          case 'number': out.push(`${indent}1. ${text}`); break
-          case 'todo': out.push(`${indent}- [${b.done ? 'x' : ' '}] ${text}`); break
-          case 'quote': out.push(`> ${text}`); break
-          case 'code': out.push('```' + String(b.lang ?? ''), text, '```'); break
-          case 'divider': out.push('---'); break
-          case 'toggle': out.push(`${indent}- ${text}`); break
-          case 'image': out.push(`![${String(b.alt ?? '')}](${String(b.src ?? '')})`); break
-          case 'pagelink': out.push(`→ [[${store.index.page.get(String(b.page))?.title ?? '?'}]]`); break
-          default: out.push(text)
-        }
-        out.push('')
-      }
+        // From the block registry, so a new type exports correctly the moment
+        // it is declared. An UNKNOWN type — a file written by a newer build —
+        // falls through to its text, which is the honest default.
+        const spec = SPEC.get(b.type)
+        const lines = spec?.toMd
+          ? spec.toMd(b, text, indent, (id) => store.index.page.get(id)?.title)
+          : [text]
+        // PER LINE, not per returned element. A spec returns ELEMENTS, and an
+        // element can hold newlines: a code block's body is one multi-line
+        // string, and htmlToMd turns <br> into a newline in ordinary text. Any
+        // such child inside a callout left its 2nd..nth lines unquoted, which
+        // ENDS the blockquote — the GitHub alert stops there, a nested fence is
+        // left unterminated, and the rest of the callout falls out of the box
+        // as broken prose. The callout's own toMd split on \n; nothing else did.
+        //
+        // An empty line inside a quote must be a bare '>', never '> ' and never
+        // blank: a blank line closes the blockquote.
+        out.push(...lines.flatMap((l) => l.split('\n')).map((l) => (l ? quote + l : quote.trimEnd())))
+        out.push(sep)
+      })
       walk(page.id, depth + 1)
     }
   }

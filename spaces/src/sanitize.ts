@@ -35,8 +35,15 @@ const ALLOWED = new Set([
  */
 const HREF_OK = /^(https?:|mailto:|#p\/)/i
 
-/** Tags whose CONTENT should survive when the tag itself is dropped. */
-const UNWRAP = new Set(['P', 'DIV', 'SECTION', 'ARTICLE', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'BLOCKQUOTE', 'PRE', 'FONT'])
+/**
+ * Tags whose CONTENT should survive when the tag itself is dropped.
+ *
+ * Exported because validate() tells an agent which block-level tags get
+ * unwrapped out of inline html. A second copy of this list would go stale the
+ * first time this one changes, and validate() would then advise an agent to
+ * "fix" markup that is actually fine — or stay silent about markup that is not.
+ */
+export const UNWRAP = new Set(['P', 'DIV', 'SECTION', 'ARTICLE', 'LI', 'UL', 'OL', 'H1', 'H2', 'H3', 'H4', 'BLOCKQUOTE', 'PRE', 'FONT'])
 
 /**
  * Parse untrusted html into an INERT document, and never into a live element.
@@ -158,3 +165,19 @@ export function textOf(html: string | undefined): string {
 /** Escape for safe insertion as text. */
 export const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/**
+ * A `code` block's text, as `Block.html` stores it.
+ *
+ * `&`, `<`, `>` and NOTHING ELSE — exactly what an html serializer emits for a
+ * text node, which is what `code.innerHTML` produced before syntax colouring
+ * made that read unusable (the host now holds `<span>`s). So a code block typed
+ * today serializes byte-identically to one typed before highlighting existed,
+ * and `render.ts`'s `textFromHtml` decodes both.
+ *
+ * `esc()` above escapes `"` as well, correctly, because it writes ATTRIBUTE
+ * values. Doing that here would not round-trip: the parser hands back a bare
+ * quote, so the next save would differ from the last for no reason, forever.
+ */
+export const escText = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
