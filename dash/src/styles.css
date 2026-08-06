@@ -510,7 +510,17 @@ html, body {
    The proper fix lives in dash/src/chart.ts, which owns the option and should
    set axisLabel/legend.textStyle colours; this rule is the half that fits in a
    stylesheet. */
-.dx-chart-body svg text { fill: var(--chart-ink); }
+/* charts-lite writes `fill` as a presentation ATTRIBUTE, which loses to a
+   stylesheet — that is what lets the theme reach chart text at all, and it is
+   the right layer, because the theme is a VIEWER preference and the chart
+   option is derived from the DOCUMENT. Baking a theme colour into the option
+   would put one reader's preference into everyone's chart.
+
+   Matched on the kernel's default (#6B7280) rather than on every `text`, so a
+   colour somebody CHOSE — `legend.textStyle.color`, an axis label, a future
+   per-series colour — still wins. A blanket rule would flatten all three, and
+   would do it silently. */
+.dx-chart-body svg text[fill="#6B7280"] { fill: var(--chart-ink); }
 
 /* stack on a phone rather than squeezing both */
 @media (max-width: 760px) {
@@ -781,6 +791,24 @@ html, body {
   z-index: 1;
 }
 .dg-cell { position: relative; }
+/* …but NOT the pinned ones. `.dg-cell` and `.dg-gutter` have the same
+   specificity, so this later rule silently won and the row numbers scrolled
+   away with the data — measured: after scrolling 500px right, the gutter sat at
+   left −495, entirely off screen. A spreadsheet whose row numbers leave when
+   you scroll sideways has lost the thing they are for. Frozen columns are
+   restated for the same reason. */
+.dg-cell.dg-gutter { position: sticky; left: 0; }
+.dg-cell.dg-frozen { position: sticky; }
+/* and the gutter wins the overlap: equal z-index leaves it to DOM order, and
+   the gutter comes first, so a frozen column would slide over the numbers. */
+.dg-cell.dg-gutter { z-index: 3; }
+/* The HEADER's corner is the same pin one row up. It was not sticky at all, so
+   a scrolled column header slid straight under it and showed through where the
+   row numbers' heading should be — the corner read "age", the tail of "Stage".
+   It is the one cell that has to outrank both axes: the row gutter slides
+   beneath it and so does every column header. */
+.dg-head-row .dg-cell.dg-corner { position: sticky; left: 0; z-index: 6; }
+.dg-head-row .dg-cell.dg-gutter { z-index: 6; }
 .dg-v { position: relative; z-index: 1; }
 
 /* ————— conditional formatting —————

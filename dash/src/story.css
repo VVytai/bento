@@ -46,7 +46,10 @@
    to a mid grey sized for white paper — 3.3:1 against #0e1420. `fill` is a
    presentation attribute, so this rule wins; the marks keep the document's own
    palette. Literal, like everything else on this surface. */
-.ds-stage svg text { fill: #b9c4d3; }
+/* Same rule as the chart panel's, and for the same reason: override the
+   kernel's DEFAULT text colour, never a colour somebody chose. The presenter
+   stage is deliberately dark in both themes, so this value is literal. */
+.ds-stage svg text[fill="#6B7280"] { fill: #b9c4d3; }
 
 .ds-empty {
   display: grid;
