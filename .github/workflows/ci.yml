@@ -365,3 +365,13 @@ jobs:
         # no default, because a default is how a spaces call site silently ends
         # up holding slides' shape.
         run: node scripts/test-sync-shape.ts
+
+      - name: bento/spaces under the shared engine
+        # Convergence for the pages/blocks binding, AND a report on whether
+        # what the replicas converge on is a legal bento/spaces document.
+        # Those are different questions: page.blocks is flat and in pre-order,
+        # while the engine merges `parent` as an ordinary register and order as
+        # a position key — two independent domains describing one tree. The
+        # format half is REPORTED, not asserted, because the fix is a decision
+        # nobody has taken yet; STRICT=1 turns it into a gate the day it is.
+        run: SEEDS=250 STEPS=80 ACTORS=4 node scripts/test-sync-spaces.ts

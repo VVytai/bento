@@ -14,6 +14,104 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-06 — One CRDT engine, two document shapes, and the shape is never on the wire
+
+**Decision.** `kernel/src/sync/crdt.ts` takes a `DocShape` at construction: two
+property names — the doc key holding the parent array, the parent key holding
+the child array — plus a derived set of doc keys it must never sync.
+`slides/src/sync/crdt.ts` is a facade binding `SLIDES_SHAPE` and exporting
+`SyncState`; bento/spaces binds `('pages','blocks')` the same way. The engine
+knows nothing else about any app's content.
+
+**Bound at construction, never serialized, never on the wire.** A room is
+single-app by construction — the room id is minted per file — so no frame has
+to say which shape it came from, and a shape tag in `SyncStateJSON` would
+change the bytes of every bento/slides file already on a disk.
+
+**NO DEFAULT on the shape argument.** A default is how a spaces call site
+silently ends up holding slides' shape, and a room minted that way cannot be
+repaired: the files are on other people's disks.
+
+**`skipDoc` is DERIVED, not authored.** It must contain the container key: the
+container is synced structurally, per node with its own position key, so
+listing it as an ordinary doc property would collapse the whole document into
+ONE last-writer-wins register. Measured — a shape omitting its own container
+fails six checks in `scripts/test-sync-shape.ts`.
+
+**THE WIRE VOCABULARY IS FROZEN FOR EVERY APP.** Ops keep saying
+`kind:'slide'|'element'` and carrying `sl`/`el` regardless of shape. Renaming
+per app buys prettier debug output and costs a second binding on the
+highest-consequence bytes in the system. Settle it before spaces collab reaches
+a user; after that, spaces files carry the choice permanently.
+
+**Parameterize, THEN move.** The engine was parameterized in place and moved to
+the kernel second. Moving first would have parked `doc.slides` and
+`sl.elements` inside `kernel/src/` for a PR, against kernel/README.md's own
+rule that the kernel never sees an app's content shape.
+
+**What guards it.** `scripts/test-sync-equiv.ts` proves the NEGATIVE (the
+engine still mints the bytes the field was written with) against a FROZEN copy
+of the engine as shipped; `scripts/test-sync-shape.ts` proves the POSITIVE (a
+second shape produces an engine that works and restores as itself). Neither
+suffices alone: a parameterization that quietly did nothing passes the first, a
+broken one passes the second.
+
+## 2026-08-06 — bento/spaces converges under the shared engine, and converges on documents the format calls illegal
+
+**Measured, not argued.** `scripts/test-sync-spaces.ts`, 400 seeds × 100 steps
+× 4 actors, 17,227 ops, the kernel engine bound to `('pages','blocks')`:
+
+- **Convergence is perfect.** Every replica agrees, every seed. The engine
+  serves spaces as a CRDT with no change to its algebra.
+- **52.4% of merged documents violate the spaces format** (209 of 399 seeds
+  whose solo document was provably legal). Worst case in one document: 5 page
+  cycles, 5 dangling page parents, 3 dangling block parents, 3 pages out of
+  pre-order, 1 block out of pre-order, 1 duplicated block id.
+
+The CONTROL matters as much as the result: each seed also runs a lone replica
+through the same edits, receiving nothing, and a seed whose solo document is
+already illegal is EXCLUDED rather than counted. Without it every number above
+could have been the generator's fault. It caught three generator bugs while
+this was being written — a cross-page move that orphaned children, a page
+re-parent that inserted before its new parent, a subtree walk that missed
+grandchildren — and the first draft of this entry overstated the finding by 36
+points.
+
+**Why it happens, and why it is nobody's bug.** `page.blocks` is flat and in
+pre-order — "a child always follows its parent, so one forward pass rebuilds
+the tree" — while the engine stores order as fractional position keys and
+`parent` as an ordinary LWW register. Two independent merge domains describe
+one visual tree. You indent a block, I move one; both edits are legal, both
+apply, every replica agrees, and no forward pass can rebuild the result.
+`render.ts renderBlocks` does not crash on it — it silently renders the block
+at root, un-nested.
+
+**Three things that must be settled before a spaces file carries collab
+state**, because none can be corrected once files exist on other disks:
+
+1. **Pre-order vs `parent`.** Derive the tree at render time and tolerate any
+   array order, or repair after apply. A repair that COMMITS mints `ord` ops
+   and can ping-pong between replicas forever — so if it repairs, it must
+   derive, not commit. The effective-parent rule (2026-08-03) is the right
+   rule and is implemented in exactly one consumer (`render.ts`), while
+   `blocks.ts mdLayout`, `agent.ts descendants` and `editor.indent` use graph
+   semantics. One exported function, invariant asserted.
+2. **Page cycles.** `Store.tree()` recurses from the root with no visited set,
+   so a merged cycle makes pages vanish from the sidebar AND the markdown
+   export while still being in the file. `editor.reparentPage` refuses cycles
+   locally, which two concurrent drags defeat by construction.
+3. **Duplicate block ids.** The engine duplicates a node on concurrent moves to
+   two parents BY DESIGN (docs/collab-design.md) — in slides that is the morph
+   idiom and it is correct. In spaces, block ids are unique document-wide,
+   `buildIndex` keys blocks by bare id, and `#p/<page>/<block>` anchors assume
+   it. Same behaviour, opposite verdict.
+
+**Status of the rig.** It asserts convergence and the control, and REPORTS the
+format violations: failing the build on them would assert an answer nobody has
+chosen. `STRICT=1` turns every one into an assertion — flip it in CI the day
+the three decisions land, and the rig becomes their enforcement rather than
+their evidence.
+
 ## 2026-08-03 — Sync parameterization is gated on BYTE equivalence, not convergence
 
 Making `slides/src/sync/` serve spaces (`doc.pages[] → page.blocks[]`) by
