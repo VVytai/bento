@@ -709,6 +709,14 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     commit: (p: unknown) => { store.commit(p as never) },
     importCsv: (text: string, name?: string) => applyImport(store, findingsEl, grid, text, name ?? 'pasted'),
     loadDoc: (json: string): boolean => {
+      // `replaceDoc` does NOT check `store.readOnly` — it is the load path, not
+      // an edit path — so every caller defends the frozen workbook itself
+      // (about.ts `replaceWorkbook`, recovery.ts `swapWorkbook`). This is the
+      // same door with no dialog in front of it: an agent harness holding a
+      // workbook frozen by an unknown policy would otherwise write to it
+      // through the scripting API, which is the one route with no user at all
+      // to notice.
+      if (refuseWrite(findingsEl, store)) return false
       const r = parseDoc(json)
       if (!r.ok) return false
       // Validate and REPORT, never refuse. The document is the user's data,
@@ -749,7 +757,24 @@ async function pickCsv(store: Store, host: HTMLElement, grid: Grid): Promise<voi
   input.click()
 }
 
+/**
+ * Refuse a write to a locked workbook, and SAY SO.
+ *
+ * `store.commit` already no-ops when `readOnly` is set, which is enough to keep
+ * the document intact but not enough to be honest: a file picker that opens, a
+ * file that reads, and then nothing at all on screen reads as a bug in the
+ * import, and the next thing the user does is try a different file. Worse, the
+ * xlsx path never went through `commit` — it pushed onto `store.doc.sheets` and
+ * called `replaceDoc`, which walks straight past the lock.
+ */
+function refuseWrite(host: HTMLElement, store: Store): boolean {
+  if (!store.readOnly) return false
+  showFindings(host, [{ message: t('This workbook is open read-only, so nothing can be written into it. Save a copy first.') }] as never)
+  return true
+}
+
 function applyImport(store: Store, host: HTMLElement, grid: Grid, text: string, source: string): void {
+  if (refuseWrite(host, store)) return
   const sheetId = `sheet-${Math.floor(Date.now() % 1e8).toString(36)}`
   const r = importDelimited(text, {
     name: source.replace(/\.[a-z]+$/i, '') || 'Imported',
@@ -978,6 +1003,7 @@ async function pickXlsx(store: Store, host: HTMLElement, grid: Grid): Promise<vo
   input.addEventListener('change', () => {
     const f = input.files?.[0]
     if (!f) return
+    if (refuseWrite(host, store)) return
     void f.arrayBuffer().then(async (buf) => {
       try {
         const r = await importXlsx(new Uint8Array(buf), {
