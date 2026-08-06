@@ -333,9 +333,10 @@ jobs:
         # the step above and silently splits every bento/slides file in the
         # field. This step asserts byte-identity instead.
         #
-        # IT PASSES TRIVIALLY TODAY — there is one engine, so the candidate
-        # import resolves to the baseline module and the run announces itself
-        # as a NO-OP. The signal in a NO-OP run is the self-test: four
-        # perturbed-but-convergent engines that this rig must catch. It goes
-        # live the moment sync parameterization repoints one import.
-        run: SEEDS=200 STEPS=60 ACTORS=4 node scripts/test-sync-equiv.ts
+        # The baseline is a FROZEN copy of the engine as shipped
+        # (scripts/lib/sync-baseline-frozen.ts), so this run is live from here
+        # on: it compares the working engine against the bytes every file in
+        # the field was written by. REQUIRE_LIVE=1 fails the build if the
+        # candidate is ever repointed at something that resolves back to the
+        # baseline — the quiet way a gate stops gating.
+        run: REQUIRE_LIVE=1 SEEDS=200 STEPS=60 ACTORS=4 node scripts/test-sync-equiv.ts
