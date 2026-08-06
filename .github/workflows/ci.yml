@@ -316,6 +316,90 @@ jobs:
         # do not know".
         run: node scripts/test-dash-chart.ts
 
+      # ── the rest of bento/dash. Each of these asserts a way a spreadsheet can
+      # be CONFIDENTLY WRONG, which is the failure that matters here: nobody
+      # re-derives a number by hand, so a wrong one is not caught by the person
+      # relying on it. Each rig argues its own case in its header; the lines
+      # below say why it gates a merge.
+      - name: bento/dash function pack
+        # Lookups, multi-criteria, finance, statistics — including the three
+        # places we deliberately depart from Excel because Excel's default is a
+        # trap: an approximate VLOOKUP on unsorted data, an IRR that converges
+        # on nothing, a PERCENTILE that clamps instead of refusing.
+        run: node scripts/test-dash-functions.ts
+
+      - name: bento/dash cell formulas
+        # Evaluation ORDER. A cell computed before the cell it reads writes a
+        # stale number into the document, looking authoritative.
+        run: node scripts/test-dash-cellformula.ts
+
+      - name: bento/dash A1 references
+        # `$` pins against a COPY and not against structure, and a reference
+        # into a deleted row is #REF! rather than whatever slid up into it.
+        run: node scripts/test-dash-a1.ts
+
+      - name: bento/dash pivot
+        # Subtotals are COMPUTED, not summed: an average of averages is a
+        # different number, and a distinct count does not add up.
+        run: node scripts/test-dash-pivot.ts
+
+      - name: bento/dash dashboard
+        # Cross-filter selections compose, and the categories of a column
+        # PARTITION the sheet — no row dropped, none counted twice.
+        run: node scripts/test-dash-dashboard.ts
+
+      - name: bento/dash data story
+        # A gap tweens as a gap. Interpolating an absent quarter through zero is
+        # the animation telling a lie about the data.
+        run: node scripts/test-dash-story.ts
+
+      - name: bento/dash filter and sort
+        run: node scripts/test-dash-filter.ts
+
+      - name: bento/dash rows and columns
+        # Structure, and the rid watermark — a rid must never be minted twice,
+        # which is collaboration's correctness precondition.
+        run: node scripts/test-dash-rowcol.ts
+
+      - name: bento/dash selection and clipboard
+        run: node scripts/test-dash-select.ts
+
+      - name: bento/dash conditional formatting
+        run: node scripts/test-dash-condfmt.ts
+
+      - name: bento/dash side panels
+        run: node scripts/test-dash-panels.ts
+
+      - name: bento/dash About dialog
+        run: node scripts/test-dash-about.ts
+
+      - name: bento/dash thumbnail preview
+        # An encrypted workbook NEVER gets a preview — a plaintext title beside
+        # the ciphertext is the leak the password exists to prevent.
+        run: node scripts/test-dash-preview.ts
+
+      - name: bento/dash zip
+        # Verified against real unzip implementations, not only our own reader:
+        # a reader and a writer that share a bug agree with each other perfectly.
+        run: node scripts/test-dash-zip.ts
+
+      - name: bento/dash xlsx
+        # Both 1900 date epochs, including the leap-year bug — getting it wrong
+        # shifts every date by four years, silently.
+        run: node scripts/test-dash-xlsx.ts
+
+      - name: bento/dash WebGL
+        run: node scripts/test-dash-gl.ts
+
+      - name: bento/dash 3D scenes
+        run: node scripts/test-dash-viz3d.ts
+
+      - name: bento/dash CRDT convergence
+        # The big one: randomised concurrent edits across N replicas, asserted
+        # to converge. It has caught every ordering bug in the engine, and the
+        # two it did not catch were found by widening it.
+        run: node scripts/test-dash-sync.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default
