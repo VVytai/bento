@@ -14,6 +14,56 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-06 — The tree is DERIVED at read time, in one function, and it cannot cycle
+
+**Decision.** `model.ts effectiveParents(page)` is the only answer to "what is
+this block nested under": `b.parent` iff that block is in the SAME page and
+appears STRICTLY EARLIER. Anything else — absent, itself, later — resolves to
+the root. `descendantsOf(page, id)` is built on it. Every consumer delegates.
+
+This implements the rule settled on 2026-08-03, which until now existed as a
+paragraph and four disagreeing implementations: positional in `render.ts`, a
+hop-capped graph walk in `blocks.ts mdLayout`, a fixed-point sweep in
+`agent.ts descendants` ("rather than trusting the order"), and an id lookup in
+`editor.indent`. They agreed only because the editor keeps the array in
+pre-order — which is exactly the invariant collaboration breaks.
+
+**DERIVE, NEVER REPAIR.** Normalising the array instead would mint `ord` ops and
+two replicas can ping-pong over them forever. A read-time function mutates
+nothing, so two replicas that agree on the array agree on the tree without
+exchanging one extra op.
+
+**Acyclic by construction, which is the point.** A parent must be earlier, so no
+document — authored, hand-edited, imported or merged — can produce a loop. That
+removes a whole class of defence: no visited set, no hop cap of 32, no
+fixed-point sweep. `blocks.ts` capped at 32 because the graph could cycle, and a
+markdown export that silently truncated at depth 32 is a quiet wrong answer
+rather than an error.
+
+**The failure it prevents.** On a merged `parent` cycle the old sweep returned
+the whole connected component INCLUDING the node itself, so `planRemoveBlocks`
+deleted blocks the caller never named.
+
+**Verified against documents the merge actually produced**, not hand-built ones:
+250 merged documents, 1,695 blocks, 24.4% of them violating flat pre-order —
+zero rule failures, no cycles, no self-parents, no subtree containing its own
+root. `scripts/test-sync-spaces.ts` now asserts this on every merged document
+forever, and the negative control (reverting to a raw graph walk) fails 13
+blocks out of 405.
+
+**`Store.tree()` gains a visited set, and surfaces what a cycle orphans.**
+`buildIndex` bins pages by `parent` with no position test, so two concurrent
+sidebar drags converge on A.parent=B, B.parent=A. Neither is reachable from the
+root, so both pages vanished from the sidebar AND from the Markdown export while
+still sitting in the file, with nothing saying so; a subtree call from inside
+the cycle recursed until the stack gave out. Orphaned pages are now listed at
+the root — pages you can see and re-home beat pages that quietly stopped
+existing.
+
+**Still a page-level graph sweep in `planRemovePage`**, deliberately: it
+terminates, and cascading a cyclic pair is what a caller asking for descendants
+gets. Named here so the next reader knows it was considered rather than missed.
+
 ## 2026-08-06 — One CRDT engine, two document shapes, and the shape is never on the wire
 
 **Decision.** `kernel/src/sync/crdt.ts` takes a `DocShape` at construction: two
