@@ -28,13 +28,30 @@
 //      the visible rows; totalling the column is a real number that answers a
 //      question nobody asked.
 
-import {
-  passes, buildOrder, distinctValues, summarize, compare, isBlank,
-  needsWholeColumn, type Get, type Predicate,
-} from '../dash/src/filter.ts'
-import type { TableSheet } from '../dash/src/model.ts'
-import { readCell } from '../dash/src/store.ts'
-import { aggregate } from '../dash/src/grid.ts'
+import { registerHooks } from 'node:module'
+
+// This rig reads `aggregate` out of grid.ts, and grid.ts now reaches a
+// component that imports its own stylesheet (find.ts → find.css). Resolving CSS
+// is Vite's job and not Node's — comments.ts's and panels.ts's rigs settled this
+// pattern, and co-locating a component with its styles is not something a rig
+// gets to break.
+registerHooks({
+  load(url, context, next) {
+    if (url.endsWith('.css')) {
+      return { format: 'module', source: 'export {}', shortCircuit: true }
+    }
+    return next(url, context)
+  },
+})
+
+const {
+  passes, buildOrder, distinctValues, summarize, compare, isBlank, needsWholeColumn,
+} = await import('../dash/src/filter.ts')
+type Get = import('../dash/src/filter.ts').Get
+type Predicate = import('../dash/src/filter.ts').Predicate
+type TableSheet = import('../dash/src/model.ts').TableSheet
+const { readCell } = await import('../dash/src/store.ts')
+const { aggregate } = await import('../dash/src/grid.ts')
 
 let failures = 0
 let checks = 0

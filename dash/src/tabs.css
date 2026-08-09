@@ -1,0 +1,237 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 The Bento authors
+   Worksheet tabs — the bottom strip.
+
+   Every colour resolves through a token in styles.css :root; nothing here
+   states a hex, and nothing here sits inside a `prefers-color-scheme` block
+   (the palette does the theming through `light-dark()`).
+
+   THE GEOMETRY IS A BOTTOM TAB'S, and that is not the same shape as a top
+   tab's. These tabs are attached to the sheet ABOVE them, so their top edge is
+   the one that has to look continuous with the grid and their bottom edge is
+   the free one: rounded at the BOTTOM, square at the top, with the active
+   marker on the bottom edge. Rounding the wrong pair reads, immediately and
+   inexplicably, as a browser tab bar that has slid to the wrong end of the
+   window. */
+
+.dx-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 3px;
+  padding: 0 6px;
+  min-height: 29px;
+  background: var(--panel);
+  border-top: 1px solid var(--line-strong);
+  /* the strip scrolls; the BAR never does, or the whole app grows a horizontal
+     scrollbar the moment a workbook has more sheets than fit */
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* ————— the pinned controls —————
+   OUTSIDE the scroller, deliberately. Excel's trailing ＋ scrolls away with
+   the tabs, so adding a sheet to a twenty-sheet workbook starts with finding
+   the button. These two are always in the same place. */
+.dx-tab-btn {
+  flex: 0 0 auto;
+  align-self: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 7px;
+  cursor: pointer;
+}
+.dx-tab-btn:hover { background: var(--hover); color: var(--ink); }
+.dx-tab-btn:focus-visible { outline: 2px solid var(--sel-ring); outline-offset: 1px; }
+.dx-tab-add { font-size: 12px; }
+.dx-tab-hide { margin-left: auto; opacity: 0.7; }
+.dx-tab-show { display: none; }
+
+/* ————— shut —————
+   `[` hides the strip, as Excel's "Show sheet tabs" option does. It collapses
+   to a chevron rather than to nothing: a control whose only way back is a key
+   you have to already know is a control that looks broken.
+
+   TWO CLASSES, not one. `.dx-tabs-shut > *` and `.dx-tab-strip` have the same
+   specificity, and the strip's own `display: flex` is written LATER in this
+   file — so the strip stayed laid out inside a 20px bar and its tabs hung out
+   of it. Measured: `getComputedStyle(strip).display` was `flex` in the shut
+   state. Two classes outrank one whatever the order. */
+.dx-tabs.dx-tabs-shut { min-height: 20px; }
+.dx-tabs.dx-tabs-shut > * { display: none; }
+.dx-tabs.dx-tabs-shut .dx-tab-show { display: block; padding: 1px 7px; }
+
+/* ————— the scrolling strip ————— */
+.dx-tab-strip {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* NOWRAP IS THE WHOLE OVERFLOW POLICY. Wrapping would push the grid up by a
+     row every time a workbook gained four sheets, and squashing would make
+     twenty tabs twenty unreadable slivers. It scrolls. */
+  flex-wrap: nowrap;
+  scrollbar-width: none;
+}
+.dx-tab-strip::-webkit-scrollbar { height: 0; }
+
+.dx-tab {
+  flex: 0 0 auto;
+  max-width: 190px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 10px;
+  margin: 0 0 3px;
+  border: 1px solid transparent;
+  border-top: 0;
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  /* a tab is a drag handle as well as a button; the browser's own text
+     selection fights the reorder gesture */
+  user-select: none;
+}
+.dx-tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dx-tab:hover { background: var(--hover); color: var(--ink); }
+.dx-tab:focus-visible { outline: 2px solid var(--sel-ring); outline-offset: -2px; }
+
+/* ————— THE ACTIVE TAB —————
+   Three signals at once, because one is never enough across two themes:
+
+     · it is painted in the SHEET's own colour (--bg), so it reads as the tab
+       the grid above is attached to — against --panel this lifts on light and
+       recedes on dark, and either way it is the only tab that is not the band;
+     · a 3px marker on its free (bottom) edge — `--tab-marker`, which is the
+       brand amber on the dark ground and a darker amber on the light one,
+       because this is a NON-TEXT indicator and has 3:1 to clear on both
+       (styles.css says which numbers, and why the accent gives ground here);
+     · full-strength ink at 650, against --muted at 400 for every other tab.
+
+   MEASURED, and this is why one signal was never going to be enough: the fill
+   alone is 1.05:1 against the band on light and 1.09:1 on dark. On its own it
+   is invisible on BOTH grounds. The marker is 5.02:1 / 9.25:1 against the tab
+   it sits on, and the ink goes 4.55:1 → 14.51:1 (light) and 6.45:1 → 13.75:1
+   (dark) between an idle tab and the active one. */
+.dx-tab.active {
+  background: var(--bg);
+  color: var(--ink);
+  font-weight: 650;
+  border-color: var(--line-strong);
+  box-shadow: inset 0 -3px 0 var(--tab-marker);
+}
+.dx-tab.active:hover { background: var(--bg); }
+
+/* a sheet this build cannot open: greyed, never hidden — a tab that is missing
+   reads as a sheet that was deleted */
+.dx-tab-off { opacity: 0.62; cursor: default; }
+.dx-tab-kind {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--wash);
+  color: var(--muted);
+}
+
+/* ————— reorder ————— */
+.dx-tab-dragging { opacity: 0.45; }
+.dx-tab-drop-before { box-shadow: inset 2px 0 0 var(--tab-marker); }
+.dx-tab-drop-after { box-shadow: inset -2px 0 0 var(--tab-marker); }
+/* the active tab keeps its own marker while a drop caret is on it, or the tab
+   you are dragging past stops looking like the one you are looking at */
+.dx-tab.active.dx-tab-drop-before { box-shadow: inset 0 -3px 0 var(--tab-marker), inset 2px 0 0 var(--tab-marker); }
+.dx-tab.active.dx-tab-drop-after { box-shadow: inset 0 -3px 0 var(--tab-marker), inset -2px 0 0 var(--tab-marker); }
+
+.dx-tab-rename {
+  width: 8em;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  padding: 1px 4px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.dx-tab-rename:focus { outline: none; }
+
+/* ————— the menus —————
+   ABOVE the anchor: the strip is the last row on the screen, so a menu that
+   dropped downwards would open past the bottom of the window. */
+.dx-tab-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 168px;
+  max-width: 220px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  display: flex;
+  flex-direction: column;
+}
+.dx-tab-menu button {
+  display: block;
+  width: 100%;
+  text-align: start;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-ui);
+  padding: 5px 9px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dx-tab-menu button:hover:not(:disabled) { background: var(--hover); }
+.dx-tab-menu button:disabled { color: var(--muted); opacity: 0.6; cursor: default; }
+.dx-tab-sep { height: 1px; margin: 4px 2px; background: var(--line); }
+.dx-tab-note {
+  margin: 2px 4px 6px;
+  font-size: var(--fs-small);
+  line-height: 1.35;
+  color: var(--muted);
+}
+/* twenty sheets is a list, not a menu: it scrolls inside itself rather than
+   running off the top of the window */
+.dx-tab-menu-all { max-height: min(60vh, 420px); overflow-y: auto; }
+
+/* ————— phones —————
+   The tabs are the one piece of chrome that must survive a 375px window: on a
+   phone the strip IS the sheet navigation, so it keeps its full height and
+   the pinned buttons tighten instead. */
+@media (max-width: 480px) {
+  .dx-tabs { padding: 0 3px; gap: 2px; }
+  .dx-tab-btn { padding: 4px 5px; }
+  .dx-tab { max-width: 140px; padding: 0 8px; }
+  /* the collapse chevron is the first thing to go: on a phone there is no
+     second panel competing for the height, and one fewer target at the edge of
+     a small screen is one fewer mis-tap */
+  .dx-tab-hide { display: none; }
+}

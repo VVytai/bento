@@ -36,6 +36,7 @@ import {
   cellKey, isFormula, recalcCells, translateCellFormula, shiftSheetFormulas,
   type CellSource,
 } from './cellformula.ts'
+import { mountFind, type FindUI, type Hit } from './find.ts'
 
 /**
  * Row height, in px — SPREADSHEET density, not web-table density.
@@ -170,6 +171,17 @@ export class Grid {
   sorts: Array<{ col: string; dir: 'asc' | 'desc' }> = []
   /** conditional-format styles for the painted window, keyed colId */
   private styles = new Map<string, Array<CellStyle | null>>()
+  /** the find bar — see the constructor for why the grid owns it */
+  finder!: FindUI
+  /**
+   * Find's matches on THIS sheet, as `row:col` in VISIBLE coordinates.
+   *
+   * Visible, not rid, because that is what a paint indexes by — and because
+   * the marks have to move with the view: filter the sheet and the same cell is
+   * on a different row, so a rid-keyed mark would light the wrong row.
+   */
+  private findHits = new Set<string>()
+  private findCur = ''
   onSelectionChange?: (summary: string, ref: string, value: string) => void
   onContextMenu?: (row: number, col: number, x: number, y: number) => void
   onFilterMenu?: (colId: string, x: number, y: number) => void
@@ -184,6 +196,18 @@ export class Grid {
     this.sheetId = opts.sheetId
     this.sel = new Selection(rowCount(this.sheet), cols(this.sheet).length)
     this.build()
+    // FIND IS THE GRID'S, and it is mounted here rather than from main.ts for
+    // one reason: the reason find exists is that this grid is WINDOWED. The
+    // browser's ⌘F searches the ~55 rows that happen to be in the DOM and
+    // reports "not found" for values that are in the file, so a windowed grid
+    // that does not claim ⌘F is a grid that lies. Owning it here means no
+    // build of dash can ship the window without the search that makes it
+    // honest. (find.ts claims the keystroke in the CAPTURE phase, exactly as
+    // help.ts claims '?'; select.ts is still the one place that says what the
+    // key MEANS.)
+    this.finder = mountFind({
+      store: this.store, grid: this, el: this.host, coerce: coerceForColumn,
+    })
     this.store.on('doc', () => {
       // A structural edit invalidates the order VECTOR: it holds row indices,
       // and insert/delete renumber the rows underneath them. Leaving it alone
@@ -251,8 +275,15 @@ export class Grid {
     this.sorts = []
     this.scroller.scrollTop = 0
     this.sel = new Selection(rowCount(this.sheet), cols(this.sheet).length)
+    this.findHits.clear()
+    this.findCur = ''
     this.paint()
     this.onSheetChange?.(id)
+    // NOT through `onSheetChange`: panels.ts and comments.ts both CHAIN that
+    // callback, and a third subscriber assigned from here would either be
+    // overwritten by them or overwrite one of them depending on mount order.
+    // Find is the grid's own, so the grid calls it directly.
+    this.finder?.sheetChanged()
   }
 
   get sheet(): TableSheet {
@@ -502,14 +533,28 @@ export class Grid {
             : ''
           const shown = isErr(v) ? String(v) : formatValue(v, c)
           const fz = this.freeze(ci)
-          return `<div class="dg-cell${note}${bad}${inSel ? ' dg-sel' : ''}${isCursor ? ' dg-cursor' : ''}${fz.cls}" ` +
+          // Find's marks. Every match is tinted, the current one is filled: a
+          // find that highlights only where it jumped tells you nothing about
+          // whether the next one is two rows down or two thousand.
+          const fk = `${i}:${ci}`
+          const hit = this.findHits.has(fk)
+            ? (this.findCur === fk ? ' dg-find dg-find-cur' : ' dg-find')
+            : ''
+          return `<div class="dg-cell${note}${bad}${inSel ? ' dg-sel' : ''}${isCursor ? ' dg-cursor' : ''}${hit}${fz.cls}" ` +
             `data-col="${c.id}" data-ci="${ci}" style="${fz.st}${st}">${bar}<span class="dg-v">${esc(shown)}</span></div>`
         }).join('') + '</div>')
     }
     this.paintEmptyGrid()
     this.head.innerHTML = this.header()
     this.table.innerHTML = body.join('') + this.outline()
-    this.foot.innerHTML = this.totalsRow()
+    // `totalsRow()` returns '' when the sheet declares no totals, but the
+    // element keeps its 2px top rule and its 20px of height — so a sheet with
+    // no totals drew a heavy line across the grid under nothing at all. Hide
+    // the row rather than the border: the border IS the row's whole appearance
+    // when it is empty.
+    const totals = this.totalsRow()
+    this.foot.hidden = totals === ''
+    this.foot.innerHTML = totals
     this.wire()
     // AFTER wire(), so anything decorating cells finds the real nodes. The
     // comments overlay used a MutationObserver on the sizer before this
@@ -941,6 +986,79 @@ export class Grid {
   }
 
   /**
+   * Put a VISIBLE position on screen and select it — the whole of what Find
+   * needs from the grid, and the whole reason Find can exist at all.
+   *
+   * The row is very likely NOT IN THE DOM: the body is windowed to about 55
+   * rows, so on a 5,000-row sheet a match in the last row is not an element
+   * that could be scrolled to. It is arithmetic instead — rows are absolutely
+   * positioned at `top: i * ROW_H`, so the scroll offset of any row is known
+   * without the row existing — and the paint that follows materialises it.
+   *
+   * CENTRED rather than nudged to the edge, and only when it is not already
+   * comfortably in view: a match that lands on the last visible line reads as
+   * "the end of the data", and a reader stepping through matches needs the
+   * next one to appear where the last one was.
+   *
+   * `focus` defaults to FALSE. Find calls this while the reader is still
+   * typing in its field, and taking focus back to the grid would eat the next
+   * character of the query.
+   */
+  revealCell(row: number, col: number, opts: { focus?: boolean } = {}): void {
+    const n = this.store.order[this.sheet.id]?.length ?? rowCount(this.sheet)
+    if (row < 0 || row >= n || col < 0 || col >= cols(this.sheet).length) return
+    this.sel.moveTo(row, col)
+
+    const headH = this.head.offsetHeight || ROW_H + 20
+    const vh = this.scroller.clientHeight
+    const band = Math.max(ROW_H, vh - headH)
+    const y = row * ROW_H
+    if (y < this.scroller.scrollTop || y + ROW_H > this.scroller.scrollTop + band) {
+      this.scroller.scrollTop = Math.max(0, y - Math.floor((band - ROW_H) / 2))
+    }
+
+    // Horizontally, the frozen columns are a band that is always painted over
+    // the scroller's left edge, so a cell scrolled to `x` can still be hidden
+    // underneath them.
+    const vis = cols(this.sheet)
+    const lefts = this.frozenLefts()
+    const frozenEnd = lefts.length
+      ? lefts[lefts.length - 1] + (vis[lefts.length - 1]?.w ?? 130)
+      : 0
+    let x = GUTTER_W
+    for (let i = 0; i < col; i++) x += vis[i]?.w ?? 130
+    const w = vis[col]?.w ?? 130
+    const vw = this.scroller.clientWidth
+    if (x < this.scroller.scrollLeft + frozenEnd) {
+      this.scroller.scrollLeft = Math.max(0, x - frozenEnd)
+    } else if (x + w > this.scroller.scrollLeft + vw) {
+      this.scroller.scrollLeft = x + w - vw
+    }
+
+    this.paint()
+    this.announce()
+    if (opts.focus) this.focusGrid()
+  }
+
+  /**
+   * Light the cells Find matched on THIS sheet. `hits` carry visible
+   * coordinates; anything on another sheet is the caller's to filter out.
+   */
+  setFindMarks(hits: Iterable<Pick<Hit, 'row' | 'col'>>, cur?: Pick<Hit, 'row' | 'col'> | null): void {
+    this.findHits = new Set()
+    for (const h of hits) this.findHits.add(`${h.row}:${h.col}`)
+    this.findCur = cur ? `${cur.row}:${cur.col}` : ''
+    this.paint()
+  }
+
+  clearFindMarks(): void {
+    if (!this.findHits.size && !this.findCur) return
+    this.findHits = new Set()
+    this.findCur = ''
+    this.paint()
+  }
+
+  /**
    * The selection's outline and its fill handle, as ONE absolutely-positioned
    * box over the rows.
    *
@@ -1234,8 +1352,8 @@ export class Grid {
     }
   }
 
-  /** Keep keystrokes coming to the grid after an edit closes. */
-  private focusGrid(): void {
+  /** Keep keystrokes coming to the grid after an edit closes — and after Find closes. */
+  focusGrid(): void {
     if (this.scroller.tabIndex < 0) this.scroller.tabIndex = 0
     this.scroller.focus({ preventScroll: true })
   }
@@ -1272,8 +1390,15 @@ export class Grid {
   }
 }
 
-/** What the user typed, under the column's declared type. */
-function coerceForColumn(text: string, type: ColumnType): unknown {
+/**
+ * What the user typed, under the column's declared type.
+ *
+ * EXPORTED for find.ts's Replace, which is the same question asked by a
+ * different door: a replacement lands in a cell exactly as a typed value does,
+ * and a second copy of this coercion is a second set of rules for what "1,200"
+ * means in a money column.
+ */
+export function coerceForColumn(text: string, type: ColumnType): unknown {
   const s = text.trim()
   if (s === '') return null
   if (type === 'number' || type === 'money' || type === 'percent') {

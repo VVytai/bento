@@ -1,13 +1,21 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 The Bento authors
-// The side panels: sheets on the left, properties on the right.
+// The properties panel — and, since the sheets left, the only panel there is.
+//
+// THE SHEET LIST IS GONE FROM HERE, and the whole left panel went with it.
+// Sheets live along the BOTTOM now (tabs.ts), where every spreadsheet has kept
+// them for thirty years. What this file used to spend on them was a permanent
+// 200px column showing three names, on every screen, including a phone. The
+// grid is that much wider now, and the `[` key — which used to open and close
+// the sheets panel — opens and closes the tab strip, so the binding select.ts
+// declares still means what it says.
 //
 // THIS IS SLIDES' CHROME, DELIBERATELY. Two Bento apps that lay themselves out
 // differently read as two products, so the geometry here is copied rather than
 // reinvented: 11px uppercase section headers, 12.5px rows with the control
 // right-aligned at a fixed width, an accordion whose open state is remembered
-// per section TITLE, 5px resizer strips carrying a chevron that docks flush to
-// the screen edge when its panel is shut, and `[` / `]` to collapse them.
+// per section TITLE, a 5px resizer strip carrying a chevron that docks flush to
+// the screen edge when the panel is shut, and `]` to collapse it.
 // slides/src/editor/{editor,panels}.ts is the reference; where a rule is
 // arbitrary (a radius, a gap) it is copied to the pixel on purpose.
 //
@@ -16,21 +24,19 @@
 // boot sequence needs one call and no markup change. Nothing here reads or
 // writes another module's DOM: the grid keeps its host element, the chart keeps
 // its own, and both survive the move because moving a node keeps its subtree.
+// The tab strip is mounted from here for the same reason — it is the other half
+// of one move, and doing it here costs main.ts no edit at all.
 //
 // EVERY WRITE IS A PATCH, none of them mutate. Same rule as rowcol.ts, for the
-// same reason — the Patch objects are the undo entries and the future CRDT ops,
-// so a panel that assigned to a column would be an edit with no inverse. The
-// two exceptions are `addSheet`/`removeSheet`, which have NO patch op to mint
-// (store.ts's union reaches cells, columns, sheet props and doc.title, never
-// the sheet LIST). They go through `replaceDoc`, which is what import already
-// does — and which clears the undo stack, so the delete asks first. That is the
-// one hook this module wants and cannot have yet.
+// same reason: the Patch objects are the undo entries and the future CRDT ops,
+// so a panel that assigned to a column would be an edit with no inverse.
 
 import './panels.css'
 import { t } from './i18n.ts'
 import { lsJson, lsSet } from '../../kernel/src/storage.ts'
 import { TYPE_LABEL } from './format.ts'
-import type { Column, ColumnType, DashDoc, TableSheet } from './model.ts'
+import { mountTabs, renameSheetPatch } from './tabs.ts'
+import type { Column, ColumnType, TableSheet } from './model.ts'
 import type { Patch, Store } from './store.ts'
 import type { Grid } from './grid.ts'
 import {
@@ -38,7 +44,22 @@ import {
   type SetSheetProps,
 } from './rowcol.ts'
 
-export type Side = 'left' | 'right'
+/**
+ * The sheet-shaped helpers moved to tabs.ts with the sheet list. Re-exported
+ * because they are this module's published surface — `scripts/test-dash-panels.ts`
+ * imports them from here — and because "where a sheet is minted" is a question
+ * about sheets, not about which file happens to draw them today.
+ */
+export {
+  blankSheet, mintSheetId, mintSheetName, renameSheetPatch,
+} from './tabs.ts'
+
+/**
+ * There is ONE panel now. `[` still has a meaning — it shows and hides the
+ * sheet TAB STRIP — but tabs.ts owns that key, beside the thing it toggles,
+ * rather than this module reaching across to it.
+ */
+export type Side = 'right'
 
 /** Column-level totals, spelled as the sheet stores them. */
 export type TotalsAgg = NonNullable<TableSheet['totals']>[string]
@@ -46,10 +67,10 @@ export type TotalsAgg = NonNullable<TableSheet['totals']>[string]
 const TYPES: ColumnType[] = ['text', 'number', 'money', 'percent', 'date', 'bool', 'enum']
 const AGGS: Array<'sum' | 'avg' | 'count' | 'min' | 'max'> = ['sum', 'avg', 'count', 'min', 'max']
 
-// Widths are slides' bounds, nudged: a sheet name needs less room than a slide
-// thumbnail and a column's controls need a little more than an element's.
-const PANEL_BOUNDS = { left: [140, 380], right: [200, 440] } as const
-const PANEL_DEFAULTS = { left: 200, right: 250 } as const
+// Widths are slides' bounds, nudged: a column's controls need a little more
+// room than an element's.
+const PANEL_BOUNDS = { right: [200, 440] } as const
+const PANEL_DEFAULTS = { right: 250 } as const
 /** Below this the panels boot shut, so the GRID is what you see. Slides' rule. */
 const PHONE_W = 700
 
@@ -112,69 +133,6 @@ export function freezeThroughPatch(sheet: TableSheet, colId: string): SetSheetPr
   return freezeAt(sheet, now.rows, already ? 0 : at + 1) as SetSheetProps
 }
 
-/** Rename a sheet. An empty name is refused rather than stored — a nameless tab
- *  is unclickable, and the previous name is the only thing left to fall back to. */
-export function renameSheetPatch(sheet: TableSheet, name: string): SetSheetProps | null {
-  const n = name.trim()
-  if (!n || n === sheet.name) return null
-  return { op: 'setSheetProps', sheet: sheet.id, props: { name: n } }
-}
-
-/**
- * A sheet id nothing in the workbook has taken.
- *
- * `seed` is a parameter so this is deterministic under test; the collision walk
- * matters because a duplicate sheet id makes `doc.sheets.find` return the FIRST
- * one and the second sheet becomes unreachable — its data still in the file,
- * nothing able to open it.
- */
-export function mintSheetId(doc: DashDoc, seed: number = Date.now()): string {
-  const taken = new Set(doc.sheets.map((s) => s.id))
-  let n = Math.floor(Math.abs(seed) % 1e8)
-  for (;;) {
-    const id = `sheet-${n.toString(36)}`
-    if (!taken.has(id)) return id
-    n++
-  }
-}
-
-/** "Sheet 2", "Sheet 3" — the first spelling nothing else is using. */
-export function mintSheetName(doc: DashDoc, base: string): string {
-  const taken = new Set(doc.sheets.map((s) => s.name))
-  if (!taken.has(base)) return base
-  for (let i = 2; ; i++) {
-    const n = `${base} ${i}`
-    if (!taken.has(n)) return n
-  }
-}
-
-/** Blank rows a new sheet starts with — enough to type into, few enough to save. */
-const NEW_ROWS = 20
-
-/**
- * An empty table sheet.
- *
- * `steps[0]` is the provenance record, and it is present even here: a dash file
- * always answers "where did this come from?", and "somebody typed it" is an
- * answer. Column data is `raw` and exactly `NEW_ROWS` long, because a column
- * shorter than the sheet is malformed to every OTHER reader of the JSON even
- * though it reads correctly inside this build (rowcol.ts `fitToRows`).
- */
-export function blankSheet(id: string, name: string, at: string): TableSheet {
-  const cols: Column[] = ['A', 'B', 'C'].map((letter, i) => ({
-    id: `${id}-c${i + 1}`, name: `${t('Column')} ${letter}`, type: 'text', w: 130,
-  }))
-  const data: TableSheet['data'] = {}
-  for (const c of cols) data[c.id] = { enc: 'raw', v: Array.from({ length: NEW_ROWS }, () => null) }
-  return {
-    id, name, kind: 'table',
-    rids: [[1, NEW_ROWS]],
-    columns: cols,
-    data,
-    steps: [{ op: 'import', from: 'created in dash', at, rows: 0, note: 'A blank sheet — nothing was imported.' }],
-  }
-}
-
 // --- mount ------------------------------------------------------------------
 
 export interface PanelsHost {
@@ -210,36 +168,42 @@ export function mountPanels(host: PanelsHost): Panels {
   centre.className = 'dp-centre'
   while (body.firstChild) centre.appendChild(body.firstChild)
 
-  const left = panelEl('dp-left')
   const right = panelEl('dp-right')
-  const leftBar = resizer('left')
   const rightBar = resizer('right')
-  body.append(left, leftBar, centre, rightBar, right)
+  body.append(centre, rightBar, right)
+
+  // THE SHEET TABS, mounted from here — and main.ts needs no edit for it.
+  // `mountTabs` inserts itself directly AFTER `.dx-body`, which lands the strip
+  // between the grid and the status bar in `#app`'s column with no change to
+  // the boot markup. This is the module the sheet list left, so this is where
+  // the other half of that move is wired; the alternative (a second call in
+  // main.ts) mounts the strip TWICE if this line is ever forgotten, which is
+  // exactly the shape of bug two people editing one screen produce.
+  mountTabs({ store, grid, body })
 
   // --- widths and collapse, both remembered ---------------------------------
 
-  const widths = { ...PANEL_DEFAULTS } as { left: number; right: number }
+  const widths = { ...PANEL_DEFAULTS } as { right: number }
   const saved = lsJson<Record<string, number>>(LS_WIDTHS, {})
-  for (const side of ['left', 'right'] as const) {
+  for (const side of ['right'] as const) {
     const [min, max] = PANEL_BOUNDS[side]
     if (typeof saved[side] === 'number') widths[side] = Math.min(max, Math.max(min, saved[side]))
   }
   applyWidths()
 
-  // A phone boots with both shut so the grid is what you see — but only if the
-  // reader has never said otherwise, or opening one panel on a phone would be
-  // forgotten on every reload.
+  // A phone boots shut so the grid is what you see — but only if the reader has
+  // never said otherwise, or opening the panel on a phone would be forgotten on
+  // every reload.
   const shut = lsJson<Record<string, boolean>>(LS_SHUT, {})
-  for (const side of ['left', 'right'] as const) {
-    const el = side === 'left' ? left : right
-    const pref = shut[side]
+  {
+    const pref = shut.right
     // A width of ZERO means "not laid out yet", not "phone". A background or
     // freshly-created tab reports 0 before first layout, and `0 < 700` then
-    // collapsed both panels on a desktop — with no stored preference to
-    // explain it, so it looked like the panels had simply not shipped.
+    // collapsed the panel on a desktop — with no stored preference to explain
+    // it, so it looked like the panel had simply not shipped.
     const vw = window.innerWidth
     const phone = vw > 0 && vw < PHONE_W
-    if (pref ?? phone) el.classList.add('dp-shut')
+    if (pref ?? phone) right.classList.add('dp-shut')
   }
   updateChevrons()
 
@@ -250,33 +214,27 @@ export function mountPanels(host: PanelsHost): Panels {
   }
 
   function applyWidths(): void {
-    left.style.setProperty('--dp-w', `${widths.left}px`)
     right.style.setProperty('--dp-w', `${widths.right}px`)
   }
 
 
   function updateChevrons(): void {
-    for (const side of ['left', 'right'] as const) {
-      const btn = chevrons[side]
-      if (!btn) continue
-      const closed = (side === 'left' ? left : right).classList.contains('dp-shut')
-      // The arrow points where clicking moves the boundary, not at the panel.
-      btn.textContent = side === 'left' ? (closed ? '›' : '‹') : (closed ? '‹' : '›')
-      btn.title = side === 'left'
-        ? closed ? t('Show sheets ([)') : t('Hide sheets ([)')
-        : closed ? t('Show properties (])') : t('Hide properties (])')
-    }
+    const btn = chevrons.right
+    if (!btn) return
+    const closed = right.classList.contains('dp-shut')
+    // The arrow points where clicking moves the boundary, not at the panel.
+    btn.textContent = closed ? '‹' : '›'
+    btn.title = closed ? t('Show properties (])') : t('Hide properties (])')
   }
 
-  function toggle(side: Side): void {
-    const el = side === 'left' ? left : right
-    const nowShut = el.classList.toggle('dp-shut')
-    shut[side] = nowShut
+  function toggle(_side: Side): void {
+    const nowShut = right.classList.toggle('dp-shut')
+    shut.right = nowShut
     lsSet(LS_SHUT, JSON.stringify(shut))
     updateChevrons()
   }
 
-  function resizer(side: Side): HTMLElement {
+  function resizer(side: 'right'): HTMLElement {
     const bar = document.createElement('div')
     bar.className = 'dp-resizer'
     bar.title = t('Drag to resize · double-click to reset')
@@ -288,23 +246,21 @@ export function mountPanels(host: PanelsHost): Panels {
 
     bar.addEventListener('mousedown', (down) => {
       if (down.target === btn) return         // the chevron is a click, not a drag
-      const panel = side === 'left' ? left : right
-      if (panel.classList.contains('dp-shut')) return
+      if (right.classList.contains('dp-shut')) return
       down.preventDefault()
       const startX = down.clientX
       const startW = widths[side]
       const [min, max] = PANEL_BOUNDS[side]
-      panel.classList.add('dp-noanim')
+      right.classList.add('dp-noanim')
       document.body.classList.add('dp-resizing')
       const move = (e: MouseEvent): void => {
-        const dx = e.clientX - startX
-        widths[side] = Math.min(max, Math.max(min, startW + (side === 'left' ? dx : -dx)))
+        widths[side] = Math.min(max, Math.max(min, startW - (e.clientX - startX)))
         applyWidths()
       }
       const up = (): void => {
         window.removeEventListener('mousemove', move)
         window.removeEventListener('mouseup', up)
-        panel.classList.remove('dp-noanim')
+        right.classList.remove('dp-noanim')
         document.body.classList.remove('dp-resizing')
         lsSet(LS_WIDTHS, JSON.stringify(widths))
       }
@@ -349,148 +305,6 @@ export function mountPanels(host: PanelsHost): Panels {
   // --- rendering ------------------------------------------------------------
 
   const ro = (): boolean => store.readOnly
-
-  function renderSheets(): void {
-    left.textContent = ''
-    const head = document.createElement('h3')
-    head.className = 'dp-section dp-static'
-    head.textContent = t('Sheets')
-    left.appendChild(head)
-
-    const cur = currentSheet()
-    for (const sheet of store.doc.sheets) {
-      const item = document.createElement('div')
-      item.className = 'dp-sheet'
-      if (cur && sheet.id === cur.id) item.classList.add('active')
-
-      const name = document.createElement('div')
-      name.className = 'dp-sheet-name'
-      name.textContent = sheet.name || t('(untitled sheet)')
-      const meta = document.createElement('div')
-      meta.className = 'dp-sheet-meta'
-      // Read the discriminant BEFORE isTable() narrows it away — in the else
-      // branch the union has collapsed and `sheet.kind` is unreachable.
-      const kind = String((sheet as { kind?: unknown }).kind ?? '')
-
-      if (isTable(sheet)) {
-        meta.textContent = `${rowsOf(sheet)} × ${sheet.columns.length}`
-        item.addEventListener('click', () => {
-          if (cur && sheet.id === cur.id) return
-          grid.setSheet(sheet.id)
-        })
-        // Rename in place. The right panel has the same field; this is the one
-        // people reach for, because it is where the name already is.
-        item.addEventListener('dblclick', (e) => {
-          e.preventDefault()
-          if (ro()) return
-          startRename(name, sheet)
-        })
-      } else {
-        // A sheet this panel cannot edit. Showing it greyed is honest; hiding
-        // it would make a sheet that is really there look deleted.
-        //
-        // NAME THE KIND IT ACTUALLY IS. Everything non-table used to be
-        // labelled a canvas sheet, which was true until pivots existed — and
-        // then a pivot, generated by the app's own ＋ Pivot button, sat in the
-        // list describing itself as something else entirely. A label that
-        // confidently states the wrong thing is worse than a vague one.
-        item.classList.add('dp-sheet-off')
-        meta.textContent = kind === 'pivot'
-          ? t('pivot table — open it from ＋ Pivot')
-          : kind === 'canvas'
-            ? t('canvas sheet — not editable in this build')
-            : t('{kind} sheet — not editable in this build').replace('{kind}', kind)
-      }
-      item.append(name, meta)
-
-      if (!ro() && isTable(sheet)) {
-        const tools = document.createElement('div')
-        tools.className = 'dp-sheet-tools'
-        tools.appendChild(iconBtn('✕', t('Delete this sheet'), (e) => {
-          e.stopPropagation()
-          removeSheet(sheet)
-        }))
-        item.appendChild(tools)
-      }
-      left.appendChild(item)
-    }
-
-    if (!ro()) {
-      const add = document.createElement('button')
-      add.className = 'dp-btn dp-add'
-      add.textContent = t('＋ New sheet')
-      add.addEventListener('click', addSheet)
-      left.appendChild(add)
-    }
-  }
-
-  function startRename(name: HTMLElement, sheet: TableSheet): void {
-    const input = document.createElement('input')
-    input.className = 'dp-sheet-rename'
-    input.value = sheet.name
-    name.replaceWith(input)
-    input.focus()
-    input.select()
-    let done = false
-    const finish = (write: boolean): void => {
-      if (done) return
-      done = true
-      if (write) {
-        const p = renameSheetPatch(sheet, input.value)
-        if (p) store.commit(p)
-      }
-      renderSheets()
-    }
-    input.addEventListener('blur', () => finish(true))
-    input.addEventListener('keydown', (e) => {
-      e.stopPropagation()                     // the grid owns bare keys otherwise
-      if (e.key === 'Enter') finish(true)
-      else if (e.key === 'Escape') finish(false)
-    })
-    // the double-click also selected the row's text; clear it or the two
-    // selections fight over the caret
-    getSelection()?.removeAllRanges()
-  }
-
-  /**
-   * Add a sheet — a PATCH, so it is undoable.
-   *
-   * This used to go through `replaceDoc`, which clears the undo stack: adding a
-   * sheet silently threw away every edit you could previously take back.
-   */
-  function addSheet(): void {
-    if (ro()) return
-    const doc = store.doc
-    const id = mintSheetId(doc)
-    store.commit({
-      op: 'setSheet', id,
-      sheet: blankSheet(id, mintSheetName(doc, t('Sheet')), new Date().toISOString()),
-    } as never)
-    grid.setSheet(id)
-  }
-
-  function removeSheet(sheet: TableSheet): void {
-    if (ro()) return
-    const doc = store.doc
-    if (doc.sheets.filter(isTable).length < 2) {
-      window.alert(t('A workbook needs at least one sheet.'))
-      return
-    }
-    // Undoable now, so the warning no longer has to say otherwise — but a
-    // sheet is a lot of rows to remove on one click, so it still asks.
-    const rows = rowsOf(sheet)
-    const msg = t('Delete "{name}" and its {n} rows?')
-      .replace('{name}', sheet.name)
-      .replace('{n}', String(rows))
-    if (!window.confirm(msg)) return
-    const cur = currentSheet()
-    store.commit({ op: 'setSheet', id: sheet.id, sheet: undefined } as never)
-    if (cur && cur.id === sheet.id) {
-      const next = doc.sheets.find(isTable)
-      if (next) grid.setSheet(next.id)
-    }
-    render()
-  }
 
   // --- the properties panel -------------------------------------------------
 
@@ -692,7 +506,7 @@ export function mountPanels(host: PanelsHost): Panels {
    */
   function editing(): boolean {
     const a = document.activeElement as HTMLElement | null
-    if (!a || !right.contains(a) && !left.contains(a)) return false
+    if (!a || !right.contains(a)) return false
     if (a.tagName === 'TEXTAREA' || a.isContentEditable) return true
     if (a.tagName === 'INPUT') {
       const type = (a as HTMLInputElement).type
@@ -704,17 +518,14 @@ export function mountPanels(host: PanelsHost): Panels {
   function render(force = false): void {
     if (!force && editing()) { stale = true; return }
     stale = false
-    renderSheets()
     renderProps()
   }
 
-  for (const el of [left, right]) {
-    el.addEventListener('focusout', () => {
-      setTimeout(() => {
-        if (stale && !left.matches(':focus-within') && !right.matches(':focus-within')) render()
-      }, 0)
-    })
-  }
+  right.addEventListener('focusout', () => {
+    setTimeout(() => {
+      if (stale && !right.matches(':focus-within')) render()
+    }, 0)
+  })
 
   store.on('doc', () => render())
   store.on('view', () => render())
@@ -727,27 +538,36 @@ export function mountPanels(host: PanelsHost): Panels {
     render()
   }
 
-  // Import switches sheets too, so the list has to follow the GRID rather than
-  // only its own clicks — otherwise it keeps highlighting the old sheet until
-  // the next unrelated document event.
-  grid.onSheetChange = () => render(true)
+  // Import switches sheets too, so the properties have to follow the GRID
+  // rather than only this panel's own controls — otherwise they keep describing
+  // the old sheet until the next unrelated document event. CHAINED, because
+  // mountTabs above has already hung the tab strip's rebuild off this callback.
+  const switched = grid.onSheetChange
+  grid.onSheetChange = (id: string) => {
+    switched?.(id)
+    render(true)
+  }
 
   /**
-   * `[` and `]`, in the CAPTURE phase — and that is load-bearing. main.ts's
-   * document keydown handler feeds any bare printable key to `grid.typeInto`,
-   * which would open a cell editor seeded with "[". Capturing on `document`
-   * runs before every bubble listener on it, and `stopImmediatePropagation`
-   * (not `stopPropagation` — both handlers are on the same node) is what keeps
-   * the keystroke from reaching the grid at all.
+   * `]`, in the CAPTURE phase — and that is load-bearing. main.ts's document
+   * keydown handler feeds any bare printable key to `grid.typeInto`, which
+   * would open a cell editor seeded with "]". Capturing on `document` runs
+   * before every bubble listener on it, and `stopImmediatePropagation` (not
+   * `stopPropagation` — both handlers are on the same node) is what keeps the
+   * keystroke from reaching the grid at all.
+   *
+   * `[` is tabs.ts's now: it shows and hides the sheet tab strip, which is
+   * where the sheets panel it used to open went. Same capture-phase treatment,
+   * declared in the same place in select.ts — just next to what it toggles.
    */
   document.addEventListener('keydown', (e) => {
-    if (e.key !== '[' && e.key !== ']') return
+    if (e.key !== ']') return
     if (e.metaKey || e.ctrlKey || e.altKey) return
     const target = e.target as HTMLElement | null
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
     e.preventDefault()
     e.stopImmediatePropagation()
-    toggle(e.key === '[' ? 'left' : 'right')
+    toggle('right')
   }, true)
 
   render(true)
@@ -849,13 +669,4 @@ function toggle_(value: boolean, onChange: (v: boolean) => void): HTMLInputEleme
   cb.checked = value
   cb.addEventListener('change', () => onChange(cb.checked))
   return cb
-}
-
-function iconBtn(glyph: string, title: string, onClick: (e: MouseEvent) => void): HTMLElement {
-  const b = document.createElement('button')
-  b.className = 'dp-btn dp-icon'
-  b.textContent = glyph
-  b.title = title
-  b.addEventListener('click', onClick)
-  return b
 }

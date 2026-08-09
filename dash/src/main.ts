@@ -26,6 +26,7 @@ import {
   capturePristine, readEmbeddedDoc, serializeFile, serializeAuto, saveFile,
   parseEnvelope, decryptEnvelope, setEncryptionPassword, isEncryptionActive,
   canWriteInPlace, downloadFile, suggestedFileName, openedFileName, registerPreview,
+  currentFileName,
 } from '../../kernel/src/save.ts'
 import { putRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
@@ -40,7 +41,8 @@ import { setRidBlock } from './rowcol.ts'
 import { importXlsx, exportXlsx, xlsxFileName } from './xlsx.ts'
 import { runPivot, mountPivot, defaultPivot, newPivotSheet, type PivotSpec } from './pivot.ts'
 import { buildSheetPreview } from './preview.ts'
-import { installSaveMenu, adoptOpenedDoc } from './saveui.ts'
+import './ask.css'
+import { installSaveMenu, adoptOpenedDoc, toast } from './saveui.ts'
 import { dismissSplash, dismissSplashNow } from './splash.ts'
 import { t, i18nApi } from './i18n.ts'
 import {
@@ -58,12 +60,12 @@ import { mountDropOpen } from './dropopen.ts'
 import { Grid } from './grid.ts'
 import { importDelimited } from './import.ts'
 import { TYPE_LABEL } from './format.ts'
-import { defaultBinding, renderChart, type ChartBinding } from './chart.ts'
+import { defaultBinding, renderChart, chartHeading, type ChartBinding } from './chart.ts'
 import { readCell } from './store.ts'
 import {
   insertRowsAt, deleteRowsAt, insertColumn, deleteColumn, resizeColumn,
   autoFitWidth, setHidden, freezeAt, readFrozen } from './rowcol.ts'
-import { FUNCTIONS } from './formula.ts'
+import { FUNCTIONS, dependencies, recalc } from './formula.ts'
 import { buildScene, defaultViz3d, mountViz3d, type Viz3dBinding, type Viz3dKind } from './viz3d.ts'
 
 // --- topbar icons -----------------------------------------------------------
@@ -91,6 +93,9 @@ const ICON = {
     '<rect x="3.2" y="10.8" width="6" height="6" rx="1.2"/><rect x="10.8" y="10.8" width="6" height="6" rx="1.2"/>'),
   story: SVG('<rect x="2.8" y="4" width="14.4" height="9.6" rx="1.4"/><path d="M7 17h6"/>'),
   undo: SVG('<path d="M7 7H4.5V4.5"/><path d="M4.9 7.4A5.6 5.6 0 1 1 4.4 12"/>'),
+  // The mirror of undo, because that is what every toolbar in the world uses
+  // and a redo arrow that is not undo's reflection reads as a refresh button.
+  redo: SVG('<path d="M13 7h2.5V4.5"/><path d="M15.1 7.4A5.6 5.6 0 1 0 15.6 12"/>'),
   data: SVG('<ellipse cx="10" cy="5.4" rx="5.6" ry="2.4"/><path d="M4.4 5.4v9.2c0 1.3 2.5 2.4 5.6 2.4s5.6-1.1 5.6-2.4V5.4"/><path d="M4.4 10c0 1.3 2.5 2.4 5.6 2.4s5.6-1.1 5.6-2.4"/>'),
   // Import and export get OPPOSITE arrows, not two copies of the cylinder. Four
   // rows reading "Import CSV / Export CSV / Import Excel / Export Excel" behind
@@ -238,6 +243,9 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     `</div></div>` +
     `<div class="dx-group dx-bar-end">` +
     barBtn('undo', ICON.undo, t('Undo'), t('Undo (⌘Z)')) +
+    // ⌘⇧Z and ⌘Y both worked and the shortcut card documented them, but the bar
+    // had undo alone — so a mouse user who over-undid had no way back at all.
+    barBtn('redo', ICON.redo, t('Redo'), t('Redo (⇧⌘Z)')) +
     `<div class="dx-dd dx-data-dd">` +
     `<button class="dx-btn dx-dd-trig" data-dd="data" title="${esc(t('Import and export CSV and Excel files'))}">` +
     `${ICON.data}<span>${t('Data')}</span>${ICON.down}</button>` +
@@ -318,7 +326,7 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     if (grid.handleKey(e)) e.preventDefault()
   })
   grid.onRetype = (col, x, y) => retype(store, col, x, y)
-  grid.onEditFormula = (col) => editFormula(store, grid, col)
+  grid.onEditFormula = (col) => { void editFormula(store, grid, col) }
 
   // --- chart: bound to columns, derived at render, never stored
   const chartEl = app.querySelector<HTMLElement>('.dx-chart')!
@@ -326,21 +334,65 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   const chartTitle = app.querySelector<HTMLElement>('.dx-chart-title')!
   const kindBtn = app.querySelector<HTMLElement>('.dx-chart-kind')!
   let binding: ChartBinding | null = null
+  // The sheet the chart is ABOUT. A chart is an argument about one table —
+  // `StoryStep` carries `sheet` beside `chart` for exactly this reason — so it
+  // is PINNED here and never follows the tab bar. Reading `grid.sheet` instead
+  // left the old chart painted beside the new grid on every sheet switch, and
+  // the next edit redrew it as an empty axis against columns that had never
+  // existed on the sheet in front of the reader.
+  let chartSheetId: string | null = null
   let teardown: (() => void) | null = null
   const KINDS: Array<ChartBinding['kind']> = ['bar', 'line', 'pie', 'scatter']
+
+  const chartSheet = (): TableSheet | null => {
+    const s = store.doc.sheets.find((x) => x.id === chartSheetId)
+    return s && s.kind === 'table' ? s : null
+  }
 
   const drawChart = () => {
     if (!binding || chartEl.hidden) return
     teardown?.()
-    const sheet = grid.sheet
-    chartTitle.textContent = `${sheet.columns.find((c) => c.id === binding!.x)?.name ?? ''} · ` +
-      binding.series.map((id) => sheet.columns.find((c) => c.id === id)?.name ?? id).join(', ')
+    const sheet = chartSheet()
+    // The sheet it was about has been deleted. There is nothing left to be
+    // truthful about, so the panel closes rather than keeping the last numbers
+    // it happens to be holding on screen.
+    if (!sheet) { teardown = null; binding = null; chartSheetId = null; chartEl.hidden = true; return }
+    const shown = grid.sheet
+    chartTitle.textContent = chartHeading(sheet, binding, shown.id)
     kindBtn.textContent = binding.kind[0].toUpperCase() + binding.kind.slice(1)
-    // hand the grid's freshly computed formula columns in, so the chart shows
-    // the numbers on screen rather than the raw columns underneath them
-    teardown = renderChart(chartBody, sheet, binding, grid.computed as Map<string, unknown[]>)
+    teardown = renderChart(chartBody, sheet, binding,
+      // the grid's freshly computed formula columns, so the chart shows the
+      // numbers on screen rather than the raw columns underneath them — but
+      // only while the grid is showing THIS sheet. `grid.computed` is keyed by
+      // column id and belongs to `grid.sheet`; handing it to another sheet's
+      // chart charts one sheet's formulas under another's column names.
+      sheet.id === shown.id
+        ? (grid.computed as Map<string, unknown[]>)
+        : (recalc(sheet, store.doc.modified).values as Map<string, unknown[]>),
+      {
+        // THE VIEW VECTOR — the same one the footer totals read in grid.ts. A
+        // sort permutes it and every total is unchanged; a filter shortens it
+        // and every total must follow, or the chart draws bars for rows the
+        // reader cannot see (measured: £97,050 beside a £69,050 footer).
+        rows: store.order[sheet.id] ?? null,
+        showing: shown.id === sheet.id ? null : { id: shown.id, name: shown.name },
+        onRebind: () => {
+          const next = defaultBinding(grid.sheet)
+          if (!next) {
+            showFindings(findingsEl, [{ message: t('This sheet has no numeric column to chart yet.') }])
+            return
+          }
+          binding = next
+          chartSheetId = grid.sheet.id
+          drawChart()
+        },
+      })
   }
   store.on('doc', drawChart)
+  // FILTERING AND SORTING ARE VIEW STATE: `store.view()` emits `view` and never
+  // `doc` (that is the point — they must not dirty the file). Listening only for
+  // `doc` is why the chart ignored a filter completely: nothing redrew it.
+  store.on('view', drawChart)
   kindBtn.addEventListener('click', () => {
     if (viz) {
       viz.kind = KINDS3D[(KINDS3D.indexOf(viz.kind) + 1) % KINDS3D.length]
@@ -361,11 +413,12 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     clearPivot()
     vizDown?.(); vizDown = null; viz = null
     binding = defaultBinding(grid.sheet)
+    chartSheetId = grid.sheet.id
     if (!binding) { showFindings(findingsEl, [{ message: t('This sheet has no numeric column to chart yet.') }]); return }
     chartEl.hidden = false
     drawChart()
   })
-  app.querySelector('[data-act="formula"]')!.addEventListener('click', () => addFormula(store, grid))
+  app.querySelector('[data-act="formula"]')!.addEventListener('click', () => { void addFormula(store, grid) })
 
   // --- 3D: the same panel, a different renderer. Geometry is derived from the
   // columns exactly as the 2D chart's series are, so nothing is stored.
@@ -401,8 +454,19 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   // rather than replacing it, so the formula bar and status bar keep working.
   mountPanels({ store, grid, body: app.querySelector<HTMLElement>('.dx-body')! })
 
+
   // Comments. AFTER mountPanels, which chains grid.onSheetChange.
   const comments = mountComments({ store, grid, el: app.querySelector<HTMLElement>('.dx-grid')! })
+
+  // A SHEET SWITCH IS NEITHER A `doc` NOR A `view` EVENT — `Grid.setSheet` just
+  // repaints and calls this hook — so the chart heard nothing about one and kept
+  // painting the sheet you had left. It stays pinned to its own sheet; it simply
+  // has to redraw to say which sheet that is, and to offer to follow.
+  // CHAINED, never assigned: mountPanels and mountComments are already on this
+  // hook, and replacing it silently unhooks the sheet list and the comment
+  // markers. (Registered last, so it runs after both.)
+  const chartAfterSheetChange = grid.onSheetChange
+  grid.onSheetChange = (id) => { chartAfterSheetChange?.(id); drawChart() }
 
   // --- pivot. A pivot is a DOCUMENT, not a view: "revenue by region by
   // quarter" is an argument about what the data means, somebody built it, and
@@ -480,7 +544,11 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     sheetId: () => grid.sheet.id,
     filters: () => grid.filters,
     sorts: () => grid.sorts,
-    chart: () => binding,
+    // A step pairs ONE sheet with ONE chart, so it may only capture the chart
+    // when the chart is about the sheet being captured. The chart is pinned and
+    // the story captures `grid.sheet`, so without this a step could store a
+    // Pipeline chart against Sheet 2 and play back a pairing nobody ever saw.
+    chart: () => (chartSheetId === grid.sheet.id ? binding : null),
     viz: () => viz,
     computed: (id) => (id === grid.sheet.id ? (grid.computed as Map<string, unknown[]>) : undefined),
   })
@@ -510,13 +578,31 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
       // states the rule in its own header and enforces it in neither place, so
       // every app has to remember — and the second one did not.
       if (!isEncryptionActive()) {
-        void putRecovery(store.doc)
+        // THE RETURN VALUE IS THE POINT, and it was being thrown away.
+        //
+        // `putRecovery` resolves FALSE rather than throwing when there is no
+        // usable IndexedDB — Safari in private browsing, and some file://
+        // contexts, which on iOS is exactly where a workbook someone was sent
+        // tends to be opened. The kernel says so in its own header, in as many
+        // words: "Claiming a backstop that isn't there would be worse than
+        // saying nothing." dash claimed it anyway.
+        //
+        // Told ONCE per session, and only on the way down. A banner on every
+        // debounced edit would be noise, and the fact does not change during a
+        // session — but somebody editing for an hour on the assumption that a
+        // crash costs them nothing deserves to know it costs them everything.
+        void putRecovery(store.doc).then((stored) => {
+          if (stored || warnedNoBackstop) return
+          warnedNoBackstop = true
+          toast(t('This browser will not keep a local backup of your work. Save the file yourself to keep changes.'))
+        })
         // the timeline the About dialog restores from — throttled inside, and
         // it refuses an encrypted workbook for the same reason putRecovery does
         void rememberVersion(store.doc)
       }
     }, 2500)
   }
+  let warnedNoBackstop = false
   // --- live collaboration.
   //
   // The session is CONSTRUCTED for every workbook but connects to nothing
@@ -645,7 +731,31 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     store,
     save: doSave,
   })
-  app.querySelector('[data-act="undo"]')!.addEventListener('click', () => { store.undo() })
+  const undoBtn = app.querySelector<HTMLButtonElement>('[data-act="undo"]')!
+  const redoBtn = app.querySelector<HTMLButtonElement>('[data-act="redo"]')!
+  undoBtn.addEventListener('click', () => { store.undo() })
+  redoBtn.addEventListener('click', () => { store.redo() })
+  // A button that is always lit and sometimes does nothing teaches people that
+  // the toolbar is decorative. Redo in particular is empty most of the time.
+  //
+  // ON A MICROTASK, and it has to be. `Store.undo` reads
+  //
+  //     this.redoStack.push(this.invert(e))
+  //
+  // and `invert` is what applies the patches and emits `doc` — so the emit
+  // happens while the argument is still being evaluated, BEFORE the push. A
+  // listener that reads `canRedo` synchronously sees the stack as it was a
+  // moment ago and leaves Redo greyed out immediately after an undo, which is
+  // the one instant it is certainly available. Measured exactly that before
+  // this hop. Reading a beat later reads the truth, and unlike reordering the
+  // store's emit it cannot disturb the collab session that listens to the same
+  // event.
+  const syncHistoryButtons = (): void => {
+    undoBtn.disabled = store.readOnly || !store.canUndo
+    redoBtn.disabled = store.readOnly || !store.canRedo
+  }
+  store.on('doc', () => queueMicrotask(syncHistoryButtons))
+  syncHistoryButtons()
   app.querySelector('[data-act="export"]')!.addEventListener('click', () => exportCsv(store))
   app.querySelector('[data-act="import"]')!.addEventListener('click', () => {
     void pickCsv(store, findingsEl, grid)
@@ -689,8 +799,42 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
         : t('This browser has no in-place save, so every save downloads the whole file.')
       if (!window.confirm(`${t('This workbook is {mb} MB.').replace('{mb}', mb)} ${how} ${t('Save anyway?')}`)) return
     }
-    const r = await saveFile(store.doc)
-    if (r === 'saved' || r === 'downloaded') { dirty = false; dirtyEl.hidden = true }
+    // EVERY OUTCOME SAYS SOMETHING, and two of them used to say nothing at all.
+    //
+    // `saveFile` has four results and can also throw, and this handled two of
+    // them. `saved-as` — the FIRST save of a new workbook, the most common save
+    // anyone ever performs — fell through the check, so the file was written
+    // and the unsaved dot stayed lit, telling the author their work was not
+    // saved when it was.
+    //
+    // The silence was worse than the dot. On a browser with no File System
+    // Access API (Firefox, Safari, iOS) a save is a DOWNLOAD: a fresh copy
+    // lands in Downloads and the file the author has open is left stale. Same
+    // keystroke, same dot going out, completely different outcome — and nothing
+    // on screen distinguished them. That is how someone keeps editing a file
+    // that is no longer the one their work is in.
+    //
+    // A throw was invisible too: an unhandled rejection in the console of an
+    // app the user is not looking at the console of. A revoked permission, a
+    // deleted file and a full disk all arrive this way.
+    let r: Awaited<ReturnType<typeof saveFile>>
+    try {
+      r = await saveFile(store.doc)
+    } catch (err) {
+      toast(t('Save failed — {why}').replace('{why}', err instanceof Error ? err.message : String(err)))
+      return
+    }
+    if (r === 'cancelled') return          // they closed the picker; they know
+    dirty = false
+    dirtyEl.hidden = true
+    const name = currentFileName()
+    if (r === 'downloaded') {
+      toast(t('This browser cannot write files in place, so a copy was saved to your Downloads. The file open here is unchanged.'))
+    } else if (r === 'saved-as' && name) {
+      toast(t('Saved to {name}').replace('{name}', name))
+    } else {
+      toast(t('Saved'))
+    }
   }
 
   window.addEventListener('beforeunload', (e) => {
@@ -877,30 +1021,69 @@ void DOC_BUDGET_DOWNLOAD
  * Add a computed column. One expression for the whole column, so inserting a
  * row changes nothing and there is no range to fall out of date.
  */
-function addFormula(store: Store, grid: Grid): void {
+/**
+ * Check a formula against the sheet it will live on, as it is typed.
+ *
+ * `dependencies` returns the names the expression refers to, so a typo in a
+ * column name is caught here rather than becoming a column of #NAME? that the
+ * author discovers later. It cannot catch everything — a syntax error still
+ * surfaces as an error VALUE in the column — but a misspelt column is the
+ * mistake people actually make, and it is the one a native prompt could never
+ * have reported.
+ */
+function formulaProblem(sheet: TableSheet, expr: string): string | null {
+  if (!expr.trim()) return null                       // empty clears the formula
+  const known = new Set(sheet.columns.map((c) => c.name))
+  const fns = new Set(FUNCTIONS)
+  const unknown = dependencies(expr).filter((d) => !known.has(d) && !fns.has(d.toUpperCase()))
+  if (!unknown.length) return null
+  return t('No column called {name} on this sheet.').replace('{name}', `“${unknown[0]}”`)
+}
+
+/** The columns you may name, for the hint line under the field. */
+const columnHint = (sheet: TableSheet): string =>
+  `${t('Columns')}: ${sheet.columns.map((c) => (/\s/.test(c.name) ? `[${c.name}]` : c.name)).join(', ')}`
+
+async function addFormula(store: Store, grid: Grid): Promise<void> {
   const sheet = grid.sheet
-  const names = sheet.columns.map((c) => (/\s/.test(c.name) ? `[${c.name}]` : c.name)).join(', ')
-  const expr = window.prompt(
-    `${t('Formula for a new column.')}\n\n${t('Columns')}: ${names}\n${t('Functions')}: ${FUNCTIONS.slice(0, 24).join(' ')}…\n\n` +
-    `${t('Example')}: Value * Probability`,
-    'Value * Probability',
-  )
-  if (!expr) return
-  const name = window.prompt(t('Column name'), t('Computed')) || t('Computed')
+  // The old default was literally `Value * Probability` — the starter
+  // workbook's own column names, prefilled into every workbook in the world.
+  // On any other sheet it is a formula referring to two columns that do not
+  // exist, presented as the example to follow.
+  const nums = sheet.columns.filter((c) => c.type === 'number' || c.type === 'money' || c.type === 'percent')
+  const example = nums.length >= 2 ? `${nums[0].name} * ${nums[1].name}` : nums.length === 1 ? `${nums[0].name} * 2` : ''
+  const got = await askForm({
+    title: t('New formula column'),
+    fields: [
+      { key: 'expr', label: t('Formula'), value: example, mono: true, placeholder: t('e.g. Price * Quantity') },
+      { key: 'name', label: t('Column name'), value: t('Computed') },
+    ],
+    hint: `${columnHint(sheet)}\n${t('Functions')}: ${FUNCTIONS.slice(0, 24).join(' ')}…`,
+    submit: t('Add column'),
+    check: (v) => (v.expr.trim() ? formulaProblem(sheet, v.expr) : t('A formula column needs a formula.')),
+  })
+  if (!got) return
   const id = `f-${Math.floor(Date.now() % 1e8).toString(36)}`
   store.commit({
     op: 'addColumn', sheet: sheet.id,
-    column: { id, name, type: 'number', formula: expr },
+    column: { id, name: got.name.trim() || t('Computed'), type: 'number', formula: got.expr },
   })
 }
 
 /** Double-clicking a computed cell edits the expression that produced it. */
-function editFormula(store: Store, grid: Grid, col: Column): void {
-  const expr = window.prompt(`${t('Formula for')} "${col.name}"`, col.formula ?? '')
-  if (expr === null) return
+async function editFormula(store: Store, grid: Grid, col: Column): Promise<void> {
+  const sheet = grid.sheet
+  const got = await askForm({
+    title: t('Formula for “{col}”').replace('{col}', col.name),
+    fields: [{ key: 'expr', label: t('Formula'), value: col.formula ?? '', mono: true }],
+    hint: `${columnHint(sheet)}\n${t('Leave it empty to turn this back into an ordinary column.')}`,
+    submit: t('Save formula'),
+    check: (v) => formulaProblem(sheet, v.expr),
+  })
+  if (!got) return
   store.commit({
-    op: 'setColumn', sheet: grid.sheet.id, col: col.id,
-    patch: expr.trim() ? { formula: expr } : { formula: undefined },
+    op: 'setColumn', sheet: sheet.id, col: col.id,
+    patch: got.expr.trim() ? { formula: got.expr } : { formula: undefined },
   })
 }
 
@@ -908,6 +1091,144 @@ function editFormula(store: Store, grid: Grid, col: Column): void {
 // --- menus -------------------------------------------------------------------
 
 /** A small popover, dismissed by the next click anywhere. */
+/**
+ * A small modal form — the replacement for `window.prompt`.
+ *
+ * WHY THIS EXISTS AT ALL. Four call sites used `window.prompt`, and one of them
+ * was the Formula button, the app's headline feature. Native modals are not
+ * available everywhere a self-contained HTML file is opened: embedded webviews
+ * (Slack, Teams, an iOS mail preview), sandboxed iframes without `allow-modals`,
+ * and any tab where the reader has ticked "prevent this page from creating
+ * additional dialogs". In the return-null variant the button is simply dead; in
+ * the throwing variant the click handler dies half-way through. Measured in this
+ * project's own browser pane: clicking Formula did nothing at all — no dialog,
+ * no column, no message, not even a console line. For a document whose entire
+ * premise is that it opens anywhere, that is the wrong foundation.
+ *
+ * `prompt` also cannot do the things this form needs: two fields at once, a
+ * list of the columns you may refer to, and an error that appears as you type
+ * rather than after you commit. dash already made this argument once — see
+ * `retype` above, "A POPOVER, not window.prompt" — and the topbar was simply
+ * never converted.
+ *
+ * `check` runs on every keystroke: return a message to block submission and
+ * show it, or null to allow. Resolves with the field values, or null if the
+ * reader cancelled.
+ */
+interface AskField {
+  key: string
+  label: string
+  value?: string
+  placeholder?: string
+  /** formulas and ids are read character by character; prose is not */
+  mono?: boolean
+}
+
+function askForm(opts: {
+  title: string
+  fields: AskField[]
+  hint?: string
+  submit?: string
+  check?: (values: Record<string, string>) => string | null
+}): Promise<Record<string, string> | null> {
+  return new Promise((resolve) => {
+    document.querySelector('.dx-ask-back')?.remove()
+    const back = document.createElement('div')
+    back.className = 'dx-ask-back'
+    const card = document.createElement('div')
+    card.className = 'dx-ask'
+    card.setAttribute('role', 'dialog')
+    card.setAttribute('aria-modal', 'true')
+
+    const h = document.createElement('h2')
+    h.className = 'dx-ask-title'
+    h.textContent = opts.title
+    card.append(h)
+
+    const inputs: Record<string, HTMLInputElement> = {}
+    for (const f of opts.fields) {
+      const row = document.createElement('label')
+      row.className = 'dx-ask-row'
+      const lab = document.createElement('span')
+      lab.textContent = f.label
+      const inp = document.createElement('input')
+      inp.className = `dx-ask-in${f.mono ? ' dx-ask-mono' : ''}`
+      inp.value = f.value ?? ''
+      if (f.placeholder) inp.placeholder = f.placeholder
+      inp.spellcheck = false
+      row.append(lab, inp)
+      card.append(row)
+      inputs[f.key] = inp
+    }
+
+    if (opts.hint) {
+      const hint = document.createElement('p')
+      hint.className = 'dx-ask-hint'
+      hint.textContent = opts.hint
+      card.append(hint)
+    }
+
+    const err = document.createElement('p')
+    err.className = 'dx-ask-err'
+    err.hidden = true
+    card.append(err)
+
+    const foot = document.createElement('div')
+    foot.className = 'dx-ask-foot'
+    const cancel = document.createElement('button')
+    cancel.type = 'button'
+    cancel.className = 'dx-btn'
+    cancel.textContent = t('Cancel')
+    const ok = document.createElement('button')
+    ok.type = 'button'
+    ok.className = 'dx-btn dx-ask-go'
+    ok.textContent = opts.submit ?? t('OK')
+    foot.append(cancel, ok)
+    card.append(foot)
+
+    const values = (): Record<string, string> => {
+      const out: Record<string, string> = {}
+      for (const k of Object.keys(inputs)) out[k] = inputs[k].value
+      return out
+    }
+    const validate = (): boolean => {
+      const msg = opts.check ? opts.check(values()) : null
+      err.hidden = !msg
+      err.textContent = msg ?? ''
+      ok.disabled = !!msg
+      return !msg
+    }
+
+    const done = (v: Record<string, string> | null): void => {
+      back.remove()
+      document.removeEventListener('keydown', onKey, true)
+      resolve(v)
+    }
+    // CAPTURE phase, and stopped here: the grid has a document-level key
+    // handler that turns a printable character into a cell edit, so without
+    // this, typing a formula also types it into the sheet behind the dialog.
+    const onKey = (e: KeyboardEvent): void => {
+      if (!back.contains(e.target as Node)) return
+      e.stopPropagation()
+      if (e.key === 'Escape') { e.preventDefault(); done(null) }
+      else if (e.key === 'Enter' && validate()) { e.preventDefault(); done(values()) }
+    }
+    document.addEventListener('keydown', onKey, true)
+
+    for (const k of Object.keys(inputs)) inputs[k].addEventListener('input', validate)
+    cancel.addEventListener('click', () => done(null))
+    ok.addEventListener('click', () => { if (validate()) done(values()) })
+    // A click on the backdrop cancels; a click inside must not.
+    back.addEventListener('mousedown', (e) => { if (e.target === back) done(null) })
+
+    back.append(card)
+    document.body.append(back)
+    validate()
+    inputs[opts.fields[0].key]?.focus()
+    inputs[opts.fields[0].key]?.select()
+  })
+}
+
 function popover(x: number, y: number, html: string): HTMLElement {
   document.querySelector('.dx-pop')?.remove()
   const el = document.createElement('div')
@@ -1084,11 +1405,17 @@ function openCellMenu(store: Store, grid: Grid, row: number, ci: number, x: numb
       } else if (a === 'drow') {
         store.commit([...deleteRowsAt(sheet, at, 1), ...grid.shiftFormulas('row', at, -1)])
       } else if (a === 'icol') {
-        const name = window.prompt(t('Column name'), t('New column')) || t('New column')
-        const id = `c-${Math.floor(Date.now() % 1e8).toString(36)}`
         const cAt = sheet.columns.findIndex((c) => c.id === col?.id) + 1
-        store.commit([...insertColumn(sheet, cAt, { id, name, type: 'text' }),
-          ...grid.shiftFormulas('col', cAt, 1)])
+        void askForm({
+          title: t('New column'),
+          fields: [{ key: 'name', label: t('Column name'), value: t('New column') }],
+          submit: t('Insert'),
+        }).then((got) => {
+          if (!got) return
+          const id = `c-${Math.floor(Date.now() % 1e8).toString(36)}`
+          store.commit([...insertColumn(sheet, cAt, { id, name: got.name.trim() || t('New column'), type: 'text' }),
+            ...grid.shiftFormulas('col', cAt, 1)])
+        })
       } else if (a === 'dcol' && col) {
         const cAt = sheet.columns.findIndex((c) => c.id === col.id)
         store.commit([...deleteColumn(sheet, col.id), ...grid.shiftFormulas('col', cAt, -1)])

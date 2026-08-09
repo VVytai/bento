@@ -79,6 +79,15 @@
      data", and the two stopped being the same colour when selection went
      blue. */
   --accent-wash: light-dark(#fdf0d6, #38290c);
+  /* The bar under the ACTIVE worksheet tab — a non-text indicator, so it has a
+     3:1 floor to clear rather than a decorative one. MEASURED against the tab
+     it sits on: the brand amber is 9.25:1 on the dark sheet and 2.02:1 on the
+     white one, so the light ground takes the darker amber the warning ink
+     already uses (#b45309 — 5.02:1 on white) and the dark ground keeps the
+     brand colour. Same hue family either way, so the mark still reads as
+     dash's; this is the one place the accent has to give ground, because it is
+     the only thing on screen saying which sheet you are looking at. */
+  --tab-marker: light-dark(#b45309, #f7a600);
   /* NOT theme-varying, deliberately: the ink that goes over a cell the
      DOCUMENT has coloured. See the conditional-formatting section below. */
   --ink-on-fill: #1e2a3a;

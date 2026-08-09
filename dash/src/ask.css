@@ -1,0 +1,55 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 The Bento authors
+ */
+/* --- the modal form that replaced window.prompt --------------------------- */
+/* Native prompts are unavailable in embedded webviews, sandboxed iframes and
+   any tab where the reader has blocked extra dialogs — see `askForm` in
+   main.ts. This is that dialog, styled to sit with .dx-pop rather than beside
+   it, because they are the same kind of object at different sizes. */
+.dx-ask-back {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim);
+}
+.dx-ask {
+  width: min(30rem, 100%);
+  max-height: 100%;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+  padding: 18px 20px 14px;
+}
+.dx-ask-title { margin: 0 0 14px; font-size: 15px; font-weight: 600; }
+.dx-ask-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.dx-ask-row > span { font-size: 12px; color: var(--muted); }
+.dx-ask-in {
+  width: 100%;
+  padding: 7px 9px;
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+.dx-ask-in:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* A formula is read character by character — an l and a 1 have to differ. */
+.dx-ask-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.dx-ask-hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.dx-ask-err { margin: 0 0 10px; font-size: 12px; color: var(--err-ink); }
+.dx-ask-foot { display: flex; justify-content: flex-end; gap: 8px; }
+.dx-ask-go { background: var(--accent); color: #1e2a3a; border-color: transparent; }
+.dx-ask-go:disabled { opacity: 0.5; cursor: not-allowed; }

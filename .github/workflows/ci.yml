@@ -428,6 +428,20 @@ jobs:
         # a {placeholder} a translation dropped is a sentence with a hole in it.
         run: node scripts/test-dash-i18n.ts
 
+      - name: dash sheet-tabs rig
+        # Sheet order is the tab order and it lives in the DOCUMENT, so a
+        # reorder is an undoable patch whose inverse carries the ORIGINAL index
+        # — one undo puts a dragged tab back where it was, not at the end. Also
+        # guards that deleting the shown sheet steps to another TABLE sheet.
+        run: node scripts/test-dash-tabs.ts
+
+      - name: dash find rig
+        # The grid is windowed — about 40 rows of a 5,000-row sheet exist in the
+        # DOM — so the browser's own find reports "not there" for values that
+        # are. These checks cover the matcher, the view vector (a hit must never
+        # be a row the filter is hiding) and the replace refusals.
+        run: node scripts/test-dash-find.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default

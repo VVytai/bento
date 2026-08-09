@@ -110,6 +110,26 @@ export type Action =
   /** Push the top row of the selection down through the rest of it (⌘D, ⌘↵). */
   | { kind: 'fill' }
   /**
+   * OPEN THE FIND BAR — and this map entry is why ⌘F is safe to claim at all.
+   *
+   * The grid is windowed: about 55 of a 5,000-row sheet's rows exist in the
+   * DOM, so the BROWSER's ⌘F searches those 55 and tells the reader that a
+   * value in their own file is not there. Leaving the key unclaimed is not
+   * neutral, it is a wrong answer with the browser's authority behind it. The
+   * implementation lives in find.ts, in the CAPTURE phase, exactly as help.ts
+   * implements '?': this map says what the key MEANS, and it is the only place
+   * that does — the shortcut card is generated from it.
+   */
+  | { kind: 'find' }
+  /**
+   * ctrl+PageUp / ctrl+PageDown: the previous and next sheet, as they have been
+   * in every spreadsheet since Excel 5. tabs.ts owns the verb and implements it
+   * in the capture phase, the way panels.ts owns `]`.
+   */
+  | { kind: 'sheetStep'; dir: -1 | 1 }
+  /** ⌘G / ⇧⌘G: the next and previous match, without going back to the field. */
+  | { kind: 'findNext'; back: boolean }
+  /**
    * The three verbs below are NOT the grid's, and they are in this map anyway.
    *
    * A keyboard that cannot list itself is a keyboard nobody finds: every one of
@@ -177,8 +197,12 @@ export function keyToAction(e: KeyLike): Action | null {
     case 'Enter': return cmd ? { kind: 'fill' } : { kind: 'enter', back: shift }
     case 'Home': return { kind: 'home', whole: cmd, extend: shift }
     case 'End': return { kind: 'end', whole: cmd, extend: shift }
-    case 'PageUp': return { kind: 'move', dr: -1, dc: 0, unit: 'page', extend: shift }
-    case 'PageDown': return { kind: 'move', dr: 1, dc: 0, unit: 'page', extend: shift }
+    case 'PageUp': return cmd
+      ? { kind: 'sheetStep', dir: -1 }
+      : { kind: 'move', dr: -1, dc: 0, unit: 'page', extend: shift }
+    case 'PageDown': return cmd
+      ? { kind: 'sheetStep', dir: 1 }
+      : { kind: 'move', dr: 1, dc: 0, unit: 'page', extend: shift }
     case 'Escape': return { kind: 'cancel' }
     // Mac keyboards send Backspace where a PC sends Delete, and both mean
     // "empty these cells" in a grid.
@@ -231,6 +255,13 @@ export function keyToAction(e: KeyLike): Action | null {
     // Excel's both. Unclaimed it is the browser's bookmark dialog, which is
     // what a spreadsheet user gets today for reaching for fill-down.
     case 'd': return { kind: 'fill' }
+    // ⌘F and ⌘G are the two keys every application on the platform already
+    // means by "find" and "find again", and both are the browser's by default
+    // — which is precisely the problem, because the browser can only see the
+    // rows the virtualiser left in the DOM. Shift is deliberately ignored on
+    // 'f' (⇧⌘F is the same verb) and load-bearing on 'g'.
+    case 'f': return { kind: 'find' }
+    case 'g': return { kind: 'findNext', back: shift }
     case 's': return { kind: 'save' }
     // Sheets' shortcut-card key, and the one that does not cost a printable
     // character. '?' above is the same verb for people who learned it in slides.
@@ -286,7 +317,7 @@ export interface BindingRow {
 export function actionSig(a: Action): string {
   switch (a.kind) {
     case 'move': return `move.${a.unit}${a.extend ? '.extend' : ''}`
-    case 'tab': case 'enter': return `${a.kind}${a.back ? '.back' : ''}`
+    case 'tab': case 'enter': case 'findNext': return `${a.kind}${a.back ? '.back' : ''}`
     case 'home': case 'end':
       return `${a.kind}${a.whole ? '.whole' : ''}${a.extend ? '.extend' : ''}`
     case 'panel': return `panel.${a.side}`

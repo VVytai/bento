@@ -109,8 +109,9 @@ const KEEP_ENGLISH = new Map<string, string>([
 const SAME_AS_ENGLISH: Record<string, string[]> = {
   es: ['Total', 'editor'],
   fr: ['Date', 'Format', 'Total', 'Type'],
-  de: ['Dashboard', 'Format', 'Name', 'Text', 'Updates'],
-  it: ['Dashboard', 'File', 'Formula', 'Max', 'Min', 'Password', 'vs', 'editor'],
+  ja: ['OK'],
+  de: ['Dashboard', 'Format', 'Name', 'OK', 'Text', 'Updates'],
+  it: ['Dashboard', 'File', 'Formula', 'Max', 'Min', 'OK', 'Password', 'vs', 'editor'],
 }
 
 // --- sweeping the source -----------------------------------------------------

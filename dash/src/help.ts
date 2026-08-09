@@ -87,10 +87,15 @@ const LABELS: Record<string, [Section, string]> = {
   'cut': ['clip', 'Cut the selection'],
   'paste': ['clip', 'Paste into the selection'],
 
+  'find': ['file', 'Find in the sheet — the grid is windowed, so the browser’s own ⌘F cannot see it all'],
+  'findNext': ['file', 'Go to the next match'],
+  'findNext.back': ['file', 'Go to the previous match'],
+
   'undo': ['file', 'Undo'],
   'redo': ['file', 'Redo'],
   'save': ['file', 'Save this workbook'],
-  'panel.left': ['file', 'Show or hide the sheets panel'],
+  'sheetStep': ['file', 'Previous / next sheet'],
+  'panel.left': ['file', 'Show or hide the sheet tabs'],
   'panel.right': ['file', 'Show or hide the properties panel'],
   'help': ['file', 'This card'],
 }
