@@ -419,9 +419,17 @@ button.sp-callout-chip:hover { text-decoration: underline; text-underline-offset
   }
   [dir='rtl'] .sp-side.sp-open { inset: 0 0 0 auto; }
   .sp-scrim { position: fixed; inset: 0; background: rgb(20 30 45 / .3); z-index: 45; }
-  /* The margin the gutter lives in — see below. The end padding stays 18px:
-     the page is not centred here, so widening both sides would cost twice. */
-  .sp-main { padding: 26px 18px 45vh; padding-inline-start: 44px; }
+  .sp-main { padding: 26px 18px 45vh; }
+  /* THE MARGIN THE GUTTER LIVES IN — see below — and it hangs off the PAGE, not
+     off `.sp-main`. `.sp-main` is chrome and follows the interface direction;
+     the gutter is anchored to a block, and blocks follow the DOCUMENT's
+     direction (`renderPage` puts `theme.dir` on `.sp-page-inner`). Reserving it
+     on the scroller sent the padding left while an rtl document sent the gutter
+     right: measured at 390px on a doc with `theme.dir: 'rtl'`, the gutter
+     landed at x = 378…412 and the column scrolled to 412. On the inner element
+     the two flip together. The end side is untouched: the page is not centred
+     at this width, so widening both would cost twice. */
+  .sp-page-inner { padding-inline-start: 26px; }
   /* THE GUTTER STAYS ON TOUCH, AND STOPS TAKING A ROW.
      It used to be display:none here, on the reasoning that there is no hover —
      but hover was how you reached the only controls a block has, so hiding it

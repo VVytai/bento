@@ -1139,8 +1139,13 @@ for (const [label, input, err] of [
   // that was the two affordances. It belongs in the start margin, out of flow.
   ok(!/\.sp-gutter \{[^}]*position: static/.test(narrow),
     '…and it is out of the flow, so a block does not pay a row for it')
-  ok(/\.sp-main \{[^}]*padding-inline-start: 44px/.test(narrow),
-    'the reading column reserves the margin the gutter sits in')
+  // …reserved on the PAGE, not on the scroller: `.sp-main` follows the
+  // interface direction and a block follows the document's (theme.dir), so an
+  // rtl document put the padding on one side and the gutter on the other.
+  ok(/\.sp-page-inner \{ padding-inline-start: 26px/.test(narrow),
+    'the page reserves the margin the gutter sits in, on the side the blocks start')
+  ok(!/\.sp-main \{[^}]*padding-inline-start/.test(narrow),
+    '…and the scroller does not, so the two cannot disagree under rtl')
   ok(/sp-sheet/.test(css) && /isDrawer\(\)/.test(ed),
     'and the menu becomes a bottom sheet where a 5px anchor would be unusable')
 

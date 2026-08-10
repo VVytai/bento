@@ -2285,8 +2285,10 @@ numbers and the agreement between them.
 earlier fix for "there is no hover on touch" made `.sp-gutter` `position:
 static`, which bought reachability with 36px of height on EVERY block: a
 one-line paragraph measured 68.4px, half of it affordances. It is absolutely
-positioned again, the way it is on a desktop, inside a 44px start padding on
-`.sp-main`, visible at rest, and carrying ONE control — the grip, whose sheet
+positioned again, the way it is on a desktop, inside a start margin reserved
+for it (26px on `.sp-page-inner`, 44px from the edge of the screen once
+`.sp-main`'s own 18px is counted), visible at rest, and carrying ONE control —
+the grip, whose sheet
 already offers "Add below", so the ＋ was a second button for something a thumb
 could already reach. Measured after: one-line paragraph 68.4 → 32.4px; the
 reading column pays 26px of width for it (354 → 328 at 390px). Both directions
@@ -2295,3 +2297,12 @@ the chrome was eating the scarce one.
 
 **Cost.** +312 bytes on the shipped shell (132,102 → 132,414 B), inside the
 existing 135,168 B ceiling; no budget change.
+
+*Amended, same day.* The margin was reserved on `.sp-main` first, which is
+wrong for a reason worth writing down: `.sp-main` is chrome and follows the
+INTERFACE direction, while the gutter is anchored to a block and blocks follow
+the DOCUMENT's (`renderPage` puts `theme.dir` on `.sp-page-inner`). On a
+document carrying `theme.dir: 'rtl'` the padding therefore went left while the
+gutter went right — measured at 390px, the gutter landed at x = 378…412 and the
+column scrolled to 412. It is reserved on `.sp-page-inner` now, so the two flip
+together; the ltr metrics are byte-identical.
