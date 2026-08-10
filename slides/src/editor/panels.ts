@@ -230,21 +230,30 @@ export class PropsPanel {
     const { width: dw, height: dh } = this.store.doc.size
     const presetKey =
       Object.entries(PropsPanel.PAGE_PRESETS).find(([, s]) => s.w === dw && s.h === dh)?.[0] ?? 'Custom…'
+    let widthRow: HTMLLabelElement
+    let heightRow: HTMLLabelElement
+    const showCustomSize = (show: boolean) => {
+      widthRow.style.display = show ? '' : 'none'
+      heightRow.style.display = show ? '' : 'none'
+    }
     this.row('Page size', this.select(
       [...Object.keys(PropsPanel.PAGE_PRESETS), 'Custom…'],
       presetKey,
       (v) => {
         const s = PropsPanel.PAGE_PRESETS[v]
-        if (s) this.edit(() => { this.store.doc.size = { width: s.w, height: s.h } }, true)
-        else this.rebuild(true) // custom: just reveal the W/H inputs
+        if (s) {
+          showCustomSize(false)
+          this.edit(() => { this.store.doc.size = { width: s.w, height: s.h } }, true)
+        } else {
+          showCustomSize(true)
+        }
       },
     ))
-    if (presetKey === 'Custom…') {
-      this.row('Width', this.number(dw, 10, (v, fin) =>
-        this.edit(() => { this.store.doc.size.width = Math.max(320, Math.min(4000, Math.round(v))) }, fin)))
-      this.row('Height', this.number(dh, 10, (v, fin) =>
-        this.edit(() => { this.store.doc.size.height = Math.max(320, Math.min(4000, Math.round(v))) }, fin)))
-    }
+    widthRow = this.row('Width', this.number(dw, 10, (v, fin) =>
+      this.edit(() => { this.store.doc.size.width = Math.max(320, Math.min(4000, Math.round(v))) }, fin)))
+    heightRow = this.row('Height', this.number(dh, 10, (v, fin) =>
+      this.edit(() => { this.store.doc.size.height = Math.max(320, Math.min(4000, Math.round(v))) }, fin)))
+    showCustomSize(presetKey === 'Custom…')
     this.row('Background', this.color(slide.background, (v, fin) =>
       this.edit(() => { this.store.slide.background = v }, fin)))
     this.row('Transition', this.select(
@@ -1938,7 +1947,7 @@ export class PropsPanel {
     this.host.appendChild(h)
   }
 
-  private row(label: string, input: HTMLElement) {
+  private row(label: string, input: HTMLElement): HTMLLabelElement {
     const row = document.createElement('label')
     row.className = 'ed-row'
     const span = document.createElement('span')
@@ -1949,6 +1958,7 @@ export class PropsPanel {
     if (tip && !input.title) row.title = t(tip)
     row.append(span, input)
     this.host.appendChild(row)
+    return row
   }
 
   private mini(label: string, value: number, onChange: (v: number) => void): HTMLElement {

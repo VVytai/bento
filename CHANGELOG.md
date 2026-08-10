@@ -91,6 +91,12 @@ pre-1.0.
   around a value that can legitimately be absent — and it is now pinned by a
   test with a deterministic trigger rather than left to a random rig's depth.
 
+- **Fix: choosing a custom slide size now reveals its width and height.** The
+  page-size picker rebuilt the properties panel before recording any custom
+  state, so a preset-sized deck immediately snapped back to its preset and the
+  two inputs never appeared. Custom mode now reveals the existing controls
+  without changing the document until a dimension is actually edited.
+
 ## [1.0.16] — 2026-08-03
 
 - **Fix: the slide could open off-centre, pushed to one side and clipped.**
