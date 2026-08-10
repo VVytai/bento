@@ -316,6 +316,13 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   })
 
   // --- the filter and sort menu, hung off each column header's caret
+  // What the status bar says about the VIEW. The grid owns the text, because
+  // the grid owns the view, and it announces from every path that changes one —
+  // a sort, a filter, a clear, a sheet switch. `showView()` used to have a
+  // single caller inside the filter menu, so the line describing the view went
+  // stale the moment the view changed by any other route: "4 of 8 rows" was
+  // observed sitting under a different sheet entirely.
+  grid.onViewChange = (text) => { viewEl.textContent = text }
   grid.onFilterMenu = (colId, x, y) => openFilterMenu(store, grid, colId, x, y, viewEl)
   grid.onContextMenu = (row, ci, x, y) => openCellMenu(store, grid, row, ci, x, y)
 
@@ -1283,12 +1290,10 @@ function openFilterMenu(
     `<div class="dx-pop-sep"></div>` +
     `<button data-a="freeze">${frozenTo(grid, colId) ? t('Unfreeze columns') : t('Freeze up to this column')}</button>`)
   const input = el.querySelector<HTMLInputElement>('.dx-pop-in')!
-  const showView = () => {
-    const n = store.order[grid.sheet.id]?.length
-    viewEl.textContent = n === undefined ? ''
-      : t('{n} of {all} rows').replace('{n}', String(n))
-          .replace('{all}', String(grid.sheet.rids.reduce((a, [, c]) => a + c, 0)))
-  }
+  // DELEGATED, not a second copy. The menu used to compute this line itself,
+  // which meant two renderings of the same fact — and the menu's ran last, so
+  // it overwrote the grid's more accurate one (it knew nothing about sorts).
+  const showView = () => { viewEl.textContent = grid.viewStatus() }
   el.querySelectorAll<HTMLElement>('button').forEach((b) => {
     b.onclick = () => {
       const a = b.dataset.a

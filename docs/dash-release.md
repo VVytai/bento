@@ -65,11 +65,9 @@ Still true, and worth knowing before cutting `dash-v0.2.0`:
   it holds a handle. dash writes an IndexedDB snapshot and never touches the
   file, so everything since the last manual ⌘S depends on recovery. *(The
   honesty half is done: `putRecovery`'s false result is now surfaced.)*
-- **`Grid.setSheet` clears `filters`/`sorts` but not `store.order[id]`.**
-  Returning to a previously filtered sheet paints filtered rows above an empty
-  filter menu — the rows are hidden and nothing on screen says why. Now that the
-  footer, the chart and Find all read that vector, they will all agree with each
-  other and all be wrong together.
+- ~~**`Grid.setSheet` clears `filters`/`sorts` but not `store.order[id]`.**~~
+  **Done**, as a side effect of the status line — a truthful description of the
+  view made the phantom view impossible to leave in.
 - **`dashboard.ts:741` spreads one argument per row.** A 400k-row workbook
   renders, then throws `RangeError: Maximum call stack size exceeded`, and the
   loader paints an opaque error card over a working app. `condfmt.ts:52` already
@@ -77,10 +75,14 @@ Still true, and worth knowing before cutting `dash-v0.2.0`:
 
 ## 2 · Expected of any spreadsheet, and absent
 
-- **The totals row cannot be clicked.** The footer shows SUM/AVG, but the only
-  way to set one is the properties panel's `Total` dropdown, one column at a
-  time. Every spreadsheet lets you click the total cell and choose. *(Raised by
-  the first person to use it, which is the whole argument.)*
+- ~~**The totals row cannot be clicked.**~~ **Done.** The footer cell IS the
+  control: click it for sum/avg/count/min/max/No total, written through the
+  existing `totalsPatch` so there is still one path to `sheet.totals`. An empty
+  cell under a numeric column shows a dim invite rather than sitting dead, and
+  the menu flips above the cell because the footer is sticky at the window's
+  bottom edge. Two display bugs surfaced by making it reachable: `count` was
+  borrowing the column's money format (`count £8.00`), and a custom-formula
+  total rendered as `[object Object]`.
 - **No print, no PDF.** Zero `@media print` rules. Printing today emits one page
   of app chrome with the table crushed into a column and the right-hand columns
   clipped. Rows are virtualised, so a naive print can only ever emit the ~55
@@ -90,10 +92,12 @@ Still true, and worth knowing before cutting `dash-v0.2.0`:
   model — `CellOverride` carries value and formula only. ⌘B and ⌘I are unbound
   because there is nothing to bind them to. Conditional formats exist; manual
   ones do not.
-- **Stale readouts.** The name box, the formula bar and the status bar go stale
-  after a sort, a sheet switch, or "Clear filters and sorts" — `showView()` has
-  one caller, inside the filter menu. The cursor is right and the edit lands in
-  the right cell; the three labels describing it are not.
+- ~~**Stale readouts.**~~ **Done.** `applyView()` — which every sort, filter,
+  clear, sheet switch and structural edit funnels through — now announces, and
+  the status text lives in `grid.ts` (`viewStatusText`) because the grid owns
+  the view. The filter menu delegates to it instead of keeping a second copy
+  that knew nothing about sorts. Says rows only when some are hidden, since
+  "8 of 8 rows" was noise.
 
 ## 3 · Correctness debt with a known shape
 
