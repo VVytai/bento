@@ -97,6 +97,19 @@ pre-1.0.
   two inputs never appeared. Custom mode now reveals the existing controls
   without changing the document until a dimension is actually edited.
 
+- **A dark interface, if you want one.** *About → Appearance* offers Match my
+  system, Light or Dark. It follows your machine by default and changes as your
+  machine does, so a laptop that dims at sunset takes the editor with it.
+
+  **Your deck does not invert.** Dark dims the chrome around the slide; the
+  slide itself stays exactly as authored, because its background is your data
+  and someone proofing at midnight still needs to see what will be projected.
+  The presenter window stays dark in both themes — you present in a dark room.
+
+  The theme is a viewer preference, stored on your machine and never written
+  into the file, so it never travels to whoever you send a deck to. Same rule
+  the interface language and reduced motion already follow.
+
 ## [1.0.16] — 2026-08-03
 
 - **Fix: the slide could open off-centre, pushed to one side and clipped.**

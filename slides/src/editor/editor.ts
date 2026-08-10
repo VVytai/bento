@@ -11,6 +11,7 @@ import {
   instantiateLayout, isLightBg, layoutElementIds, newDocId, parseDoc, readableInk, syncLinkedChart, uid,
   paginates, inLinearFlow,
   type ChartElement, type ShapeKind, type Slide, type SlideElement, type TableElement } from '../model'
+import { THEME_CHOICES, setTheme, themeChoice } from '../../../kernel/src/theme.ts'
 import { APP_VERSION, applyUpdate, applyUpdateInPlace, autoCheckEnabled, canUpdateInPlace, checkForUpdates, compareVersions, offlineEnabled, setAutoCheck, setOffline } from '../update'
 import { CHART_PRESETS } from '../charts'
 import { renderSlide, renderThumbnail } from '../render'
@@ -2860,6 +2861,24 @@ export class Editor {
     })
     row.appendChild(checkB)
     box.append(row, status)
+
+    // Appearance — a VIEWER preference, so it sits with the others (language,
+    // auto-update) rather than anywhere near the document's own settings.
+    // "Auto" is first and is the default: most people want their machine's
+    // choice, and the explicit options exist for the ones who do not.
+    const themeRow = document.createElement('label')
+    themeRow.className = 'ed-about-auto'
+    const themeSel = document.createElement('select')
+    for (const c of THEME_CHOICES) {
+      const o = document.createElement('option')
+      o.value = c
+      o.textContent = c === 'auto' ? t('Match my system') : c === 'light' ? t('Light') : t('Dark')
+      if (c === themeChoice()) o.selected = true
+      themeSel.appendChild(o)
+    }
+    themeSel.addEventListener('change', () => setTheme(themeSel.value as never))
+    themeRow.append(document.createTextNode(t('Appearance') + ' '), themeSel)
+    box.appendChild(themeRow)
 
     const autoRow = document.createElement('label')
     autoRow.className = 'ed-about-auto'
