@@ -89,11 +89,9 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 0 10px;
-  margin: 0 0 3px;
-  border: 1px solid transparent;
-  border-top: 0;
-  border-radius: 0 0 var(--radius) var(--radius);
+  position: relative;
+  padding: 0 13px;
+  border: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
@@ -115,30 +113,36 @@
 .dx-tab:focus-visible { outline: 2px solid var(--sel-ring); outline-offset: -2px; }
 
 /* ————— THE ACTIVE TAB —————
-   Three signals at once, because one is never enough across two themes:
+   ONE signal, carried by the ink, plus a 2px rule in the same colour.
+   No radius, no border, no fill, and no brand amber.
 
-     · it is painted in the SHEET's own colour (--bg), so it reads as the tab
-       the grid above is attached to — against --panel this lifts on light and
-       recedes on dark, and either way it is the only tab that is not the band;
-     · a 3px marker on its free (bottom) edge — `--tab-marker`, which is the
-       brand amber on the dark ground and a darker amber on the light one,
-       because this is a NON-TEXT indicator and has 3:1 to clear on both
-       (styles.css says which numbers, and why the accent gives ground here);
-     · full-strength ink at 650, against --muted at 400 for every other tab.
+   What was here before stacked FOUR: rounded bottom corners, a 1px border, a
+   3px amber bar and 650 weight. Each had been added to satisfy a contrast
+   measurement and none had been taken away afterwards, which is exactly what
+   over-designed looks like — a control shouting four times because nobody
+   trusted it to be heard once.
 
-   MEASURED, and this is why one signal was never going to be enough: the fill
-   alone is 1.05:1 against the band on light and 1.09:1 on dark. On its own it
-   is invisible on BOTH grounds. The marker is 5.02:1 / 9.25:1 against the tab
-   it sits on, and the ink goes 4.55:1 → 14.51:1 (light) and 6.45:1 → 13.75:1
-   (dark) between an idle tab and the active one. */
-.dx-tab.active {
-  background: var(--bg);
-  color: var(--ink);
-  font-weight: 650;
-  border-color: var(--line-strong);
-  box-shadow: inset 0 -3px 0 var(--tab-marker);
+   The rule is `--ink`, not `--accent`. The brand amber is 2.02:1 on white and
+   cannot carry a non-text indicator on its own, which is what forced the
+   earlier version to add a fill and a border to prop it up. Ink is 14.51:1
+   light and 13.75:1 dark against the band, so one mark does the whole job and
+   the strip stops competing with the sheet above it. Amber is still in the
+   app, on the things that are about the DOCUMENT — the unsaved dot, a filtered
+   column header — and a tab is about navigation. */
+.dx-tab.active { color: var(--ink); font-weight: 600; }
+.dx-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 9px;
+  right: 9px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: currentColor;
 }
-.dx-tab.active:hover { background: var(--bg); }
+/* The pressed tab must not read as hovered — `:hover` sets `--ink` too, so
+   without this the active and the hovered tab are the same colour. */
+.dx-tab.active:hover { background: transparent; }
 
 /* a sheet this build cannot open: greyed, never hidden — a tab that is missing
    reads as a sheet that was deleted */
@@ -157,12 +161,12 @@
 
 /* ————— reorder ————— */
 .dx-tab-dragging { opacity: 0.45; }
-.dx-tab-drop-before { box-shadow: inset 2px 0 0 var(--tab-marker); }
-.dx-tab-drop-after { box-shadow: inset -2px 0 0 var(--tab-marker); }
+.dx-tab-drop-before { box-shadow: inset 2px 0 0 var(--ink); }
+.dx-tab-drop-after { box-shadow: inset -2px 0 0 var(--ink); }
 /* the active tab keeps its own marker while a drop caret is on it, or the tab
    you are dragging past stops looking like the one you are looking at */
-.dx-tab.active.dx-tab-drop-before { box-shadow: inset 0 -3px 0 var(--tab-marker), inset 2px 0 0 var(--tab-marker); }
-.dx-tab.active.dx-tab-drop-after { box-shadow: inset 0 -3px 0 var(--tab-marker), inset -2px 0 0 var(--tab-marker); }
+.dx-tab.active.dx-tab-drop-before { box-shadow: inset 2px 0 0 var(--ink); }
+.dx-tab.active.dx-tab-drop-after { box-shadow: inset -2px 0 0 var(--ink); }
 
 .dx-tab-rename {
   width: 8em;

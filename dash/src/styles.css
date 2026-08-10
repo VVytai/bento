@@ -87,7 +87,6 @@
      brand colour. Same hue family either way, so the mark still reads as
      dash's; this is the one place the accent has to give ground, because it is
      the only thing on screen saying which sheet you are looking at. */
-  --tab-marker: light-dark(#b45309, #f7a600);
   /* NOT theme-varying, deliberately: the ink that goes over a cell the
      DOCUMENT has coloured. See the conditional-formatting section below. */
   --ink-on-fill: #1e2a3a;
