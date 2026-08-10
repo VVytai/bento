@@ -357,7 +357,7 @@ a.ed-btn { text-decoration: none; }  /* the update block's "What's new" link is 
   flex: 1;
   min-width: 0;
   background:
-    radial-gradient(circle at 1px 1px, #d5dbe4 1px, transparent 0) 0 0 / 22px 22px,
+    radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0) 0 0 / 22px 22px,
     var(--chrome);
   overflow: hidden;
   position: relative;
@@ -379,7 +379,7 @@ a.ed-btn { text-decoration: none; }  /* the update block's "What's new" link is 
   position: relative;
   flex: none;
   margin: auto;
-  box-shadow: 0 10px 40px rgb(20 30 45 / 0.18), 0 2px 8px rgb(20 30 45 / 0.10);
+  box-shadow: var(--slide-shadow);
   border-radius: 2px;
 }
 

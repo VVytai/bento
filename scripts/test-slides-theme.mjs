@@ -97,7 +97,19 @@ for (const [, , sel, body] of rules) {
 ok(whiteSurfaces.length === 0,
   `no chrome surface is pinned to white${whiteSurfaces.length ? `\n        ${whiteSurfaces.join('\n        ')}` : ''}`)
 
-// ---- 4. the light palette has not forked from the suite -------------------
+// ---- 4. every themed role is actually WIRED UP ----------------------------
+// A token defined in both blocks and referenced nowhere is not harmless: it is
+// a wire that was never connected, and the literal it was meant to replace is
+// still sitting in the stylesheet painting a light value in dark. That is
+// exactly how the canvas dot grid kept glaring after `--grid-dot` was added —
+// defined twice, used never, `#d5dbe4` still in the gradient.
+{
+  const unused = [...rolesIn(light ?? '')].filter((r) => !new RegExp(`var\\(${r}[,)]`).test(css))
+  ok(unused.length === 0,
+    `every themed role is referenced by a rule${unused.length ? ` — defined but unused: ${unused.join(', ')}` : ''}`)
+}
+
+// ---- 5. the light palette has not forked from the suite -------------------
 const SHARED = { '--ink': '#1e2a3a', '--ink-2': '#31445c', '--chrome': '#f5f7fa',
   '--chrome-2': '#eceff4', '--line': '#e3e8ef', '--muted': '#5b6472',
   '--accent': '#f7a600', '--accent-ink': '#7a5200', '--blue': '#5b8def' }
@@ -108,7 +120,7 @@ for (const [k, v] of Object.entries(SHARED)) {
 }
 ok(wrong.length === 0, `the light theme still matches the suite palette${wrong.length ? `\n        ${wrong.join('\n        ')}` : ''}`)
 
-// ---- 5. the theme never reaches a saved file ------------------------------
+// ---- 6. the theme never reaches a saved file ------------------------------
 // startTheme() writes data-theme + color-scheme onto <html>. capturePristine()
 // clones the LIVE document and saves re-serialize that clone, so the call must
 // come AFTER it or a reader's preference ships inside every file they save —
