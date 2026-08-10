@@ -14,6 +14,25 @@ Versions follow `0.MINOR.PATCH` while pre-1.0.
 
 ## [Unreleased]
 
+- **Fixed: Save was partly off the screen on a phone.** Measured on a 390×844
+  viewport, the topbar laid out 467px wide inside 390 and the Save button's
+  right edge landed at x = 426 — 36px past the edge, on the one control that
+  must never be unreachable. A phone now also folds the wordmark, undo/redo and
+  the other-ways-to-save caret into the ⋯ menu, which already held the six
+  secondary actions, and the ＋ Insert button keeps its icon without its word.
+  Nothing is removed — undo and redo are in ⋯ carrying their shortcuts and their
+  disabled state, and Save a copy / Export as Markdown join them there. The same
+  fold now starts at the drawer breakpoint (820px) rather than 720, because at
+  768 — an iPad in portrait — the save caret still ended 27px off the screen.
+  The bar fits exactly at 320, 375, 390 and 768px, and is unchanged at 1280.
+
+- **Fixed: every block cost a whole row of chrome on a phone.** The ＋/grip
+  gutter is shown rather than hovered on touch (there is no hover), but it was
+  laid out IN the flow: a one-line paragraph measured 68.4px tall, 36px of it
+  affordances. The gutter moves into a reserved 44px start margin, out of the
+  flow, keeping the grip — whose menu already offers "Add below". A one-line
+  paragraph is 32.4px now; the reading column gives up 26px of width for it.
+
 - **Callouts.** A boxed note, tip, important, warning or caution — `/callout`,
   the Insert menu, or type `[!warning] ` on an empty line. Press ⏎ inside one
   and the next line goes in with it; an empty line and ⌫ takes you back out.

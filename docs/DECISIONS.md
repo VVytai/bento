@@ -2247,3 +2247,51 @@ too, at the single point where it returns.
 payload 72KB → 79KB). Most of it is the finding messages, which are the
 product: a code with no explanation is not actionable. Anyone tempted to shrink
 this should shorten prose, not drop checks.
+
+## 2026-08-10 — The spaces topbar has TWO fold tiers, and the touch gutter lives in a margin
+
+Two mobile defects, both measured on the shipped shell at a 390×844 viewport
+with a coarse pointer, neither of them a regression — they had been there since
+the surfaces shipped.
+
+**The bar folds twice, and it starts at the drawer breakpoint.** `.sp-bar` laid
+out 467px wide inside 390 and Save's right edge landed at x = 426: the primary
+action, 36px off the screen. The existing fold (six secondary actions → the ⋯
+menu) was not enough, because what survives it is still eleven controls' worth
+of 40px touch targets. So there are two tiers now:
+
+- **≤820px** — the DRAWER breakpoint, not 720. The secondary row folds into ⋯
+  and labelled controls drop their words. It was 720, and at 768 (an iPad in
+  portrait) the save caret still ended 27px off the screen; 721–820 is exactly
+  the band where the page list is already an overlay competing for width, so
+  one number now means one thing.
+- **≤600px** — a phone. It also gives up the wordmark (About is the first item
+  in ⋯), the undo/redo pair (added to ⋯ with their shortcuts and their disabled
+  state) and the save caret (each of its four items is in ⋯ or in About). Save
+  itself never moves, at any width.
+
+The status span leaves the flow on a phone. It is `white-space: nowrap`, so a
+long message ("Reading view — press Esc or the eye to edit" measures ~250px)
+would have pushed Save back off the screen for as long as it was up — and
+`status()` never cleared its text, only faded it, so the width it claimed was
+permanent for the session. It is cleared after the fade now, and overlaid on the
+title strip below 600px.
+
+`isPhone()` in editor.ts duplicates the 600px number, because the ⋯ menu must
+not offer Undo while Undo is also sitting in the bar. The model rig pins both
+numbers and the agreement between them.
+
+**The touch gutter is absolute, in a reserved margin — never in the flow.** The
+earlier fix for "there is no hover on touch" made `.sp-gutter` `position:
+static`, which bought reachability with 36px of height on EVERY block: a
+one-line paragraph measured 68.4px, half of it affordances. It is absolutely
+positioned again, the way it is on a desktop, inside a 44px start padding on
+`.sp-main`, visible at rest, and carrying ONE control — the grip, whose sheet
+already offers "Add below", so the ＋ was a second button for something a thumb
+could already reach. Measured after: one-line paragraph 68.4 → 32.4px; the
+reading column pays 26px of width for it (354 → 328 at 390px). Both directions
+of that trade are deliberate: a phone has ~800px of height and 390 of width, and
+the chrome was eating the scarce one.
+
+**Cost.** +312 bytes on the shipped shell (132,102 → 132,414 B), inside the
+existing 135,168 B ceiling; no budget change.
