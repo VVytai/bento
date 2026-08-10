@@ -109,6 +109,28 @@ pre-1.0.
   The theme is a viewer preference, stored on your machine and never written
   into the file, so it never travels to whoever you send a deck to. Same rule
   the interface language and reduced motion already follow.
+- **Fix: the end of the toolbar could be cut off the right edge.** Between
+  roughly 1200 and 1250 pixels wide, the buttons on the right ran past the
+  window while their labels were still showing — the bar collapsed to icons at
+  1200px, but it actually needed 1250px to fit. A fixed width was never going
+  to be right, because the same buttons need a different amount of room
+  depending on browser zoom, system text size, the language the interface is
+  in, and whether the update chip is showing. The bar now measures itself and
+  steps down through its tiers until it fits, whatever is in it.
+
+- **Fix: on a narrow window, the ⋯ menu could not be clicked.** With the
+  properties panel open, the menu opened and drew in full, but every click on
+  it landed on the panel behind instead. The toolbar sits in its own painting
+  layer, and that layer was ranked below the panel — so nothing the menu itself
+  could do would bring it forward. The toolbar now sits above the panels, where
+  a menu that escapes it belongs.
+
+- **Fix: the toolbar keeps its height as you resize the window.** Narrowing
+  past 760px used to shave 4px off it and then, below 700px, add 14px back for
+  touch-sized buttons — so the bar shrank and then grew while a window was
+  being dragged. It now narrows horizontally only, which is where the room was
+  needed anyway, and has two heights with a reason each: normal, and taller on
+  a phone where every button is a 44px target.
 
 ## [1.0.16] — 2026-08-03
 
