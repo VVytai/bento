@@ -157,7 +157,16 @@ option { background: var(--field); color: var(--ink); }
            8px max(14px, env(safe-area-inset-left), var(--tray-safe-left, 0px));
   background: var(--surface);
   border-bottom: 1px solid var(--line);
-  z-index: 20;
+  /* Above the phone-mode panel drawers (z 40), and this number is doing more
+     work than it looks. The bar is a FLEX ITEM of .ed-root, and a flex item
+     honours z-index even at position:static — so this value does not merely
+     order the bar, it opens a STACKING CONTEXT that caps everything inside it.
+     At 20 the ⋯ menu's own z-index: 50 was capped at 20 and the drawers at 40
+     painted straight over it: on a narrow window with the properties panel
+     open, the menu rendered in full and every click landed on the panel behind
+     it. Raising its own z-index could never have fixed that — only the ceiling
+     moves. Keep this above the drawers and below the dialogs/toasts (59+). */
+  z-index: 50;
 }
 
 .ed-logo { display: flex; align-items: center; gap: 7px; font-size: 15px; white-space: nowrap; }

@@ -594,6 +594,15 @@ names provisional.
    svg on the page (CSS animations with fill modes even beat later static rules).
 8. Tiny text labels make unusable click targets when scaled down — interactive
    controls get padded transparent `link` overlay rects, not links on the text itself.
+9. **`.ed-topbar`'s z-index is a CEILING, not just an order.** The bar is a flex
+   item of `.ed-root`, and a flex item honours z-index even at
+   `position: static` — so the value opens a stacking context that caps every
+   descendant. At 20 the ⋯ menu's own `z-index: 50` was clamped to 20 and the
+   phone-mode panel drawers (z 40) painted straight over it: the menu rendered
+   in full, and every click landed on the panel behind it. Raising the MENU can
+   never fix this; only the ceiling moves. Same trap for any future chrome that
+   must escape the bar. Diagnose with `document.elementsFromPoint()` — the menu
+   sat fourth in the stack under its own coordinates.
 
 - **Compressed shell (Phase 1)**: `scripts/postbuild-compress.mjs` (runs in
   build:single) deflates runtime JS+CSS into base64 `bento/deflate-b64` script
