@@ -53,7 +53,7 @@ registerHooks({
 })
 
 const {
-  totalsPatch, freezeThroughPatch, renameSheetPatch, mintSheetId, mintSheetName, blankSheet,
+  totalsPatch, totalsChoice, freezeThroughPatch, renameSheetPatch, mintSheetId, mintSheetName, blankSheet,
 } = await import('../dash/src/panels.ts')
 
 const { parseDoc } = await import('../dash/src/model.ts')
@@ -165,6 +165,21 @@ console.log('\ntotals — an additive field where absent means "no"')
 }
 roundTrip('totals set', (s) => totalsPatch(s, 'note', 'avg'))
 roundTrip('totals cleared to empty', (s) => totalsPatch(s, 'amount', null))
+
+// TWO CONTROLS, ONE ANSWER. The panel's dropdown and the footer cell's menu
+// both have to say which entry is current, and both have to recognise a
+// hand-written `{ f }` custom formula. If one of them reads that as "none" it
+// shows no total over a footer that is plainly displaying one, and the next
+// click writes over a formula somebody wrote.
+{
+  ok(totalsChoice('sum') === 'sum' && totalsChoice('avg') === 'avg',
+    'a named aggregate is its own choice')
+  ok(totalsChoice(undefined) === 'none',
+    'a column with no total reads as none, not as empty string')
+  ok(totalsChoice({ f: 'SUM(value * prob)' }) === 'custom',
+    'and a `{f}` custom formula reads as custom — never as none, which is what ' +
+    'invites a control to silently replace it')
+}
 
 // ============================================================ freeze
 

@@ -51,7 +51,7 @@ type Get = import('../dash/src/filter.ts').Get
 type Predicate = import('../dash/src/filter.ts').Predicate
 type TableSheet = import('../dash/src/model.ts').TableSheet
 const { readCell } = await import('../dash/src/store.ts')
-const { aggregate } = await import('../dash/src/grid.ts')
+const { aggregate, canTotal, viewStatusText } = await import('../dash/src/grid.ts')
 
 let failures = 0
 let checks = 0
@@ -409,6 +409,56 @@ ok(eq(order([{ col: 'amount', pred: { op: 'topN', n: 0 } }], []), []),
   ok(aggregate('sum', read, 0, []) === 0 && aggregate('avg', read, 0, []) === 0,
     'a filter matching nothing totals 0 rather than NaN')
   ok(aggregate('min', read, 0, []) === 0, 'and min over nothing is 0, not Infinity')
+}
+
+
+// ================================ WHICH COLUMNS MAY BE OFFERED A TOTAL
+//
+// The footer cell is a control now: an empty cell under a numeric column
+// invites a total. It must not invite one anywhere the answer would be
+// nonsense — `aggregate` skips every non-number, so a sum offered on a column
+// of names paints `SUM 0` under it, which is a wrong answer with a control
+// beside it saying it was asked for.
+{
+  ok(canTotal('number') && canTotal('money') && canTotal('percent'),
+    'a total is offered on the three numeric types')
+  ok(!canTotal('text') && !canTotal('bool') && !canTotal('enum'),
+    'and never on text, bool or enum, where every aggregate is 0')
+  ok(!canTotal('date'),
+    'nor on a date, which is stored as a string here and aggregates to nothing')
+}
+
+// ================================ WHAT THE STATUS BAR SAYS ABOUT THE VIEW
+//
+// The bug this guards: this text was computed by a closure inside the filter
+// menu, so it was right exactly once. Sort from a column header, switch sheets,
+// or clear from the properties panel and the label kept describing a view that
+// had gone — "4 of 8 rows" was observed sitting under a DIFFERENT SHEET. A
+// readout that is only true when you arrived through one particular door is
+// worse than none, because it is believed.
+{
+  const asc = (name: string) => ({ name, dir: 'asc' as const })
+  const desc = (name: string) => ({ name, dir: 'desc' as const })
+
+  ok(viewStatusText(null, 8, []) === '',
+    'no filter and no sort says NOTHING — there is nothing to report')
+  ok(viewStatusText(8, 8, []) === '',
+    'and a view vector that hides no rows says nothing either: "8 of 8 rows" is ' +
+    'true, useless, and trains the reader to stop looking at the line')
+  ok(viewStatusText(4, 8, []) === '4 of 8 rows',
+    'a filter reports the rows it left showing, against the rows there are')
+  ok(viewStatusText(0, 8, []) === '0 of 8 rows',
+    'a filter that matches nothing says so — an empty grid with a blank status ' +
+    'bar is the moment a reader concludes the data is gone')
+  ok(viewStatusText(8, 8, [desc('Value')]) === 'Sorted by Value ▼',
+    'a sort hides nothing, so it says what it DID instead')
+  ok(viewStatusText(null, 8, [asc('Region')]) === 'Sorted by Region ▲',
+    'and the arrow follows the direction')
+  ok(viewStatusText(null, 8, [asc('Region'), desc('Value')]) === 'Sorted by Region ▲, Value ▼',
+    'every key, in the order they were added — a second key silently dropped ' +
+    'from the label is how a "wrong" sort gets reported')
+  ok(viewStatusText(4, 8, [desc('Value')]) === '4 of 8 rows  ·  Sorted by Value ▼',
+    'filtered AND sorted reports both facts, because both are true')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

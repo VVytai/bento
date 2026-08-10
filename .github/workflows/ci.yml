@@ -189,6 +189,18 @@ jobs:
       - name: Splice conformance gate (dash)
         run: node scripts/shell-gate.mjs dash/dist-single/Bento_Dash.bento.html
 
+      - name: Release channel rehearsal (dash)
+        # Cuts a COMPLETE release — the real release.mjs, staged into a temp
+        # directory — with a throwaway key this step generates and discards, and
+        # then verifies the artifacts with kernel/src/update.ts itself, the code
+        # every shipped file runs, with only the embedded public key swapped.
+        # The point is the REFUSALS: a tampered manifest, a manifest signed for
+        # another app, a downgrade replay and a one-bit-flipped shell must each
+        # be rejected, and the conformance gate must refuse a shell whose doc
+        # block closes its own script. A signing pipeline cannot be tested by
+        # signing (the key never reaches CI), but this is everything except.
+        run: node scripts/test-release-channel.mjs --app dash
+
       - name: Language pack verification rig
         # Packs come off the network, so the signature + hash-pin chain is the
         # only thing between a hostile channel and the strings in the UI.

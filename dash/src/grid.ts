@@ -131,6 +131,52 @@ const dataRow = (sheet: TableSheet, rid: number): number => {
  */
 export type TotalSpec = 'sum' | 'avg' | 'count' | 'min' | 'max' | { f: string }
 
+/**
+ * Can a total be OFFERED on this column?
+ *
+ * `aggregate` skips every non-number, so a sum over a text column is not wrong
+ * so much as vacuous: it paints `SUM 0` under a column of names, and a control
+ * that offers it teaches the reader something false about their data. Dates are
+ * out for the same reason — they are stored as strings here and aggregate to
+ * nothing. A column that ALREADY carries a total still shows it whatever its
+ * type: the file is allowed to say things this menu would not have suggested.
+ */
+export const canTotal = (type: ColumnType): boolean =>
+  type === 'number' || type === 'money' || type === 'percent'
+
+/**
+ * What the status bar says about the current view — the whole of it, so that
+ * every caller says the same thing.
+ *
+ * It was one closure inside the filter menu, which is why it was right exactly
+ * once: sort from a column header, switch sheets, or clear from the properties
+ * panel and the label kept describing a view that had gone. "4 of 8 rows" was
+ * observed sitting under a DIFFERENT SHEET. A readout that is right only when
+ * you reached it through one particular door is worse than no readout, because
+ * it is trusted.
+ *
+ * ROWS ARE ONLY COUNTED WHEN SOME ARE MISSING. An unfiltered sheet said "8 of 8
+ * rows", which is true, uninformative, and trains people to stop reading the
+ * line — so the count is reserved for the case it exists to report. A sort
+ * hides nothing, so it says what it did instead, and a sheet that is both
+ * filtered and sorted says both.
+ *
+ * `n` is the length of the view vector, or null when there is none.
+ */
+export function viewStatusText(
+  n: number | null, all: number, sorts: Array<{ name: string; dir: 'asc' | 'desc' }>,
+): string {
+  const parts: string[] = []
+  if (n !== null && n < all) {
+    parts.push(t('{n} of {all} rows').replace('{n}', String(n)).replace('{all}', String(all)))
+  }
+  if (sorts.length) {
+    parts.push(t('Sorted by {cols}').replace('{cols}',
+      sorts.map((k) => `${k.name} ${k.dir === 'asc' ? '▲' : '▼'}`).join(', ')))
+  }
+  return parts.join('  ·  ')
+}
+
 export function aggregate(
   spec: TotalSpec,
   read: (i: number) => unknown,
@@ -185,6 +231,18 @@ export class Grid {
   onSelectionChange?: (summary: string, ref: string, value: string) => void
   onContextMenu?: (row: number, col: number, x: number, y: number) => void
   onFilterMenu?: (colId: string, x: number, y: number) => void
+  /**
+   * A footer cell was clicked — the totals row is the CONTROL now.
+   *
+   * The rect, not a point: this menu opens from the bottom of the window, so
+   * the thing placing it has to know the whole cell in order to flip the menu
+   * above it. panels.ts answers this, because panels.ts is where a total is
+   * written (`totalsPatch`), and a second writer of one model field is how the
+   * two ways of setting it start to disagree.
+   */
+  onTotalsMenu?: (colId: string, rect: DOMRect) => void
+  /** The status bar's description of the view — see `viewStatusText`. */
+  onViewChange?: (text: string) => void
   /** set by the app so a type change can be routed through one place */
   onRetype?: (col: Column, x: number, y: number) => void
   /** double-clicking a computed cell edits the FORMULA, not the value */
@@ -277,6 +335,14 @@ export class Grid {
     this.sel = new Selection(rowCount(this.sheet), cols(this.sheet).length)
     this.findHits.clear()
     this.findCur = ''
+    // THE ORDER VECTOR IS PART OF THE VIEW, and clearing `filters`/`sorts`
+    // without it left the other half behind: come back to a sheet you had
+    // filtered and `store.order[id]` still hid the rows, under a filter menu
+    // that said nothing was set. Everything downstream reads that vector — the
+    // footer totals, the chart, Find — so they all agreed with each other and
+    // all were wrong together. `applyView` derives it from the (now empty)
+    // filters and sorts, which is the one place that decides what it should be.
+    this.applyView()
     this.paint()
     this.onSheetChange?.(id)
     // NOT through `onSheetChange`: panels.ts and comments.ts both CHAIN that
@@ -413,7 +479,20 @@ export class Grid {
    */
   private totalsRow(): string {
     const s = this.sheet
-    if (!s.totals) return ''
+    const vis = cols(s)
+    // THE FOOTER CELL IS THE CONTROL. It used to be a readout with no way in:
+    // the row displayed SUM £97,050 and the only thing that could change it was
+    // a dropdown in the properties panel, one column at a time — which is why
+    // the first person to use dash asked how to click the total. So the row
+    // also exists wherever a total COULD be set, and each empty cell under a
+    // numeric column invites one rather than sitting blank and dead.
+    //
+    // It still disappears entirely on a sheet with nothing to add up, and in a
+    // read-only workbook, where an invitation would be a lie — that is the
+    // original rule ("hide the row rather than the border") kept, not dropped:
+    // the border IS the row's whole appearance when it has nothing to say.
+    const offer = !this.store.readOnly && vis.some((c) => canTotal(c.type))
+    if (!s.totals && !offer) return ''
     const all = rowCount(s)
     const order = this.store.order[s.id]
     const rows = order ?? null
@@ -421,14 +500,36 @@ export class Grid {
     const filtered = n < all
     return `<div class="dg-cell dg-gutter"${filtered ? ` title="${esc(t('Totals cover the {n} row(s) the filter leaves showing, not all {all}.')
       .replace('{n}', String(n)).replace('{all}', String(all)))}"` : ''}>${filtered ? '⌄' : ''}</div>` +
-      `${cols(s).map((c, ci) => {
+      `${vis.map((c, ci) => {
       const spec = s.totals?.[c.id]
       const fz = this.freeze(ci)
-      if (!spec) return `<div class="dg-cell${fz.cls}" style="${fz.st}width:${c.w ?? 130}px"></div>`
+      const w = `${fz.st}width:${c.w ?? 130}px`
+      if (!spec) {
+        if (!offer || !canTotal(c.type)) return `<div class="dg-cell${fz.cls}" style="${w}"></div>`
+        return `<div class="dg-cell dg-tot dg-tot-add${fz.cls}" data-tcol="${c.id}" ` +
+          `title="${esc(t('Add a total to this column'))}" ` +
+          `style="${w};text-align:${alignFor(c.type)}"><span class="dg-agg-add">${esc(t('Total'))}</span></div>`
+      }
       const comp = this.computed.get(c.id)
       const out = aggregate(spec, (i) => comp ? comp[i] : readCell(s.data[c.id], i), n, rows)
-      return `<div class="dg-cell${fz.cls}${filtered ? ' dg-part' : ''}" style="${fz.st}width:${c.w ?? 130}px;text-align:${alignFor(c.type)}">` +
-        `<span class="dg-agg">${esc(String(spec))}</span> ${esc(formatValue(out, c))}</div>`
+      // A `{ f }` custom total is SUMMED (see `aggregate`) and used to label
+      // itself `[object Object]` — `String(spec)` on an object. The arithmetic
+      // is deliberately left alone; only the label is repaired, because a
+      // footer reading "[object Object] £97,050" is not a statement about
+      // anything.
+      const label = typeof spec === 'string' ? spec : 'fx'
+      const hint = typeof spec === 'string' ? t('Click to change or remove this total') : `= ${spec.f}`
+      // A COUNT IS NOT MONEY. `formatValue` dresses the answer in the column's
+      // own format, which is right for sum/avg/min/max — they are quantities of
+      // the same thing — and wrong for a count, which is a number of ROWS:
+      // eight deals in a £ column rendered as "count £8.00". Nobody hit this
+      // while the only way to choose `count` was a dropdown in a side panel;
+      // it is one click from the number now.
+      const shown = spec === 'count' ? fmtNum(out) : formatValue(out, c)
+      return `<div class="dg-cell${fz.cls}${filtered ? ' dg-part' : ''}${this.store.readOnly ? '' : ' dg-tot'}" ` +
+        `${this.store.readOnly ? '' : `data-tcol="${c.id}" title="${esc(hint)}" `}` +
+        `style="${w};text-align:${alignFor(c.type)}">` +
+        `<span class="dg-agg">${esc(label)}</span> ${esc(shown)}</div>`
     }).join('')}`
   }
 
@@ -451,7 +552,27 @@ export class Grid {
       ? buildOrder(n, get, this.filters, this.sorts)
       : undefined
     this.store.view(() => { this.store.order[s.id] = order })
+    // EVERY view change ends here — a sort, a filter, a clear, a sheet switch,
+    // a structural edit that renumbered the rows — so this is the one place
+    // that can promise the three readouts describing the view are still true.
+    // They were not: `announce` (the name box and the formula bar) fired only
+    // on a selection change, and the row count fired only from inside the
+    // filter menu, so sorting moved the cursor onto a different row and all
+    // three kept describing the row it had left.
+    this.announce()
+    this.announceView()
   }
+
+  /** What the status bar should say about this sheet's view, right now. */
+  viewStatus(): string {
+    const s = this.sheet
+    return viewStatusText(this.store.order[s.id]?.length ?? null, rowCount(s),
+      this.sorts.map((k) => ({
+        name: s.columns.find((c) => c.id === k.col)?.name ?? k.col, dir: k.dir,
+      })))
+  }
+
+  private announceView(): void { this.onViewChange?.(this.viewStatus()) }
 
   paint(): void {
     const s = this.sheet
@@ -1134,6 +1255,19 @@ export class Grid {
         e.stopPropagation()
         const r = el.getBoundingClientRect()
         this.onFilterMenu?.(el.dataset.filter!, r.left, r.bottom)
+      }
+    })
+    // THE TOTALS ROW, clicked. Every spreadsheet puts this menu on the cell —
+    // Excel's total row and Sheets' both — and dash put it in a side panel,
+    // which is the one place a reader looking at the number is not looking.
+    // `.dg-foot-row` is sticky INSIDE the scroller and sits at the bottom of
+    // the window, so the menu it opens has to be placed against the cell's
+    // rect and flipped above it; that is panels.ts's job, and it is handed the
+    // whole rect for exactly that reason.
+    this.foot.querySelectorAll<HTMLElement>('[data-tcol]').forEach((el) => {
+      el.onclick = (e) => {
+        e.stopPropagation()
+        this.onTotalsMenu?.(el.dataset.tcol!, el.getBoundingClientRect())
       }
     })
     // column resize: drag the grip, double-click to fit the content

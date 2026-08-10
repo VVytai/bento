@@ -116,6 +116,18 @@ export function totalsPatch(
 }
 
 /**
+ * Which entry of the totals control is the current one.
+ *
+ * Two controls set this field now — the panel's dropdown and the footer cell's
+ * menu — and both have to read a `{ f }` custom formula the same way, or one of
+ * them shows "none" over a total the sheet is plainly displaying and quietly
+ * offers to write over it. One function, so there is one answer.
+ */
+export function totalsChoice(agg: TotalsAgg | undefined): string {
+  return typeof agg === 'string' ? agg : agg ? 'custom' : 'none'
+}
+
+/**
  * Freeze up to and including `colId`, or unfreeze if it is already the edge.
  *
  * The count is VISIBLE position, which is what the reader pointed at — a hidden
@@ -375,7 +387,7 @@ export function mountPanels(host: PanelsHost): Panels {
     }))
 
     const agg = sheet.totals?.[col.id]
-    const aggValue = typeof agg === 'string' ? agg : agg ? 'custom' : 'none'
+    const aggValue = totalsChoice(agg)
     const aggSel = select(
       [['none', t('none')] as const, ...AGGS.map((a) => [a, t(a)] as const),
         ...(aggValue === 'custom' ? [['custom', t('custom formula')] as const] : [])],
@@ -454,6 +466,54 @@ export function mountPanels(host: PanelsHost): Panels {
     if (ro()) return
     store.commit(p)
   }
+
+  // --- the totals row, as a control -----------------------------------------
+  //
+  // THE MENU IS MOUNTED FROM HERE because the WRITE lives here. `totalsPatch`
+  // is the one function that knows a cleared total has to drop the field rather
+  // than store `{}`, and a menu that assembled its own patch would be a second
+  // spelling of the same edit — the shape of bug where the panel's "none" and
+  // the footer's "none" leave two different files. The grid draws the cell and
+  // reports the click; nothing about the model crosses back.
+
+  /**
+   * Pick an aggregate for one column, from the footer cell itself.
+   *
+   * PLACED AGAINST THE CELL'S RECT, and flipped ABOVE it by default: the totals
+   * row is sticky at the bottom of a scroller that reaches the bottom of the
+   * window, so a menu dropped below the cell opens off screen. Measure first,
+   * then place — `.dx-pop` is `position: fixed`, so viewport coordinates are
+   * the right ones and nothing the grid scrolls can clip it.
+   */
+  function openTotalsMenu(colId: string, rect: DOMRect): void {
+    if (ro()) return
+    const sheet = currentSheet()
+    const col = sheet?.columns.find((c) => c.id === colId)
+    if (!sheet || !col) return
+    const cur = totalsChoice(sheet.totals?.[col.id])
+    const item = (v: string, label: string): string =>
+      `<button data-agg="${v}"${v === cur ? ' class="dx-pop-on"' : ''}>` +
+      `${escHtml(label)}${v === cur ? ' ✓' : ''}</button>`
+    const el = popAt(rect,
+      `<div class="dx-pop-row">${escHtml(col.name)}</div>` +
+      AGGS.map((a) => item(a, t(a))).join('') +
+      (cur === 'custom' ? item('custom', t('custom formula')) : '') +
+      `<div class="dx-pop-sep"></div>` +
+      item('none', t('No total')))
+    el.querySelectorAll<HTMLElement>('button').forEach((b) => {
+      b.addEventListener('click', () => {
+        const v = b.dataset.agg!
+        el.remove()
+        // A hand-written `{ f }` is not ours to rewrite — the same refusal the
+        // dropdown makes. Choosing a real aggregate over it IS allowed: that is
+        // a decision, and it is undoable.
+        if (v === cur || v === 'custom') return
+        commit(totalsPatch(sheet, col.id, v === 'none' ? null : v as TotalsAgg))
+      })
+    })
+  }
+
+  grid.onTotalsMenu = openTotalsMenu
 
   // --- the accordion --------------------------------------------------------
 
@@ -572,7 +632,59 @@ export function mountPanels(host: PanelsHost): Panels {
 
   render(true)
 
+  // SAY WHAT IS SELECTED, ONCE, AT THE START. The grid announces on every
+  // selection change and on every view change, and never at boot — so a
+  // freshly opened workbook showed `A1` beside an EMPTY formula bar over a
+  // cell that plainly contained "North". Announced from here because this is
+  // the last thing mounted that chains the callback: by now the formula bar,
+  // the status bar and this panel are all listening.
+  grid.announce()
+
   return { toggle, refresh: () => render(true) }
+}
+
+// --- a popover, placed against a rect ---------------------------------------
+
+const escHtml = (s: string): string =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/**
+ * `.dx-pop` — the app's one floating surface — opened against an element's
+ * rect rather than a point.
+ *
+ * main.ts's `popover(x, y)` clamps with `Math.min(y, innerHeight - 40)`, which
+ * is right for a menu hanging off a column header near the top of the window
+ * and wrong for one hanging off the totals row, which IS the bottom of the
+ * window: six items would open below the fold with 40px showing. So this one
+ * measures itself and prefers to sit ABOVE the cell, falling back to below only
+ * when there is no room. Fixed positioning, so nothing inside the scrolling
+ * grid — sticky header, sticky footer, resize grips, Find's marks — can clip it
+ * or be clicked through it.
+ */
+function popAt(rect: DOMRect, html: string): HTMLElement {
+  document.querySelector('.dx-pop')?.remove()
+  const el = document.createElement('div')
+  el.className = 'dx-pop'
+  el.style.visibility = 'hidden'
+  el.innerHTML = html
+  document.body.appendChild(el)
+  const h = el.offsetHeight
+  const w = el.offsetWidth
+  const above = rect.top - h - 4
+  el.style.top = `${above >= 4 ? above : Math.max(4, Math.min(rect.bottom + 4, window.innerHeight - h - 4))}px`
+  el.style.left = `${Math.max(4, Math.min(rect.left, window.innerWidth - w - 4))}px`
+  el.style.visibility = ''
+  // Next tick: the click that OPENED it is still travelling, and a listener
+  // added now would see it and close the menu before it was ever painted.
+  setTimeout(() => {
+    const off = (e: MouseEvent): void => {
+      if (el.contains(e.target as Node)) return
+      el.remove()
+      document.removeEventListener('mousedown', off)
+    }
+    document.addEventListener('mousedown', off)
+  }, 0)
+  return el
 }
 
 // --- row builders -----------------------------------------------------------

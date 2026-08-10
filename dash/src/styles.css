@@ -635,6 +635,25 @@ html, body {
 .dg-foot-row .dg-cell.dg-part { color: var(--accent-ink, inherit); }
 .dg-foot-row .dg-gutter { color: var(--muted); font-weight: 400; cursor: default; }
 
+/* THE FOOTER CELL IS A CONTROL, and it has to look like one before it is
+   clicked — a total nobody knows they can click is the state this replaces.
+   The hover is the same `--hover` every other menu row in the app uses.
+   `.dg-tot-add` is the invitation under a numeric column with no total yet:
+   quiet enough that eight of them across a wide sheet do not read as data
+   (they are not data), legible enough to be found by someone looking for a
+   way to add one. */
+.dg-foot-row .dg-cell.dg-tot { cursor: pointer; }
+.dg-foot-row .dg-cell.dg-tot:hover { background: var(--hover); }
+.dg-agg-add {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.55;
+}
+.dg-foot-row .dg-cell.dg-tot-add:hover .dg-agg-add { opacity: 1; color: var(--accent-ink, var(--ink)); }
+
 /* BOTH AXES. The grid drew vertical rules only and separated rows with a zebra
    stripe — the arrangement of a web table, not of a spreadsheet, and the single
    biggest reason dash did not read as one. Excel and Sheets both rule every

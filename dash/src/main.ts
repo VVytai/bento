@@ -30,7 +30,7 @@ import {
 } from '../../kernel/src/save.ts'
 import { putRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
-import { mountAbout, openAbout, rememberVersion } from './about.ts'
+import { mountAbout, openAbout, rememberVersion, checkAtLaunch } from './about.ts'
 import { mountPanels } from './panels.ts'
 import { installStory } from './story.ts'
 import { Dashboard } from './dashboard.ts'
@@ -138,8 +138,10 @@ if (envelope) {
   refuse({ ok: false, err: 'unreadable', detail: t('The document block is present but could not be read.') })
 } else {
   const res = parseDoc(embedded ?? '')
-  if (res.ok) boot(res.doc, res.repairs.length, res.frozen)
-  else if (res.err === 'empty') boot(starterDoc(), 0, undefined)
+  // A TEMPLATE is a tyre-kicker's document, not an owner's: it mints a fresh
+  // docId on open, so it is not a file anybody has saved yet.
+  if (res.ok) boot(res.doc, res.repairs.length, res.frozen, !res.doc.template)
+  else if (res.err === 'empty') boot(starterDoc(), 0, undefined)   // starter: never checks
   else refuse(res)
 }
 
@@ -162,7 +164,7 @@ async function passwordGate(raw: string): Promise<void> {
     if (!res.ok) { err.textContent = t('Unlocked, but the workbook inside could not be read.'); return }
     setEncryptionPassword(input.value)
     document.body.innerHTML = '<div id="app"></div>'
-    boot(res.doc, res.repairs.length, res.frozen)
+    boot(res.doc, res.repairs.length, res.frozen, true)   // encrypted: unambiguously somebody's file
   }
   document.querySelector('.dx-unlock')!.addEventListener('click', () => void tryUnlock())
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') void tryUnlock() })
@@ -200,7 +202,14 @@ function refuse(res: Extract<ParseResult, { ok: false }>): void {
 
 // --- the app ----------------------------------------------------------------
 
-function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): void {
+/**
+ * `saved` defaults to the SAFE answer. A workbook nobody has saved must never
+ * contact the release channel (PLATFORM §5) — and the shipped shell's
+ * `#bento-doc` is EMPTY, so the demo and every fresh download boot the starter
+ * through that path. Defaulting to false means a new call site that forgets
+ * this argument stays silent rather than phoning home.
+ */
+function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', saved = false): void {
   document.title = `${doc.title} — ${appConfig().appName}`
   dismissSplash()
 
@@ -627,6 +636,9 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
     showingSheet: () => grid.sheet.id,
     showSheet: (id: string) => grid.setSheet(id),
     onDirty: markDirty,
+    // so Offline mode can HANG UP an open relay socket, not merely refuse the
+    // next connection — a switch that leaves the current one running is not one
+    sync,
   }
   // The People panel: who else is in this workbook.
   //
@@ -643,6 +655,10 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version'): vo
   barEnd.insertBefore(peopleEl, barEnd.firstChild)
   mountPeople(peopleEl, sync, store)
   mountAbout(app, aboutHooks)
+  // PLATFORM §6: the signed update check, once, at launch. It badges ⓘ rather
+  // than interrupting. `shouldCheckAtLaunch` gates it on a SAVED workbook, the
+  // check not opted out, and Offline mode off.
+  checkAtLaunch({ saved })
   // …and an EXPLICIT way in. mountAbout only arms the wordmark and the version
   // chip, and nobody guesses that a logo is a button — the chip, meanwhile, is
   // the first thing the responsive rules drop. The ⓘ button is the real door;

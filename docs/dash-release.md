@@ -16,23 +16,48 @@ intentions rather than observations rots quietly.
 These are not features. Until they are done there is no such thing as a dash
 release, only a build.
 
-- **dash has no release path.** `scripts/release.mjs` has no dash support and
-  `docs/RELEASING.md` does not mention it. Nothing signs a dash shell, so
-  `update.ts`'s signature check can never pass.
-- **The update manifest does not exist.** `main.ts` declares
-  `manifestUrl: https://bento.page/releases/dash/manifest.json`; nothing in
-  `site-src/` produces it. A shipped file would check a 404 forever.
-- **No launch-time update check.** `checkForUpdates` has exactly one call site —
-  the About dialog's button. slides checks at launch and badges the topbar. A
-  shipped workbook that nobody opens About in never learns an update exists.
-- **No Offline toggle.** `about.ts` READS `offlineEnabled()` to print "Offline
-  mode is on, so nothing was contacted", but dash ships no UI that can set it —
-  `setOffline` is imported nowhere. For an app with live collaboration, the
-  privacy switch has to be reachable without editing localStorage.
+- ~~**dash has no release path.**~~ **Done.** `node scripts/release.mjs --app
+  dash` builds, gates and signs; `publish-site.mjs` is app-aware and creates
+  the `dash-vX.Y.Z` GitHub release with `Bento_Dash.bento.html` attached and
+  notes from `dash/CHANGELOG.md`. It used to read slides' manifest for the
+  version, which meant a dash publish looked up slides' tag, found the release
+  already there and exited 0 having created nothing. `docs/RELEASING.md` now
+  covers all three apps, and `scripts/test-release-channel.mjs` rehearses a
+  whole release — signature, hash pin, app id, monotonicity, and every refusal
+  — against `kernel/src/update.ts` itself with a throwaway key. CI runs it.
+- ~~**The update manifest does not exist.**~~ **Done, at the point of
+  release.** The manifest is not a site source: `release.mjs` signs it from the
+  shell it just staged, so the pinned sha256 is always the bytes being served.
+  A dash release writes `site/releases/dash/manifest.json` and it goes live
+  with the publish. Until the first dash release is actually cut, that URL 404s
+  — which the launch check treats as "could not check", not as an update.
+- ~~**No launch-time update check.**~~ **Done.** `about.ts` exports
+  `checkAtLaunch`, called once from `main.ts`. It badges the ⓘ button and the
+  version chip (both open About) rather than interrupting, and About says what
+  the launch check found. It is gated on `shouldCheckAtLaunch` — a saved
+  workbook, the launch check not opted out, and Offline mode off. **A workbook
+  nobody has saved never checks**: the shipped shell's `#bento-doc` is empty,
+  so the demo at bento.page/dash and every fresh download boot the starter
+  through that path, and a fresh document phoning home is the §5 failure the
+  dormancy rule exists to prevent.
+- ~~**No Offline toggle.**~~ **Done.** Both switches are in About now — "check
+  automatically at launch" and "Offline mode". Offline HANGS UP an open relay
+  socket rather than only refusing the next connection (`disconnectOnline`);
+  turning it back off re-joins if the workbook is shared.
 - **`docs/DECISIONS.md` entries are owed** for the decisions taken this week:
   the view vector as the single source for footer/chart/find, the chart pinned
   to its sheet, tabs at the bottom with reorder as a patch, and Find's
   displayed-vs-stored matching rule.
+
+Still true, and worth knowing before cutting `dash-v0.2.0`:
+
+- **No pack channel** (`packs: false` in the registry) — the seven core
+  catalogs are compiled in and complete; extra languages would need the
+  `save.ts`/`update.ts` pack hooks slides has. Deferring the catalog is fine;
+  deferring the channel would not be.
+- **The first release cannot exercise the update path.** There is nothing
+  published to update FROM. Prove it on the second release, from a copy of the
+  first.
 
 ## 1 · Loses or misstates data
 
