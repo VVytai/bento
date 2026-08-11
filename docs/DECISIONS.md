@@ -2043,3 +2043,51 @@ too, at the single point where it returns.
 payload 72KB → 79KB). Most of it is the finding messages, which are the
 product: a code with no explanation is not actionable. Anyone tempted to shrink
 this should shorten prose, not drop checks.
+
+## dash: a workbook holds two kinds of sheet — spreadsheets and datasets
+
+2026-08-11. Settles a tension that was shipping as a visual lie.
+
+An 8-row dash sheet has no row 9. ArrowDown from the last row does not move,
+pressing `=` there opens the editor on the last DATA cell, and the ruled lines
+under the totals row — which look exactly like empty spreadsheet rows — are
+background paint on `.dg-table`. So the most common gesture in spreadsheets,
+"click below the numbers and type `=SUM(`", silently targets a cell holding
+real data. The footer total is not a formula and cannot be one: it is
+`sheet.totals`, a property of the column.
+
+THE DECISION: two sheet kinds, and the difference is where the type lives.
+A SPREADSHEET is typed by CELL — unbounded, sparse, `=SUM()` anywhere, a canvas
+that happens to hold numbers. A DATASET is typed by COLUMN — exactly the rows
+there are, columnar and dictionary-encoded, and the kind that earns column
+formulas, type refusal on import, conditional formats, chart binding, pivots
+and (when it lands) SQL.
+
+Neither is a lesser version of the other, and collapsing them either way loses
+something real: one type per cell destroys the column type that the columnar
+kernel and every derived feature depend on; one type per column destroys the
+scratchpad. The conversion BETWEEN them is the actual product — promote a range
+to a dataset, or open a dataset as a flat copy for the one awkward number the
+pipeline cannot express. That round trip is why people abandon BI tools for
+Excel, and dash can hold both ends of it.
+
+WIRE WORDS: `kind: 'table'` remains the dataset. Renaming it would break every
+file that exists, and "Dataset" is a display label — the rule `select()`
+already follows. The new kind is `kind: 'grid'`.
+
+This is safe to add because `parseDoc` preserves an unrecognised `kind`
+VERBATIM rather than coercing it to a table (PLATFORM §3 additivity, fixed
+earlier and commented in model.ts). Old builds round-trip a spreadsheet sheet
+without damaging it.
+
+Consequences recorded now rather than discovered later: the CRDT keys dataset
+rows by `rid` and a spreadsheet has none, so its cells are keyed by POSITION
+(`g␟<sheet>␟<col>,<row>`) and a row insert MOVES cells rather than renumbering
+identities — a different convergence problem needing its own rig, not a reused
+one. `a1.ts` already lexes `Sheet1!A1` but nothing resolves it, and a
+spreadsheet without cross-sheet refs is half a spreadsheet, so that is in scope
+for the kind. `.xlsx` import should land as a SPREADSHEET rather than guessing
+a column model — which is what `CellOverride.xlsxF` (the formula kept verbatim
+because dash cannot place it in a column model) has been evidence of all along.
+
+Full design: `docs/dash-sheet-kinds.md`. Not built.
