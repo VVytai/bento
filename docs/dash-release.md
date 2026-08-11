@@ -75,6 +75,29 @@ Still true, and worth knowing before cutting `dash-v0.2.0`:
 
 ## 2 · Expected of any spreadsheet, and absent
 
+- **THE GRID ENDS AT THE DATA, and pretends otherwise.** An 8-row sheet has no
+  row 9: ArrowDown from the last row does nothing, and pressing `=` there opens
+  the editor on the LAST DATA CELL — so the universal gesture, "click below the
+  numbers and type `=SUM(`", silently targets a cell holding real data instead.
+  The ruled lines under the total look exactly like empty rows and are
+  `.dg-table` background paint; clicking them selects nothing (measured).
+  Consequences: the footer total is not a formula and cannot be one (it is
+  `sheet.totals`, a column property), and reaching the 91 functions requires
+  either the `fx` column button or typing `=` into a row that already exists —
+  so writing `=SUM(Value)` in a cell means inserting a row first, which nobody
+  will discover.
+
+  This is the model tension, not a bug to patch: dash says *a sheet is a typed
+  table*, Excel says *a sheet is an infinite canvas where data sits top-left*.
+  The typed model earns the column formulas, the type refusals and the columnar
+  speed. But the current state is the worst of both — it LOOKS like the canvas
+  model and behaves like the table model, with no signal about which. The fix
+  is real empty rows past the data that append on first type (Sheets' answer),
+  which is what the background is already impersonating.
+  *(Found by the first person to look at the totals row and ask why it was not
+  a formula.)*
+
+
 - ~~**The totals row cannot be clicked.**~~ **Done.** The footer cell IS the
   control: click it for sum/avg/count/min/max/No total, written through the
   existing `totalsPatch` so there is still one path to `sheet.totals`. An empty
