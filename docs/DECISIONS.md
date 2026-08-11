@@ -2091,3 +2091,90 @@ a column model — which is what `CellOverride.xlsxF` (the formula kept verbatim
 because dash cannot place it in a column model) has been evidence of all along.
 
 Full design: `docs/dash-sheet-kinds.md`. Not built.
+
+## dash: one view vector, read by everything that describes the view
+
+2026-08-11. Filtering and sorting write `store.order[sheetId]` — an index
+vector, view state, no checkpoint and no op, so they never dirty the file.
+Three surfaces described that view and only one read the vector.
+
+Measured on the starter workbook, filtered to deals over £10,000: the grid drew
+four rows worth £69,050, the footer said £97,050 in bold underneath them, the
+chart drew a third bar for two of the removed rows, and the status bar said
+"4 of 8 rows" — right, until anything else changed, because `showView()` had a
+single caller inside the filter menu.
+
+THE RULE: anything that describes the view reads the same vector. `aggregate`
+(grid.ts) takes it, `optionFor` (chart.ts) takes it as a row index list, Find
+walks it, and `viewStatusText` is derived from it in grid.ts because the grid
+owns the view. `applyView()` is the funnel every path already goes through —
+sort, filter, clear, sheet switch, structural edit — so it announces.
+
+A SORT MUST NOT MOVE A TOTAL and a FILTER MUST. A sort permutes the vector, so
+summing through it is unchanged; a filter shortens it. Both are guarded, and
+the sort case is the one worth having a test for, because getting it wrong is
+invisible.
+
+Excel agrees, which was discovered afterwards and is reassuring rather than
+load-bearing: a table's totals row is `SUBTOTAL(109, …)`, and `SUBTOTAL` ignores
+rows a filter has hidden.
+
+## dash: the chart is pinned to the sheet it was made from
+
+2026-08-11. A chart is an argument about one table — `StoryStep` already
+carried `sheet` beside `chart` for that reason. It does not follow the tab bar.
+Reading `grid.sheet` instead left the previous sheet's chart painted beside the
+new grid, and the next edit redrew it as an empty axis against columns that had
+never existed on the sheet in front of the reader.
+
+It names its sheet in the heading when that differs from the one on screen, and
+offers to re-bind rather than re-binding itself: a silent re-bind changes what
+the chart asserts without anyone asking, which is the same failure as
+staleness. If its sheet is deleted the panel closes rather than holding numbers
+about nothing.
+
+The cause of the filter half is worth recording separately: filtering emits
+`view`, never `doc`, and only `doc` was listened for. That is not a chart bug,
+it is what happens when view state is invented later than the listener.
+
+## dash: sheet tabs at the bottom, and reorder is a patch
+
+2026-08-11. Sheets moved from a list in the left properties panel to a tab
+strip along the bottom edge. The panel existed only for that list, so it is
+gone and the grid is ~200px wider at every size.
+
+Sheet order is TAB ORDER and it lives in the document, so a reorder is an
+undoable patch whose inverse carries the ORIGINAL index — one undo returns a
+dragged tab to where it was, not to the end. Reorder is implemented on mouse
+events rather than HTML5 drag-and-drop, which is untestable without a real
+mouse and dead on touch; `Move left` / `Move right` in the context menu give
+touch and keyboard the same operation.
+
+The active tab carries ONE mark: a 2px rule in the ink colour. It first shipped
+with four — rounded corners, a border, a 3px amber bar and a heavier weight —
+because each had been added to satisfy a contrast measurement and none was
+removed afterwards. The brand amber is 2.02:1 on white and cannot carry a
+non-text indicator alone, which is what forced the props. Ink is 14.51:1 light
+and 13.75:1 dark, so one mark suffices. Amber stays on things about the
+DOCUMENT: the unsaved dot, a filtered column header. A tab is navigation.
+
+## dash: Find searches the file, because the grid is a window onto it
+
+2026-08-11. About forty rows of a 5,000-row sheet exist in the DOM. Measured:
+`document.body.innerText` holds 1,528 characters for 20,000 cells, and Chrome's
+own `window.find('Customer 5000')` returns FALSE for a value plainly in the
+file. So the browser's find is not merely unhelpful here, it is WRONG with the
+browser's authority behind it, and that is what earns dash the right to take
+⌘F. Where the grid is not painted — the dashboard — the key is given back,
+because there the browser can see everything and taking it would be a downgrade.
+
+Matching runs over BOTH the displayed text and the stored value, and the hit
+records which matched. That is not cosmetic: `12,400` and `£` exist only in the
+rendering, `12400` only in the file, and which one matched decides whether
+Replace may touch the cell. A match found only in the formatted text is refused
+and counted, because there is no defensible way to push a substring of a
+rendering back into a number.
+
+Hits walk the VIEW VECTOR, so a find never jumps to a row the filter is hiding,
+and Replace patches are keyed by RID so a filter cannot re-target a write.
+

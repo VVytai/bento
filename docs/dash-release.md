@@ -44,12 +44,16 @@ release, only a build.
   automatically at launch" and "Offline mode". Offline HANGS UP an open relay
   socket rather than only refusing the next connection (`disconnectOnline`);
   turning it back off re-joins if the workbook is shared.
-- **`docs/DECISIONS.md` entries are owed** for the decisions taken this week:
-  the view vector as the single source for footer/chart/find, the chart pinned
-  to its sheet, tabs at the bottom with reorder as a patch, and Find's
-  displayed-vs-stored matching rule.
+- ~~**`docs/DECISIONS.md` entries are owed.**~~ **Done** — the view vector as
+  the single source, the chart pinned to its sheet, tabs at the bottom with
+  reorder as a patch, and Find's displayed-vs-stored matching rule.
 
-Still true, and worth knowing before cutting `dash-v0.2.0`:
+Version: `dash-v0.2.0` is ALREADY TAGGED at a commit from 2026-08-03, so this
+work ships as **0.3.0** — bumped, with the changelog written. The notes go
+inside the signed envelope and cannot be re-signed for a version, so they had
+to be written before cutting, not after.
+
+Still true, and worth knowing before cutting `dash-v0.3.0`:
 
 - **No pack channel** (`packs: false` in the registry) — the seven core
   catalogs are compiled in and complete; extra languages would need the
