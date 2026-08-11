@@ -124,6 +124,11 @@ Still true, and worth knowing before cutting `dash-v0.2.0`:
 
 ## 3 · Correctness debt with a known shape
 
+- **`exportCsv` exports the wrong sheet.** It takes
+  `sheets.find(kind === 'table')` — the FIRST table sheet in the workbook,
+  regardless of which one is on screen. Correct-looking when a workbook had one
+  sheet; plainly wrong now there are tabs.
+
 - **Pivot and canvas sheets cannot be renamed.** `applySheetProps` narrows
   through `table(doc, id)` and throws otherwise, so the tab strip ships a
   deliberately disabled menu item.

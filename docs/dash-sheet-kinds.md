@@ -116,6 +116,74 @@ the corner", which is why people abandon BI tools for Excel in the first place.
   This probably improves fidelity: `xlsxF` exists precisely because import meets
   formulas it cannot place in a column model.
 
+## Export, and why Excel already agrees with this split
+
+**Excel has both kinds too, and has for fifteen years.** An ordinary worksheet
+is cell-typed. An Excel *Table* (a `ListObject`) is column-typed: it has named
+columns, CALCULATED COLUMNS where one formula fills the column and structured
+references address it (`Table1[Value]`), a header row, autofilter state, and a
+totals row driven by a table PROPERTY — `totalsRowFunction="sum"` — rather than
+by a formula someone typed.
+
+That is dash's dataset, described in Microsoft's own schema. So the mapping is
+not a compromise, it is a translation:
+
+| dash | xlsx |
+|---|---|
+| spreadsheet sheet | an ordinary worksheet — cells, formulas, per-cell formats |
+| dataset sheet | a worksheet carrying **one `ListObject`** |
+| column formula | a calculated column, structured refs |
+| `totals: {value:'sum'}` | `totalsRowFunction="sum"` |
+| filters / sorts | the table's autofilter state |
+| conditional formats | `<conditionalFormatting>` |
+| comments | threaded comments |
+
+One detail that vindicates a fix made this week: Excel renders a table's totals
+row as `SUBTOTAL(109, …)`, and **`SUBTOTAL` ignores rows the filter has
+hidden.** dash's footer now totals the filtered view. That is not dash
+deviating from Excel — it is dash matching Excel's *table* semantics, which is
+the right thing for the kind.
+
+**And the same rule runs the import**, which is what makes a round trip stable:
+an xlsx worksheet becomes a spreadsheet; an xlsx Table becomes a dataset.
+`dataset → Table → dataset` and `spreadsheet → worksheet → spreadsheet` both
+return what went in. Today neither does, because everything imports as a table
+sheet and everything exports as loose cells.
+
+### What today's export does, and what changes
+
+The exporter writes `<f>SUM(D2:D9)</f>` into the totals row — a real cell
+formula. Excel users therefore already get the formula that dash's own UI could
+not offer. It works, and it is lossy in a precise way: re-importing gives back a
+formula cell, not a totals property, so the dataset comes home as something
+flatter than it left. Emitting a `ListObject` fixes that without changing what
+Excel shows.
+
+### What stays lossy, and should say so
+
+- **Pipeline steps** (`join`, `group`, `union`, `derive`). Excel's equivalent is
+  Power Query, a different language (M). Export materialises the RESULT — which
+  is honest and is what happens today — and the finding should name what was
+  flattened, because a colleague opening the file sees numbers with no way to
+  know how they were derived. Emitting M is a later option, not a first cut.
+- **Row identity (`rid`).** No xlsx home. It matters because comments, hand
+  corrections and per-cell formulas all anchor to rids, so a re-import cannot
+  reattach them to the same rows. A hidden column or a custom XML part could
+  carry it; until then the finding should say the anchors will not survive.
+- **dash-only functions.** `liveFormula` already classifies what Excel will not
+  run; the reverse check is owed.
+
+### CSV
+
+A dataset is a CSV — one header row, one row per row, formulas flattened to
+values. A spreadsheet is not: CSV has no answer to "which range", and Excel's
+own convention (the used range, values only) is the one to copy, stated in the
+export dialog rather than assumed.
+
+Note a defect to fix alongside: `exportCsv` currently exports
+`sheets.find(kind === 'table')` — the FIRST table sheet in the workbook, not the
+one on screen. With one sheet that looked correct; with tabs it is simply wrong.
+
 ## Not in scope for the first cut
 
 Merged cells, per-cell borders and fills (dash has no manual cell formatting at
