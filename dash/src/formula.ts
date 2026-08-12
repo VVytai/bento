@@ -203,8 +203,39 @@ const bool = (v: Cell): boolean => {
 // Aggregates take a whole column and return a scalar; everything else is
 // per row. The split is what lets `Value / SUM(Value)` work.
 
-const numbersIn = (v: Vec): number[] =>
-  v.map(num).filter((x): x is number => typeof x === 'number')
+/**
+ * The numbers in a vector, for an aggregate.
+ *
+ * A BLANK IS NOT A ZERO, and on a sparse spreadsheet that is the difference
+ * between a right answer and a confident wrong one. `num()` maps an empty cell
+ * to 0 — which is correct in ARITHMETIC (`=A1+1` where A1 is empty is 1, in
+ * every spreadsheet there has ever been) and wrong in an AGGREGATE:
+ * `AVERAGE(A1:A10)` over three numbers and seven empty cells is the mean of
+ * three, not a third of it, and `MIN(A1:A10)` is the smallest of the three, not
+ * 0. Excel's rule, and the reason it is Excel's rule is that a spreadsheet
+ * range is mostly empty by nature.
+ *
+ * Non-numeric TEXT is dropped as it always was: `num()` gives an error for it
+ * and an error is not a number.
+ */
+const numbersIn = (v: Vec): number[] => {
+  const out: number[] = []
+  for (const x of v) {
+    if (x === null || x === undefined || x === '') continue
+    const n = num(x)
+    if (typeof n === 'number') out.push(n)
+  }
+  return out
+}
+
+/**
+ * Aggregates that COUNT rather than compute, and are therefore the ones that
+ * may look at an error value without being poisoned by it. Everything else
+ * propagates the first error it meets — `SUM` of a range holding `#REF!` is
+ * `#REF!`, never the total of the cells that happened to work, which is a
+ * number with a piece missing and no way to tell.
+ */
+const COUNTING = new Set(['COUNT', 'COUNTA', 'COUNTBLANK', 'COUNTUNIQUE'])
 
 const REF = '#REF!'
 
@@ -676,7 +707,12 @@ function callFn(node: Node & { k: 'call' }, ctx: EvalCtx): Cell | Vec {
   }
   if (AGG[name]) {
     const v = evalNode(node.args[0], ctx)
-    return AGG[name](isVec(v) ? v : [v])
+    const vec = isVec(v) ? v : [v]
+    if (!COUNTING.has(name)) {
+      const bad = vec.find(isErr)
+      if (bad) return bad
+    }
+    return AGG[name](vec)
   }
   if (CONDITIONAL.has(name)) {
     const range = evalNode(node.args[0], ctx)

@@ -20,7 +20,7 @@
 // the type as a control, not a label.
 
 import { formatValue, alignFor, TYPE_LABEL } from './format.ts'
-import type { Column, ColumnType, TableSheet } from './model.ts'
+import type { CanvasCell, CanvasSheet, Column, ColumnType, Sheet, TableSheet } from './model.ts'
 import { readCell, type Patch, type Store } from './store.ts'
 import { recalc, isErr, type Vec } from './formula.ts'
 import {
@@ -29,7 +29,7 @@ import {
 } from './select.ts'
 import { buildOrder, type ColumnFilter } from './filter.ts'
 import { evaluateRules, type CellStyle } from './condfmt.ts'
-import { colToLetters } from './a1.ts'
+import { colToLetters, parseRef } from './a1.ts'
 import { t } from './i18n.ts'
 import { resizeColumn, autoFitWidth, hiddenSet, readFrozen } from './rowcol.ts'
 import {
@@ -59,6 +59,14 @@ import { mountFind, type FindUI, type Hit } from './find.ts'
 const ROW_H = 20
 const GUTTER_W = 52
 const OVERSCAN = 8
+/**
+ * Cells the status bar will read before it stops adding up.
+ *
+ * A dataset's ⌘A is bounded by the file. A SPREADSHEET's is not — the sheet is
+ * ruled past its data by design — so selecting a column means selecting a
+ * million cells, and summing them on every arrow key is a frozen tab.
+ */
+const SUMMARY_MAX = 200_000
 
 export interface GridHost {
   el: HTMLElement
@@ -196,6 +204,204 @@ export function aggregate(
   return spec === 'avg' ? (seen ? acc / seen : 0) : spec === 'count' ? seen : acc
 }
 
+// --- the spreadsheet kind (`kind: 'canvas'`) ---------------------------------
+//
+// A CANVAS SHEET IS UNBOUNDED, and that is the whole difference. A dataset ends
+// where its data ends — `rowCount` is a fact about the file — so `=SUM(` below a
+// column had nowhere to go, and the ruled lines the table path paints under the
+// last row are BACKGROUND (`paintEmptyGrid`), a picture of rows that do not
+// exist. Here the rows past the data are real: you can select them, type in
+// them, and typing is what brings them into being.
+//
+// TYPED BY CELL, NOT BY COLUMN. There is no `Column`, so there is no column
+// type to format against and no column formula to defer to. A cell's type is
+// its value's (`canvasType`) plus its own optional `format`, which is exactly
+// what `CanvasCell` has carried since commit one.
+//
+// SPARSE. `cells` holds only what somebody touched. A sheet with A1 and Z10000
+// is two entries, and the frontier below is arithmetic, not storage — the whole
+// claim of the kind (docs/dash-sheet-kinds.md, "Consequences worth stating").
+//
+// THE KEY IS AN A1 ADDRESS, not `cellformula.ts`'s `cellKey`. Those are two
+// different keys for two different maps and both are already in this codebase:
+//   • the DOCUMENT keys `cells` by A1 — `validate.ts` raises `bad-canvas-key`
+//     for anything `parseRef` refuses, and `preview.ts` reads
+//     `sheet.cells[`${colToLetters(c)}${r + 1}`]` to draw a thumbnail. Writing
+//     `"3,7"` would fail dash's own validator on every sheet dash created and
+//     thumbnail every spreadsheet blank.
+//   • the COMPUTED-VALUE map is keyed by `cellKey(row, col)` — that is what
+//     `recalcCells` returns, and `cellFormulaValue` already reads it that way.
+// So both are used, unchanged, at the layer each belongs to.
+
+/** Excel's bounds, and a1.ts cannot address past them (3 letters, 7 digits). */
+export const CANVAS_MAX_ROWS = 1_048_576
+export const CANVAS_MAX_COLS = 16_384
+/** How far past the used range (and past the cursor) the sheet is ruled. */
+const FRONTIER_ROWS = 20
+const FRONTIER_COLS = 4
+/** A column with no stored width. Sheets' default; Excel's is 64px. */
+const CANVAS_COL_W = 100
+const MIN_COL_W = 32
+const MIN_ROW_H = 14
+
+/**
+ * The write op for a canvas sheet — cells and sizes, the three maps the kind
+ * has.
+ *
+ * NOT IN `store.ts`'s `Patch` UNION YET: that file belongs to the model owner,
+ * and this is the shape asked for. The cast in `canvasPatch` is the only seam
+ * and comes out in one line the moment the union carries the op. `null` (never
+ * `undefined`) removes a key, because this object is also the collab wire
+ * format and `JSON.stringify` erases an undefined value — the delete would
+ * reach every other replica as a no-op.
+ */
+export interface SetCanvasCells {
+  op: 'setCanvasCells'
+  sheet: string
+  cells?: Record<string, CanvasCell | null>
+  cols?: Record<string, number | null>
+  rows?: Record<string, number | null>
+}
+
+const canvasPatch = (p: SetCanvasCells): Patch => p as unknown as Patch
+
+/** A cell's address. `A1`, `Z10000` — the key the document is written with. */
+export const canvasKey = (row: number, col: number): string =>
+  `${colToLetters(col)}${row + 1}`
+
+/** The inverse, tolerant of the `$A$1` a hand-edited file may hold. */
+export function canvasPos(key: string): { row: number; col: number } | null {
+  const r = parseRef(key)
+  return r ? { row: r.row, col: r.col } : null
+}
+
+/**
+ * One past the last row and column any cell occupies — the USED range.
+ *
+ * From the keys themselves, because a canvas sheet has no row count to read.
+ * Keys that are not addresses are skipped rather than guessed at; validate.ts
+ * reports them, and a sheet is not made shorter by junk somebody hand-edited in.
+ */
+export function canvasUsed(sheet: CanvasSheet): { rows: number; cols: number } {
+  let rows = 0
+  let cols = 0
+  for (const k in sheet.cells) {
+    const p = canvasPos(k)
+    if (!p) continue
+    if (p.row + 1 > rows) rows = p.row + 1
+    if (p.col + 1 > cols) cols = p.col + 1
+  }
+  return { rows, cols }
+}
+
+/** A cell's type, read from the VALUE. There is no column to ask. */
+export const canvasType = (v: unknown): ColumnType =>
+  typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'bool' : 'text'
+
+/**
+ * What the user typed, as a stored value.
+ *
+ * DELIBERATELY NARROW. A number only when the whole field is one, and a boolean
+ * only for the two words; everything else is text, including `2026-01-01` (the
+ * table path stores dates as strings too) and `50%`. Excel would turn `50%`
+ * into 0.5 wearing a percent format, which means typing invents a FORMAT — and
+ * this pass does not write formats (that is the next one). Storing the text is
+ * the answer that cannot be wrong about what the author meant.
+ *
+ * `1,200` is 1200: a thousands separator is how people type numbers into
+ * spreadsheets, and `coerceForColumn` already strips them on the table side.
+ */
+const NUMERIC = /^[-+]?(?:\d+|\d{1,3}(?:,\d{3})+)?(?:\.\d+)?(?:[eE][-+]?\d+)?$/
+export function canvasValue(text: string): unknown {
+  const s = text.trim()
+  if (s === '') return ''
+  if (/^true$/i.test(s)) return true
+  if (/^false$/i.test(s)) return false
+  // the regex admits `.` and `+` alone, which `Number` reads as NaN/0 — so the
+  // digit test is separate rather than folded into an even hairier pattern
+  if (!/\d/.test(s) || !NUMERIC.test(s)) return s
+  const n = Number(s.replace(/,/g, ''))
+  return Number.isFinite(n) ? n : s
+}
+
+/**
+ * Writing `text` into a cell: the cell to store, or `null` to REMOVE the key.
+ *
+ * Null rather than `{}`, and this is the sparseness promise kept at the one
+ * place it can be broken. Clearing forty cells that were never written must
+ * leave the file exactly as it found it, or a Delete over an empty selection
+ * grows the document — silently, and forever, since nothing later would ever
+ * remove them.
+ *
+ * A cell's STYLE outlives its contents: clearing a bolded red cell leaves the
+ * bold and the red, exactly as `clearSelection` on the table side keeps
+ * everything but `f`. And a value and a formula are alternatives — writing one
+ * drops the other, because a file that carries a number beside the formula that
+ * produced it can carry a number that disagrees with it.
+ */
+export function canvasCellEdit(prev: CanvasCell | undefined, text: string): CanvasCell | null {
+  const { v: _v, f: _f, ...rest } = prev ?? {}
+  const s = text.trim()
+  if (s === '') return Object.keys(rest).length ? rest : null
+  if (isFormula(s)) return { ...rest, f: s }
+  return { ...rest, v: canvasValue(s) }
+}
+
+/** Clearing a cell — the same rule, with no text to store. */
+export const canvasCellClear = (prev: CanvasCell | undefined): CanvasCell | null =>
+  canvasCellEdit(prev, '')
+
+/**
+ * The sheet as a plain grid of positions, which is all cellformula.ts wants.
+ *
+ * BOUNDED BY THE USED RANGE, not by the frontier: `recalcCells` scans
+ * rows × cols looking for formulas, so handing it the ruled area would scan a
+ * million empty rows on every recalculation. A reference past the used range
+ * reads as empty, which is what `evalCell` does with an out-of-range ref
+ * anyway ("A50 on a ten-row sheet is a blank cell in every spreadsheet ever
+ * written").
+ *
+ * KNOWN COST: the scan is O(usedRows × usedCols) map lookups, so a lone cell
+ * typed at A1000000 makes every recalculation proportional to its address even
+ * though the sheet holds one cell. Measured in scripts/test-dash-canvas.ts. The
+ * fix is a sparse pass in cellformula.ts — that file's `recalcCells` is written
+ * for a dense grid — and it is not this file's to make.
+ */
+export function canvasSource(sheet: CanvasSheet): CellSource {
+  const used = canvasUsed(sheet)
+  return {
+    rows: used.rows,
+    cols: used.cols,
+    formulaAt: (r, c) => {
+      const f = sheet.cells[canvasKey(r, c)]?.f
+      return typeof f === 'string' && f !== '' ? f : undefined
+    },
+    valueAt: (r, c) => {
+      const cell = sheet.cells[canvasKey(r, c)]
+      return (cell && 'v' in cell ? cell.v : null) as never
+    },
+  }
+}
+
+/** Does this sheet hold any formula at all? Skips the recalculation if not. */
+export function canvasHasFormulas(sheet: CanvasSheet): boolean {
+  for (const k in sheet.cells) {
+    const f = sheet.cells[k]?.f
+    if (typeof f === 'string' && f !== '') return true
+  }
+  return false
+}
+
+/** A cell's displayed text — the cell's own `format`, over the value's type. */
+export function canvasShown(cell: CanvasCell | undefined, v: unknown): string {
+  if (isErr(v)) return String(v)
+  if (v === undefined || v === null || v === '') return ''
+  return formatValue(v, { type: canvasType(v), format: cell?.format })
+}
+
+export const canvasAlign = (cell: CanvasCell | undefined, v: unknown): string =>
+  cell?.align ?? alignFor(canvasType(v))
+
 export class Grid {
   private host: HTMLElement
   private store: Store
@@ -203,6 +409,15 @@ export class Grid {
   private scroller!: HTMLElement
   private table!: HTMLElement
   private editing: { rid: number; col: string } | null = null
+  /**
+   * The canvas cell being edited. A separate field because the table path keys
+   * an edit by (rid, colId) and a canvas sheet has neither — and because both
+   * guards have to be checked before a keystroke is treated as navigation.
+   */
+  private cvEditing: { row: number; col: number } | null = null
+  /** The canvas sheet's used range, recomputed on `doc` and not on every scroll. */
+  private cvUsed = { rows: 0, cols: 0 }
+  private cvDirty = true
   private sort: { col: string; dir: 'asc' | 'desc' } | null = null
   /** formula columns, recomputed on every document change. Never stored: the
    *  document holds the EXPRESSION, and the values are derived from it, so a
@@ -252,7 +467,7 @@ export class Grid {
     this.host = opts.el
     this.store = opts.store
     this.sheetId = opts.sheetId
-    this.sel = new Selection(rowCount(this.sheet), cols(this.sheet).length)
+    this.sel = this.freshSelection()
     this.build()
     // FIND IS THE GRID'S, and it is mounted here rather than from main.ts for
     // one reason: the reason find exists is that this grid is WINDOWED. The
@@ -267,6 +482,10 @@ export class Grid {
       store: this.store, grid: this, el: this.host, coerce: coerceForColumn,
     })
     this.store.on('doc', () => {
+      // A canvas sheet has no order vector and no columns to count — its extent
+      // comes out of its own keys, and `paintCanvas` sizes the selection from
+      // it. All this listener owes it is "the cells changed, look again".
+      if (this.canvas) { this.cvDirty = true; this.paint(); return }
       // A structural edit invalidates the order VECTOR: it holds row indices,
       // and insert/delete renumber the rows underneath them. Leaving it alone
       // left the grid drawing blanks and rows in an order matching nothing.
@@ -332,7 +551,10 @@ export class Grid {
     this.filters = []
     this.sorts = []
     this.scroller.scrollTop = 0
-    this.sel = new Selection(rowCount(this.sheet), cols(this.sheet).length)
+    this.scroller.scrollLeft = 0
+    this.cvDirty = true
+    this.cvEditing = null
+    this.sel = this.freshSelection()
     this.findHits.clear()
     this.findCur = ''
     // THE ORDER VECTOR IS PART OF THE VIEW, and clearing `filters`/`sorts`
@@ -352,10 +574,47 @@ export class Grid {
     this.finder?.sheetChanged()
   }
 
+  /**
+   * The DATASET on screen.
+   *
+   * It still throws for anything else, and that is not an oversight now that a
+   * second kind renders. Half the app is written against `TableSheet` — column
+   * types, the filter menu, the totals row, the chart binding — and every one of
+   * those callers already guards this in a `try`, reading the throw as "not a
+   * sheet I can describe" (panels.ts `currentSheet`, comments.ts `sheet`,
+   * tabs.ts `showing`). Widening it to return a `Sheet` would turn each of those
+   * guards into a silent wrong answer about a sheet with no columns.
+   */
   get sheet(): TableSheet {
     const s = this.store.doc.sheets.find((x) => x.id === this.sheetId)
     if (!s || s.kind !== 'table') throw new Error('grid needs a table sheet')
     return s
+  }
+
+  /** The sheet on screen WHATEVER its kind. Throws only if it has gone. */
+  get anySheet(): Sheet {
+    const s = this.store.doc.sheets.find((x) => x.id === this.sheetId)
+    if (!s) throw new Error(`grid points at no sheet ${this.sheetId}`)
+    return s
+  }
+
+  /** The SPREADSHEET on screen, or null when a dataset is showing. */
+  get canvas(): CanvasSheet | null {
+    const s = this.store.doc.sheets.find((x) => x.id === this.sheetId)
+    return s && s.kind === 'canvas' ? s : null
+  }
+
+  /** Is this grid showing a spreadsheet? The branch every shared verb takes. */
+  get isCanvas(): boolean { return this.canvas !== null }
+
+  /** A selection sized to whichever kind is on screen. */
+  private freshSelection(): Selection {
+    const cv = this.canvas
+    if (cv) {
+      const e = this.canvasExtent(cv, { row: 0, col: 0 })
+      return new Selection(e.rows, e.cols)
+    }
+    return new Selection(rowCount(this.sheet), cols(this.sheet).length)
   }
 
   private head!: HTMLElement
@@ -542,6 +801,18 @@ export class Grid {
    * sort by a calculated column that is nowhere in the document.
    */
   applyView(): void {
+    // A CANVAS SHEET HAS NO VIEW VECTOR, and must not be given one. Filtering
+    // and sorting reorder ROWS OF A DATASET; on a sheet where a formula names
+    // `B4` by position, permuting the rows underneath the addresses would make
+    // every reference mean something different for one reader than for another.
+    // The one thing owed here is that the readouts describing the last sheet
+    // stop describing this one.
+    if (this.canvas) {
+      this.store.view(() => { this.store.order[this.sheetId] = undefined })
+      this.announce()
+      this.onViewChange?.('')
+      return
+    }
     const s = this.sheet
     const n = rowCount(s)
     const get = (col: string, row: number): unknown => {
@@ -565,6 +836,7 @@ export class Grid {
 
   /** What the status bar should say about this sheet's view, right now. */
   viewStatus(): string {
+    if (this.canvas) return ''
     const s = this.sheet
     return viewStatusText(this.store.order[s.id]?.length ?? null, rowCount(s),
       this.sorts.map((k) => ({
@@ -575,6 +847,8 @@ export class Grid {
   private announceView(): void { this.onViewChange?.(this.viewStatus()) }
 
   paint(): void {
+    const cv = this.canvas
+    if (cv) { this.paintCanvas(cv); return }
     const s = this.sheet
     const all = rowCount(s)
     if (s.columns.some((c) => c.formula)) {
@@ -802,6 +1076,7 @@ export class Grid {
 
   /** Value at a VISIBLE position — what the clipboard and the status bar read. */
   private valueAt(row: number, ci: number): unknown {
+    if (this.canvas) return this.cvValueAt(row, ci)
     const s = this.sheet
     const c = cols(s)[ci]
     if (!c) return null
@@ -817,6 +1092,7 @@ export class Grid {
 
   /** Write a block of values starting at a visible position. One undo step. */
   private writeBlock(row: number, ci: number, block: unknown[][], extra: Patch[] = []): void {
+    if (this.canvas) { this.writeCanvasBlock(row, ci, block); return }
     const s = this.sheet
     const vis = cols(s)
     const patches: Patch[] = [...extra]
@@ -838,6 +1114,7 @@ export class Grid {
 
   /** Clear every selected cell — one undo step, formula COLUMNS untouched. */
   clearSelection(): void {
+    if (this.canvas) { this.clearCanvasSelection(); return }
     const s = this.sheet
     const b = this.sel.bounds()
     const block: unknown[][] = []
@@ -870,6 +1147,20 @@ export class Grid {
 
   /** Write the formula bar's contents into the active cell. */
   setActiveCell(text: string): void {
+    // On a SPREADSHEET a leading `=` is a cell formula, full stop. The dataset
+    // path sends it to the COLUMN's expression because that is where a dataset
+    // keeps one; here there is no column to own it, which is the whole reason
+    // this kind exists — `=SUM(A1:A5)` under a block of numbers had nowhere to
+    // land.
+    if (this.canvas) {
+      if (this.store.readOnly) return
+      const cur = this.sel.cursor
+      const key = canvasKey(cur.row, cur.col)
+      const had = this.canvas.cells[key]
+      const next = canvasCellEdit(had, text)
+      if (next !== null || had !== undefined) this.writeCanvas({ [key]: next })
+      return
+    }
     const s = this.sheet
     const c = cols(s)[this.sel.cursor.col]
     if (!c || this.store.readOnly) return
@@ -909,6 +1200,24 @@ export class Grid {
     const b = this.sel.bounds()
     const tsv = tsvFromRange((r, c) => this.valueAt(r, c),
       { anchor: { row: b.top, col: b.left }, head: { row: b.bottom, col: b.right } } as Range)
+    const cv = this.canvas
+    if (cv) {
+      // Visible IS canonical here — there is no order vector to see through —
+      // so the offset a paste translates by is measured straight off the
+      // selection.
+      const block: Array<Array<{ v: unknown; f?: string }>> = []
+      for (let r = b.top; r <= b.bottom; r++) {
+        const line: Array<{ v: unknown; f?: string }> = []
+        for (let c = b.left; c <= b.right; c++) {
+          line.push({ v: this.cvValueAt(r, c), f: cv.cells[canvasKey(r, c)]?.f })
+        }
+        block.push(line)
+      }
+      this.clip = { tsv, block }
+      this.clipTop = b.top
+      this.clipLeft = b.left
+      return tsv
+    }
     const s = this.sheet
     const block: Array<Array<{ v: unknown; f?: string }>> = []
     for (let r = b.top; r <= b.bottom; r++) {
@@ -934,7 +1243,8 @@ export class Grid {
     // our own clip, still intact on the system clipboard? then formulas ride
     // along, TRANSLATED by how far the block moved
     if (this.clip && this.clip.tsv === text) {
-      this.writeClip(cur.row, cur.col, this.clip.block)
+      if (this.canvas) this.writeCanvasClip(cur.row, cur.col, this.clip.block)
+      else this.writeClip(cur.row, cur.col, this.clip.block)
       return
     }
     const grid = parseTsv(text)
@@ -1005,6 +1315,41 @@ export class Grid {
     if (patches.length) this.store.commit(patches)
   }
 
+  /**
+   * The same paste on a spreadsheet: a COPIED formula's references move with
+   * it, a CUT one's do not. Excel's rule, and getting it backwards silently
+   * re-points a moved formula at the wrong data.
+   */
+  private writeCanvasClip(
+    row: number, col: number, block: Array<Array<{ v: unknown; f?: string }>>,
+  ): void {
+    const s = this.canvas
+    if (!s) return
+    const cut = this.clip?.cut === true
+    const dRow = cut ? 0 : row - (this.clipTop ?? row)
+    const dCol = cut ? 0 : col - (this.clipLeft ?? col)
+    const cells: Record<string, CanvasCell | null> = {}
+    block.forEach((line, dr) => {
+      line.forEach((cellv, dc) => {
+        const r = row + dr
+        const c = col + dc
+        if (r >= CANVAS_MAX_ROWS || c >= CANVAS_MAX_COLS) return
+        const key = canvasKey(r, c)
+        const had = s.cells[key]
+        const { v: _v, f: _f, ...rest } = had ?? {}
+        if (cellv.f !== undefined) {
+          cells[key] = { ...rest, f: translateCellFormula(cellv.f, dRow, dCol) }
+        } else {
+          const next: CanvasCell | null = cellv.v == null || cellv.v === ''
+            ? (Object.keys(rest).length ? rest : null)
+            : { ...rest, v: cellv.v }
+          if (next !== null || had !== undefined) cells[key] = next
+        }
+      })
+    })
+    this.writeCanvas(cells)
+  }
+
   /** Canonical top-left of the remembered clip, for measuring the paste offset. */
   private clipTop: number | null = null
   private clipLeft: number | null = null
@@ -1026,9 +1371,46 @@ export class Grid {
   /** Fires after every repaint — how an overlay knows to re-place its markers. */
   onPaint?: () => void
 
+  /**
+   * The status bar's aggregate over the selection — the number people select
+   * cells specifically to see.
+   *
+   * Shared by both kinds, because it asks nothing about how a cell is stored:
+   * `valueAt` already answers for either, and a second copy of the arithmetic
+   * would be a second chance to disagree about whether blanks count.
+   *
+   * A SELECTION ON A SPREADSHEET CAN BE ENORMOUS — the sheet is unbounded, and
+   * ⌘A selects the ruled area — so the scan is capped. Past the cap it reports
+   * the cell count alone rather than freezing the tab to add up a million
+   * blanks.
+   */
+  private selectionSummary(): string {
+    const b = this.sel.bounds()
+    if (b.bottom <= b.top && b.right <= b.left) return ''
+    const cells = (b.bottom - b.top + 1) * (b.right - b.left + 1)
+    if (cells > SUMMARY_MAX) return `Cells ${fmtNum(cells)}`
+    const nums: number[] = []
+    for (let r = b.top; r <= b.bottom; r++) {
+      for (let cc = b.left; cc <= b.right; cc++) {
+        const x = this.valueAt(r, cc)
+        if (typeof x === 'number' && Number.isFinite(x)) nums.push(x)
+      }
+    }
+    return nums.length
+      ? `Sum ${fmtNum(nums.reduce((a, x) => a + x, 0))}  ·  Avg ${fmtNum(nums.reduce((a, x) => a + x, 0) / nums.length)}  ·  Count ${nums.length}  ·  Cells ${cells}`
+      : `Cells ${cells}`
+  }
+
   /** Tell the app what is selected, for the formula bar and the status bar. */
   announce(): void {
     if (!this.onSelectionChange) return
+    const cv = this.canvas
+    if (cv) {
+      const cur = this.sel.cursor
+      this.onSelectionChange(this.selectionSummary(), canvasKey(cur.row, cur.col),
+        this.cvSourceAt(cur.row, cur.col))
+      return
+    }
     const s = this.sheet
     const vis = cols(s)
     const cur = this.sel.cursor
@@ -1036,22 +1418,7 @@ export class Grid {
     const ref = c ? `${colToLetters(cur.col)}${cur.row + 1}` : ''
     const v = this.valueAt(cur.row, cur.col)
     const raw = v == null ? '' : isErr(v) ? String(v) : String(v)
-    const b = this.sel.bounds()
-    let summary = ''
-    if (b.bottom > b.top || b.right > b.left) {
-      // the status-bar aggregate people select cells specifically to see
-      const nums: number[] = []
-      for (let r = b.top; r <= b.bottom; r++) {
-        for (let cc = b.left; cc <= b.right; cc++) {
-          const x = this.valueAt(r, cc)
-          if (typeof x === 'number' && Number.isFinite(x)) nums.push(x)
-        }
-      }
-      const cells = (b.bottom - b.top + 1) * (b.right - b.left + 1)
-      summary = nums.length
-        ? `Sum ${fmtNum(nums.reduce((a, x) => a + x, 0))}  ·  Avg ${fmtNum(nums.reduce((a, x) => a + x, 0) / nums.length)}  ·  Count ${nums.length}  ·  Cells ${cells}`
-        : `Cells ${cells}`
-    }
+    const summary = this.selectionSummary()
     // The formula bar shows the SOURCE when there is one — a per-cell formula
     // first, then the column's expression, then the value. A bar that shows the
     // computed number for a formula cell is the one place a spreadsheet user
@@ -1066,7 +1433,7 @@ export class Grid {
 
   /** The full keyboard set, routed through select.ts's typed actions. */
   handleKey(e: KeyboardEvent): boolean {
-    if (this.editing) return false
+    if (this.editing || this.cvEditing) return false
     const a = keyToAction(e)
     if (!a) return false
     if (a.kind === 'edit') return this.editActive()
@@ -1099,7 +1466,30 @@ export class Grid {
   }
 
   private scrollIntoView(): void {
-    const y = this.sel.cursor.row * ROW_H
+    const cv = this.canvas
+    const cur = this.sel.cursor
+    if (cv) {
+      const rs = this.rowSizes(cv, this.canvasExtent(cv, cur).rows)
+      const y = rs.top(cur.row)
+      const rowH = rs.height(cur.row)
+      const head = this.head.offsetHeight || ROW_H
+      const top = this.scroller.scrollTop
+      if (y < top + head) this.scroller.scrollTop = Math.max(0, y - head)
+      else if (y + rowH > top + this.scroller.clientHeight) {
+        this.scroller.scrollTop = y + rowH - this.scroller.clientHeight
+      }
+      // …and sideways, which the dataset path never needed: its columns end.
+      const lefts = this.colLefts(cv, cur.col + 2)
+      const x = lefts[cur.col]
+      const w = lefts[cur.col + 1] - x
+      if (x < this.scroller.scrollLeft + GUTTER_W) {
+        this.scroller.scrollLeft = Math.max(0, x - GUTTER_W)
+      } else if (x + w > this.scroller.scrollLeft + this.scroller.clientWidth) {
+        this.scroller.scrollLeft = x + w - this.scroller.clientWidth
+      }
+      return
+    }
+    const y = cur.row * ROW_H
     const top = this.scroller.scrollTop
     const h = this.scroller.clientHeight - ROW_H * 2
     if (y < top) this.scroller.scrollTop = y
@@ -1126,6 +1516,18 @@ export class Grid {
    * character of the query.
    */
   revealCell(row: number, col: number, opts: { focus?: boolean } = {}): void {
+    const cv = this.canvas
+    if (cv) {
+      const ext = this.canvasExtent(cv, { row, col })
+      if (row < 0 || row >= ext.rows || col < 0 || col >= ext.cols) return
+      this.sel.resize(ext.rows, ext.cols)
+      this.sel.moveTo(row, col)
+      this.scrollIntoView()
+      this.paint()
+      this.announce()
+      if (opts.focus) this.focusGrid()
+      return
+    }
     const n = this.store.order[this.sheet.id]?.length ?? rowCount(this.sheet)
     if (row < 0 || row >= n || col < 0 || col >= cols(this.sheet).length) return
     this.sel.moveTo(row, col)
@@ -1200,6 +1602,526 @@ export class Grid {
     const height = (b.bottom - b.top + 1) * ROW_H
     return `<div class="dg-outline" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px">` +
       `<span class="dg-handle" title="${esc(t('Drag to fill the selection down or across'))}"></span></div>`
+  }
+
+  // --- the spreadsheet path --------------------------------------------------
+  //
+  // Everything below paints and edits a `kind: 'canvas'` sheet. It shares the
+  // scroller, the row height, the selection model and the key map with the
+  // dataset path above — a second key handler is how two grids in one app start
+  // disagreeing about what Tab does — and diverges exactly where the kinds do:
+  // no columns, no rids, no order vector, no end.
+
+  /** Recompute what only a document change can alter: the used range and the formulas. */
+  private cvRefresh(s: CanvasSheet): void {
+    if (!this.cvDirty) return
+    this.cvDirty = false
+    this.cvUsed = canvasUsed(s)
+    // Cached because `paint` runs on every scroll event and a recalculation
+    // does not depend on where the window is. The table path recomputes in
+    // paint(); here the scan is over the used RANGE rather than over a column
+    // count, so a wide sheet would pay it forty times a second.
+    this.cellValues = canvasHasFormulas(s)
+      ? recalcCells(canvasSource(s), this.store.doc.modified).values
+      : EMPTY_CELLS
+  }
+
+  /**
+   * How far the sheet is ruled: past the data, past the cursor, past the window.
+   *
+   * THIS IS THE UNBOUNDEDNESS, and it is arithmetic rather than storage. The
+   * frontier past the CURSOR is the load-bearing term: it guarantees at least
+   * one empty row below wherever the cursor is, so ArrowDown at the bottom
+   * always has somewhere to go — `Selection.clamp` stops at `rows - 1`, and
+   * without slack the last row would be a floor you cannot step off. Every move
+   * is followed by a paint, so the slack is restored before the next keystroke.
+   *
+   * The window term is why SCROLLING keeps finding sheet: reaching the bottom
+   * adds another frontier, and the next scroll adds another, up to the address
+   * space a1.ts can spell.
+   */
+  private canvasExtent(s: CanvasSheet, cursor: { row: number; col: number }): { rows: number; cols: number } {
+    this.cvRefresh(s)
+    const used = this.cvUsed
+    const sc = this.scroller as HTMLElement | undefined
+    const seenRows = sc ? Math.ceil((sc.scrollTop + sc.clientHeight) / ROW_H) : 0
+    const seenCols = sc ? Math.ceil((sc.scrollLeft + sc.clientWidth) / CANVAS_COL_W) : 0
+    return {
+      rows: Math.min(CANVAS_MAX_ROWS,
+        Math.max(used.rows, cursor.row + 1, seenRows) + FRONTIER_ROWS),
+      cols: Math.min(CANVAS_MAX_COLS,
+        Math.max(used.cols, cursor.col + 1, seenCols) + FRONTIER_COLS),
+    }
+  }
+
+  /**
+   * Row geometry, with the sparse `rows` height map folded in.
+   *
+   * The rows are absolutely positioned, so a variable height means every row's
+   * top depends on every override above it. That is a prefix sum over the
+   * OVERRIDES — a handful of entries — not over the rows, so a sheet with two
+   * tall rows and a million ordinary ones costs two additions.
+   */
+  private rowSizes(s: CanvasSheet, n: number): {
+    top: (i: number) => number; height: (i: number) => number
+    total: number; first: (y: number) => number
+  } {
+    const at: number[] = []
+    const hs: number[] = []
+    for (const k in s.rows ?? {}) {
+      const i = Number(k) - 1
+      const h = Number(s.rows![k])
+      if (!Number.isInteger(i) || i < 0 || i >= n) continue
+      if (!Number.isFinite(h) || h <= 0 || h === ROW_H) continue
+      at.push(i)
+      hs.push(h)
+    }
+    if (at.length > 1) {
+      const order = at.map((_, j) => j).sort((a, b) => at[a] - at[b])
+      const a2 = order.map((j) => at[j])
+      const h2 = order.map((j) => hs[j])
+      for (let j = 0; j < order.length; j++) { at[j] = a2[j]; hs[j] = h2[j] }
+    }
+    const prefix = new Array<number>(at.length + 1).fill(0)
+    for (let j = 0; j < at.length; j++) prefix[j + 1] = prefix[j] + (hs[j] - ROW_H)
+    /** how many overrides sit strictly above row `i` */
+    const before = (i: number): number => {
+      let lo = 0
+      let hi = at.length
+      while (lo < hi) {
+        const m = (lo + hi) >> 1
+        if (at[m] < i) lo = m + 1
+        else hi = m
+      }
+      return lo
+    }
+    const height = (i: number): number => {
+      const j = before(i)
+      return j < at.length && at[j] === i ? hs[j] : ROW_H
+    }
+    const top = (i: number): number => i * ROW_H + prefix[before(i)]
+    const first = (y: number): number => {
+      let lo = 0
+      let hi = n
+      while (lo < hi) {
+        const m = (lo + hi) >> 1
+        if (top(m) + height(m) <= y) lo = m + 1
+        else hi = m
+      }
+      return Math.max(0, Math.min(lo, n - 1))
+    }
+    return { top, height, total: n * ROW_H + prefix[at.length], first }
+  }
+
+  /** One column's stored width, or the default. */
+  private canvasColW(s: CanvasSheet, c: number): number {
+    const v = s.cols?.[colToLetters(c)]
+    return typeof v === 'number' && Number.isFinite(v) && v >= MIN_COL_W ? v : CANVAS_COL_W
+  }
+
+  /** Left edge of every column, gutter included, indexed 0..n (n = the right edge). */
+  private colLefts(s: CanvasSheet, n: number): number[] {
+    const out = new Array<number>(n + 1)
+    let x = GUTTER_W
+    for (let c = 0; c < n; c++) { out[c] = x; x += this.canvasColW(s, c) }
+    out[n] = x
+    return out
+  }
+
+  /** The computed value of a canvas cell, if it holds a formula. */
+  private cvComputed(row: number, col: number): unknown {
+    if (this.cellValues === EMPTY_CELLS) return undefined
+    const k = cellKey(row, col)
+    return this.cellValues.has(k) ? this.cellValues.get(k) : undefined
+  }
+
+  /** What a canvas cell SHOWS — a formula's result, else the stored value. */
+  private cvValueAt(row: number, col: number): unknown {
+    const s = this.canvas
+    if (!s) return null
+    const cell = s.cells[canvasKey(row, col)]
+    if (cell?.f !== undefined) {
+      const v = this.cvComputed(row, col)
+      return v === undefined ? null : v
+    }
+    return cell && 'v' in cell ? cell.v : null
+  }
+
+  /** What a canvas cell IS — the formula source when it has one. The formula bar. */
+  private cvSourceAt(row: number, col: number): string {
+    const s = this.canvas
+    if (!s) return ''
+    const cell = s.cells[canvasKey(row, col)]
+    if (typeof cell?.f === 'string') return cell.f
+    const v = cell && 'v' in cell ? cell.v : null
+    return v == null ? '' : String(v)
+  }
+
+  private paintCanvas(s: CanvasSheet): void {
+    this.host.classList.add('dg-canvas')
+    const ext = this.canvasExtent(s, this.sel.cursor)
+    this.sel.resize(ext.rows, ext.cols)
+    const rs = this.rowSizes(s, ext.rows)
+    const lefts = this.colLefts(s, ext.cols)
+    this.table.style.height = `${rs.total}px`
+
+    // The window, both ways. Vertically because a sheet is a million rows deep;
+    // HORIZONTALLY too, which the dataset path never needed — it has as many
+    // columns as the file has, and this one has 16,384.
+    const sc = this.scroller
+    const y0 = Math.max(0, sc.scrollTop - OVERSCAN * ROW_H)
+    const r0 = rs.first(y0)
+    const r1 = Math.min(ext.rows, rs.first(sc.scrollTop + sc.clientHeight) + OVERSCAN + 1)
+    let c0 = 0
+    while (c0 < ext.cols - 1 && lefts[c0 + 1] <= sc.scrollLeft + GUTTER_W) c0++
+    let c1 = c0
+    while (c1 < ext.cols && lefts[c1] < sc.scrollLeft + sc.clientWidth) c1++
+    c1 = Math.min(ext.cols, c1 + 1)
+    // The columns to the left of the window are ONE spacer, not 500 empty divs.
+    const padLeft = lefts[c0] - GUTTER_W
+    const pad = padLeft > 0 ? `<div class="dg-cell dg-pad" style="width:${padLeft}px"></div>` : ''
+
+    const box = this.sel.bounds()
+    const body: string[] = []
+    for (let i = r0; i < r1; i++) {
+      const h = rs.height(i)
+      const hst = h === ROW_H ? '' : `;height:${h}px`
+      const rowSel = i >= box.top && i <= box.bottom
+      const cells: string[] = []
+      for (let c = c0; c < c1; c++) {
+        const key = canvasKey(i, c)
+        const cell = s.cells[key]
+        const v = this.cvValueAt(i, c)
+        const inSel = this.sel.ranges().some((rg) => contains(rg, i, c))
+        const isCursor = this.sel.cursor.row === i && this.sel.cursor.col === c
+        const fk = `${i}:${c}`
+        const hit = this.findHits.has(fk)
+          ? (this.findCur === fk ? ' dg-find dg-find-cur' : ' dg-find')
+          : ''
+        let st = `width:${this.canvasColW(s, c)}px;text-align:${canvasAlign(cell, v)}${hst}`
+        if (h !== ROW_H) st += `;line-height:${h - 1}px`
+        // The cell's OWN styling — `CanvasCell` has carried these four since
+        // commit one and nothing has ever drawn them. Setting them is a later
+        // pass; a file that already says `bold` must not be shown plain.
+        if (cell?.bg) st += `;background:${cell.bg}`
+        if (cell?.color) st += `;color:${cell.color}`
+        if (cell?.bold) st += ';font-weight:600'
+        cells.push(
+          `<div class="dg-cell${cell?.note ? ' dg-noted' : ''}${isErr(v) ? ' dg-err' : ''}` +
+          `${inSel ? ' dg-sel' : ''}${isCursor ? ' dg-cursor' : ''}${hit}" ` +
+          `data-ci="${c}" data-key="${key}" style="${st}">` +
+          `<span class="dg-v">${esc(canvasShown(cell, v))}</span></div>`)
+      }
+      body.push(
+        `<div class="dg-row" data-row="${i}" style="top:${rs.top(i)}px${hst}">` +
+        `<div class="dg-cell dg-gutter${rowSel ? ' dg-gutter-on' : ''}" data-rowhead="${i}"` +
+        `${hst ? ` style="${hst.slice(1)};line-height:${h - 1}px"` : ''}>${i + 1}` +
+        `<span class="dg-rgrip" data-rgrip="${i}" title="${esc(t('Drag to resize the row'))}"></span>` +
+        `</div>${pad}${cells.join('')}</div>`)
+    }
+
+    // No background lattice: on a spreadsheet the rows past the data are REAL —
+    // selectable, typeable — so painting them as a picture (`paintEmptyGrid`,
+    // which the dataset path needs precisely because its rows end) would draw a
+    // second set of lines underneath the first.
+    const surface = this.table.parentElement!
+    surface.style.backgroundImage = ''
+    this.head.innerHTML = this.canvasHeader(c0, c1, lefts, padLeft, box)
+    this.table.innerHTML = body.join('') + this.canvasOutline(rs, lefts, ext)
+    this.foot.hidden = true
+    this.foot.innerHTML = ''
+    this.wireCanvas(s, rs)
+    this.onPaint?.()
+  }
+
+  /** Letters, and a grip between each pair. No type, no filter, no sort: a
+   *  spreadsheet's columns are not typed and cannot be — see the header note. */
+  private canvasHeader(
+    c0: number, c1: number, lefts: number[], padLeft: number,
+    box: { left: number; right: number },
+  ): string {
+    const pad = padLeft > 0 ? `<div class="dg-cell dg-pad" style="width:${padLeft}px"></div>` : ''
+    let out = `<div class="dg-cell dg-corner" data-all="1" title="${esc(t('Select every cell in the sheet'))}"></div>${pad}`
+    for (let c = c0; c < c1; c++) {
+      const on = c >= box.left && c <= box.right ? ' dg-h-on' : ''
+      out += `<div class="dg-cell dg-h dg-ch${on}" data-ci="${c}" style="width:${lefts[c + 1] - lefts[c]}px">` +
+        `<span class="dg-letter" title="${esc(t('Select column'))}">${colToLetters(c)}</span>` +
+        `<span class="dg-grip" data-cgrip="${c}" title="${esc(t('Drag to resize the column'))}"></span>` +
+        `</div>`
+    }
+    return out
+  }
+
+  private canvasOutline(
+    rs: { top: (i: number) => number; height: (i: number) => number },
+    lefts: number[], ext: { rows: number; cols: number },
+  ): string {
+    const b = this.sel.bounds()
+    if (b.left >= ext.cols || b.top >= ext.rows) return ''
+    const right = Math.min(b.right, ext.cols - 1)
+    const bottom = Math.min(b.bottom, ext.rows - 1)
+    const left = lefts[b.left]
+    const width = lefts[right + 1] - left
+    const top = rs.top(b.top)
+    const height = rs.top(bottom) + rs.height(bottom) - top
+    return `<div class="dg-outline" style="left:${left}px;top:${top}px;width:${width}px;height:${height}px">` +
+      `<span class="dg-handle" title="${esc(t('Drag to fill the selection down or across'))}"></span></div>`
+  }
+
+  private wireCanvas(s: CanvasSheet, rs: { height: (i: number) => number }): void {
+    const handle = this.table.querySelector<HTMLElement>('.dg-handle')
+    if (handle) {
+      handle.onmousedown = (e) => {
+        e.preventDefault(); e.stopPropagation()
+        const start = this.sel.bounds()
+        const move = (m: MouseEvent) => {
+          const el = (m.target as HTMLElement)?.closest?.('.dg-row[data-row]') as HTMLElement | null
+          if (!el) return
+          const r2 = Number(el.dataset.row)
+          if (Number.isFinite(r2) && r2 >= start.top) {
+            this.sel.moveTo(start.top, start.left)
+            this.sel.extendTo(r2, start.right)
+            this.paint()
+          }
+        }
+        const up = () => {
+          document.removeEventListener('mousemove', move)
+          document.removeEventListener('mouseup', up)
+          this.fillDownSelection()
+          this.announce()
+        }
+        document.addEventListener('mousemove', move)
+        document.addEventListener('mouseup', up)
+      }
+    }
+    this.head.querySelectorAll<HTMLElement>('.dg-letter').forEach((el) => {
+      el.onclick = () => {
+        const ci = Number(el.closest<HTMLElement>('[data-ci]')?.dataset.ci)
+        if (!Number.isFinite(ci)) return
+        this.sel.selectCol(ci)
+        this.paint(); this.announce()
+      }
+    })
+    const corner = this.head.querySelector<HTMLElement>('.dg-corner')
+    if (corner) corner.onclick = () => { this.sel.selectAll(); this.paint(); this.announce() }
+    this.table.querySelectorAll<HTMLElement>('[data-rowhead]').forEach((el) => {
+      el.onmousedown = (e) => {
+        if ((e.target as HTMLElement).dataset.rgrip !== undefined) return
+        this.sel.selectRow(Number(el.dataset.rowhead))
+        this.paint(); this.announce()
+      }
+    })
+    // COLUMN WIDTH and ROW HEIGHT: live on the DOM through the drag, one commit
+    // on release. A commit per mousemove is one undo entry per pixel — the same
+    // rule the dataset path's grip follows, and the reason both need a real
+    // mouse to QA rather than a synthetic drag.
+    this.head.querySelectorAll<HTMLElement>('[data-cgrip]').forEach((el) => {
+      const c = Number(el.dataset.cgrip)
+      el.onmousedown = (e) => {
+        e.preventDefault(); e.stopPropagation()
+        const startX = e.clientX
+        const startW = this.canvasColW(s, c)
+        const cell = el.parentElement as HTMLElement
+        const at = (m: MouseEvent) => Math.max(MIN_COL_W, Math.round(startW + m.clientX - startX))
+        const move = (m: MouseEvent) => {
+          const w = at(m)
+          cell.style.width = `${w}px`
+          this.table.querySelectorAll<HTMLElement>(`.dg-cell[data-ci="${c}"]`)
+            .forEach((x) => { x.style.width = `${w}px` })
+        }
+        const up = (m: MouseEvent) => {
+          document.removeEventListener('mousemove', move)
+          document.removeEventListener('mouseup', up)
+          const w = at(m)
+          if (w !== startW) this.setCanvasSize('col', c, w)
+          else this.paint()
+        }
+        document.addEventListener('mousemove', move)
+        document.addEventListener('mouseup', up)
+      }
+    })
+    this.table.querySelectorAll<HTMLElement>('[data-rgrip]').forEach((el) => {
+      const i = Number(el.dataset.rgrip)
+      el.onmousedown = (e) => {
+        e.preventDefault(); e.stopPropagation()
+        const startY = e.clientY
+        const startH = rs.height(i)
+        const row = el.closest<HTMLElement>('.dg-row')
+        const at = (m: MouseEvent) => Math.max(MIN_ROW_H, Math.round(startH + m.clientY - startY))
+        const move = (m: MouseEvent) => {
+          const h = at(m)
+          if (!row) return
+          row.style.height = `${h}px`
+          row.querySelectorAll<HTMLElement>('.dg-cell')
+            .forEach((x) => { x.style.height = `${h}px`; x.style.lineHeight = `${h - 1}px` })
+        }
+        const up = (m: MouseEvent) => {
+          document.removeEventListener('mousemove', move)
+          document.removeEventListener('mouseup', up)
+          const h = at(m)
+          if (h !== startH) this.setCanvasSize('row', i, h)
+          else this.paint()
+        }
+        document.addEventListener('mousemove', move)
+        document.addEventListener('mouseup', up)
+      }
+    })
+    this.table.querySelectorAll<HTMLElement>('.dg-row[data-row] .dg-cell[data-key]').forEach((el) => {
+      const row = Number(el.parentElement!.dataset.row)
+      const ci = Number(el.dataset.ci)
+      el.onmousedown = (e) => {
+        if (e.button !== 0) return
+        if (e.shiftKey) this.sel.extendTo(row, ci)
+        else this.sel.moveTo(row, ci)
+        this.paint(); this.announce()
+        const move = (m: MouseEvent) => {
+          const x = (m.target as HTMLElement)?.closest?.('.dg-cell[data-ci]') as HTMLElement | null
+          if (!x || !x.parentElement?.dataset.row) return
+          const r2 = Number(x.parentElement.dataset.row)
+          const c2 = Number(x.dataset.ci)
+          if (Number.isFinite(r2) && Number.isFinite(c2)) {
+            this.sel.extendTo(r2, c2); this.paint(); this.announce()
+          }
+        }
+        const up = () => {
+          document.removeEventListener('mousemove', move)
+          document.removeEventListener('mouseup', up)
+        }
+        document.addEventListener('mousemove', move)
+        document.addEventListener('mouseup', up)
+      }
+      // NO `onContextMenu` HERE, deliberately. The cell menu (main.ts
+      // `openCellMenu`) is a menu about a DATASET — insert row, delete row,
+      // add a note keyed by rid — and it opens by reading `grid.sheet`, which
+      // throws on this kind. Handing it a spreadsheet would crash the menu;
+      // pretending with a menu of items that cannot work would be worse. The
+      // browser's own menu is left in place until this kind has one of its own.
+      el.ondblclick = () => this.editCanvas(row, ci, el)
+    })
+  }
+
+  /** A stored column width or row height. `cols` is keyed by LETTER, `rows` by
+   *  the 1-based number — the same spelling as an A1 address, so a reader of the
+   *  JSON can see which column `"C": 180` is about. */
+  private setCanvasSize(axis: 'col' | 'row', i: number, px: number): void {
+    const s = this.canvas
+    if (!s || this.store.readOnly) return
+    const key = axis === 'col' ? colToLetters(i) : String(i + 1)
+    this.store.commit(canvasPatch(axis === 'col'
+      ? { op: 'setCanvasCells', sheet: s.id, cols: { [key]: px } }
+      : { op: 'setCanvasCells', sheet: s.id, rows: { [key]: px } }))
+  }
+
+  /** Write cells into a canvas sheet. One patch, one undo step. */
+  private writeCanvas(cells: Record<string, CanvasCell | null>, run?: string): void {
+    const s = this.canvas
+    if (!s || this.store.readOnly || !Object.keys(cells).length) return
+    const p = canvasPatch({ op: 'setCanvasCells', sheet: s.id, cells })
+    if (run) this.store.runEdit(run, p)
+    else this.store.commit(p)
+  }
+
+  /**
+   * Open a canvas cell for editing. `seed` is the character that started it.
+   *
+   * The same shape as the dataset path's `edit`, and deliberately so: the two
+   * differ only in what a cell IS, so anything else that differed — where Enter
+   * goes, whether Escape writes — would be a second answer to a question the
+   * app has already answered.
+   */
+  private editCanvas(row: number, col: number, cell: HTMLElement, seed?: string): void {
+    const s = this.canvas
+    if (!s || this.store.readOnly || this.cvEditing) return
+    this.cvEditing = { row, col }
+    const key = canvasKey(row, col)
+    cell.classList.add('dg-editing')
+    cell.contentEditable = 'true'
+    // A formula cell edits its SOURCE. Showing the computed value would make
+    // every edit of a formula silently replace it with its own last result.
+    cell.textContent = seed !== undefined ? seed : this.cvSourceAt(row, col)
+    cell.focus()
+    const range = document.createRange()
+    range.selectNodeContents(cell)
+    if (seed !== undefined) range.collapse(false)
+    getSelection()?.removeAllRanges()
+    getSelection()?.addRange(range)
+
+    let done = false
+    const finish = (write: boolean, move?: 'down' | 'up' | 'right' | 'left') => {
+      if (done || !this.cvEditing) return
+      done = true
+      this.cvEditing = null
+      const text = cell.textContent ?? ''
+      cell.contentEditable = 'false'
+      cell.classList.remove('dg-editing')
+      cell.onblur = null
+      if (write) {
+        const live = this.canvas
+        const next = canvasCellEdit(live?.cells[key], text)
+        // Nothing to say: typing nothing into a cell that holds nothing must
+        // not write a key — that is the sparseness promise, and the one place
+        // the frontier could start costing bytes.
+        if (next !== null || live?.cells[key] !== undefined) {
+          this.writeCanvas({ [key]: next }, key)
+          this.store.endRun()
+        }
+      }
+      if (move) {
+        const d = move === 'down' ? [1, 0] : move === 'up' ? [-1, 0] : move === 'right' ? [0, 1] : [0, -1]
+        this.sel.move(d[0], d[1], {})
+        this.scrollIntoView()
+      }
+      this.paint()
+      this.announce()
+      this.focusGrid()
+    }
+    cell.onblur = () => finish(true)
+    cell.onkeydown = (e) => {
+      e.stopPropagation()
+      if (e.key === 'Enter') { e.preventDefault(); finish(true, e.shiftKey ? 'up' : 'down'); return }
+      if (e.key === 'Tab') { e.preventDefault(); finish(true, e.shiftKey ? 'left' : 'right'); return }
+      if (e.key === 'Escape') { e.preventDefault(); finish(false) }
+    }
+  }
+
+  /** Every selected canvas cell, emptied — one undo step, styles kept. */
+  private clearCanvasSelection(): void {
+    const s = this.canvas
+    if (!s) return
+    const b = this.sel.bounds()
+    const cells: Record<string, CanvasCell | null> = {}
+    for (let r = b.top; r <= b.bottom; r++) {
+      for (let c = b.left; c <= b.right; c++) {
+        const key = canvasKey(r, c)
+        const had = s.cells[key]
+        if (had === undefined) continue      // never written: writing a delete
+        cells[key] = canvasCellClear(had)    // for it would be a key to remove
+      }
+    }
+    this.writeCanvas(cells)
+  }
+
+  /** A block of text laid down from a visible position — paste, and fill. */
+  private writeCanvasBlock(row: number, col: number, block: unknown[][]): void {
+    const s = this.canvas
+    if (!s) return
+    const cells: Record<string, CanvasCell | null> = {}
+    block.forEach((line, dr) => {
+      line.forEach((val, dc) => {
+        const r = row + dr
+        const c = col + dc
+        if (r >= CANVAS_MAX_ROWS || c >= CANVAS_MAX_COLS) return
+        const key = canvasKey(r, c)
+        const had = s.cells[key]
+        // A pasted value is already typed when it came from this grid; text
+        // from another application arrives as a string and is read the same way
+        // a typed cell is, so `1,200` from Numbers means what it does here.
+        const text = val == null ? '' : String(val)
+        const next = canvasCellEdit(had, text)
+        if (next !== null || had !== undefined) cells[key] = next
+      })
+    })
+    this.writeCanvas(cells)
   }
 
   private wire(): void {
@@ -1499,7 +2421,14 @@ export class Grid {
    * typing can reach exactly here.
    */
   typeInto(ch: string): boolean {
-    if (this.editing || this.store.readOnly) return false
+    if (this.editing || this.cvEditing || this.store.readOnly) return false
+    if (this.canvas) {
+      const cur = this.sel.cursor
+      const cell = this.cellEl(cur.row, cur.col)
+      if (!cell) return false
+      this.editCanvas(cur.row, cur.col, cell, ch)
+      return true
+    }
     const vis = cols(this.sheet)
     const col = vis[this.sel.cursor.col]
     if (!col) return false
@@ -1513,7 +2442,14 @@ export class Grid {
 
   /** F2 / double-click: edit the existing value rather than replacing it. */
   editActive(): boolean {
-    if (this.editing) return false
+    if (this.editing || this.cvEditing) return false
+    if (this.canvas) {
+      const cur = this.sel.cursor
+      const cell = this.cellEl(cur.row, cur.col)
+      if (!cell) return false
+      this.editCanvas(cur.row, cur.col, cell)
+      return true
+    }
     const vis = cols(this.sheet)
     const col = vis[this.sel.cursor.col]
     const rid = ridAt(this.store, this.sheet, this.sel.cursor.row)

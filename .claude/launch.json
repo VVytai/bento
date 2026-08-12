@@ -16,6 +16,18 @@
       "port": 5188
     },
     {
+      "name": "serve-dash-wt",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5188",
+        "--directory",
+        "dash/dist-single"
+      ],
+      "port": 5188
+    },
+    {
       "name": "spaces-dev",
       "cwd": "spaces",
       "runtimeExecutable": "npm",

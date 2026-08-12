@@ -37,17 +37,43 @@
 // and gets `#CYCLE!`. Never a plausible number: a cycle resolved by "whatever we
 // had last time" is the failure mode where a model quietly reports a different
 // answer on every recalculation and nobody can tell which one was right.
+//
+// THE GRAPH SPANS SHEETS (v0.3). `Sheet1!A1` is a reference like any other, so
+// the ordering problem and the cycle problem are both WORKBOOK-wide: A1 on one
+// sheet feeding B1 on another has to settle first, and a circle drawn through
+// three sheets is exactly as circular as one drawn in a single cell. So
+// `recalcWorkbook` is the real entry point and `recalcCells` is the one-sheet
+// case of it. A reference to a sheet that is NOT THERE is `#REF!` for the whole
+// formula — never a blank, which would read as an empty cell somebody had not
+// filled in yet, and never a zero.
+//
+// SPARSE IS THE POINT OF THE SPREADSHEET KIND, so a range is never expanded
+// over a rectangle the sheet does not occupy. `SUM(A1:A100000)` on a sheet with
+// three filled cells binds three cells, because the source clips the rectangle
+// to what it actually holds before anything is allocated (`CellSource.clipRange`,
+// and `canvasCellSource` implements it off the sparse map's own index). The
+// head of a range is NEVER moved, only its tail: two ranges of the same shape
+// must stay index-aligned or `SUMIF(A1:A100, ">5", B1:B100)` pairs the wrong
+// rows together, and that is a wrong number that looks like a right one.
 
-import { evaluate, isErr, FormulaError, type Cell, type Vec } from './formula.ts'
+import { evaluate, isErr, FormulaError, type Cell, type Shaped, type Vec } from './formula.ts'
 import {
   expandRange, formatRef, mapRefs, rewriteFormulaRefs, shiftRefsForInsert,
-  REF_ERR, type CellRef,
+  parseRef, RANGE_CELL_MAX, REF_ERR, type CellRef, type RangeRef, type ShiftScope,
 } from './a1.ts'
+import { readCell } from './store.ts'
+import type { CanvasCell, CanvasSheet, Sheet, TableSheet } from './model.ts'
+
+/** A position, plus the sheet it is on when the reference named one. */
+export type ScopedRef = CellRef & { sheet?: string }
 
 /**
  * The sheet as a plain grid of positions, so this module never has to know
  * about columns, rids, dictionary encoding or overrides. Whoever calls it owns
  * that translation — and the rig can hand over a literal array.
+ *
+ * `rows`/`cols` are the sheet's EXTENT: a position outside them reads blank,
+ * which is what `A50` on a ten-row sheet has always meant here.
  */
 export interface CellSource {
   rows: number
@@ -56,7 +82,82 @@ export interface CellSource {
   formulaAt(row: number, col: number): string | undefined
   /** The STORED value at a position — never a formula's result. */
   valueAt(row: number, col: number): Cell
+  /**
+   * OPTIONAL. Every position that holds a formula.
+   *
+   * Without it the recalculation walks `rows × cols`, which is right for a
+   * dataset and ruinous for a sparse sheet: two cells at A1 and Z10000 would
+   * cost 260,000 `formulaAt` calls to find. A sparse source knows its own
+   * formulas and hands them over.
+   */
+  formulaCells?(): Iterable<{ row: number; col: number; src: string }>
+  /**
+   * OPTIONAL. Trim a rectangle to the part of it this sheet occupies, or `null`
+   * when it occupies none of it.
+   *
+   * ONLY THE TAIL MAY MOVE. The first cell of the returned rectangle must be
+   * the first cell of the one asked for, because a bound range is a vector and
+   * two vectors from two ranges are paired BY INDEX.
+   */
+  clipRange?(range: RangeRef): RangeRef | null
+  /**
+   * OPTIONAL. Set when this sheet exists but its cells cannot be addressed —
+   * a pivot's numbers are derived from a spec and live nowhere a position can
+   * name. Every read returns this as `#N/A`, because the honest answer is "not
+   * available", and a blank would say the cell is empty when it plainly is not.
+   */
+  unavailable?: string
 }
+
+/**
+ * One sheet of a workbook, under the name references use to reach it.
+ *
+ * `vectors` is a FUNCTION because building it materialises every column of a
+ * dataset sheet, and a workbook where nothing references a sheet must not pay
+ * for it. It is called at most once per recalculation, and only for a sheet
+ * that actually evaluates something.
+ */
+export interface SheetSource {
+  /**
+   * What the result is keyed by — the sheet's id, which the document guarantees
+   * is unique. Defaults to the name, which it does NOT: renaming a tab to an
+   * existing name is allowed (tabs.ts refuses only an EMPTY name), and two
+   * sheets called "Sales" must still both compute.
+   */
+  id?: string
+  name: string
+  source: CellSource
+  /** Column names visible to a formula ON this sheet — `SUM(amount)` in a cell. */
+  vectors?(): Map<string, Vec>
+}
+
+/**
+ * What a formula's references are resolved against: which sheets exist, and
+ * how big a rectangle each of them really occupies.
+ *
+ * The DEFAULT refuses every qualified name. That is deliberate: `bindRefs` and
+ * `evalCell` can be called with one sheet and no workbook at all, and the
+ * honest answer to `Sheet1!A1` in that setting is `#REF!` — the alternative,
+ * which this module shipped until the scanner learned about qualifiers, is
+ * silently reading the LOCAL A1 and reporting another sheet's number.
+ */
+export interface RefScope {
+  /** Is there a sheet by this name? Case-insensitively, as Excel matches. */
+  has(sheet: string): boolean
+  /** Trim a rectangle on that sheet (`undefined` = the formula's own sheet). */
+  clip(range: RangeRef, sheet: string | undefined): RangeRef | null
+}
+
+const NO_SHEETS: RefScope = { has: () => false, clip: (r) => r }
+
+/**
+ * The separator between a sheet key and a cell key in a workbook graph node.
+ * U+001F, the composite-key trick the CRDT already uses — written as an escape
+ * because a literal control character in source survives no copy and no edit.
+ */
+const NODE_SEP = String.fromCharCode(0x1f)
+
+const sheetKey = (name: string): string => name.toLowerCase()
 
 /** `col,row`, both 0-based — the key a computed-cell map is keyed by. */
 export const cellKey = (row: number, col: number): string => `${col},${row}`
@@ -83,13 +184,23 @@ export const formulaBody = (src: string): string =>
 interface Dep {
   /** the generated name this reference was bound to */
   name: string
+  /** the sheet it names, when it named one */
+  sheet?: string
   /** the positions it covers — one for a reference, many for a range */
-  cells: CellRef[]
+  cells: ScopedRef[]
+  /** how wide the (clipped) rectangle is, so a lookup can read its shape */
+  width?: number
   /** the range was too large to expand, so the whole formula is an error */
   tooBig?: boolean
   /** the source already carried a `#REF!` from an earlier structural edit */
   dead?: boolean
+  /** it names a sheet this workbook does not have */
+  missing?: boolean
 }
+
+/** Cells in a rectangle, without building it — the check the cap is made of. */
+const rectSize = (a: CellRef, b: CellRef): number =>
+  (Math.abs(a.col - b.col) + 1) * (Math.abs(a.row - b.row) + 1)
 
 /**
  * Rewrite a formula's references to bound names, and report what it read.
@@ -98,19 +209,40 @@ interface Dep {
  * than parsed: a1.ts minted it because the cell it named was deleted, and the
  * only honest result is the same error again. Letting it reach formula.ts would
  * turn a precise "that cell is gone" into `#VALUE! could not parse`.
+ *
+ * `scope` decides two things and refuses rather than guessing at both: whether
+ * a named sheet exists (it does not ⇒ `missing`, and the formula is `#REF!`),
+ * and how much of a rectangle that sheet occupies. The size cap is checked on
+ * the rectangle AS WRITTEN, before any clipping — `A1:XFD1048576` is a typo
+ * whichever sheet it lands on, and answering it with a clipped handful of cells
+ * would be answering a question nobody asked.
  */
-export function bindRefs(src: string): { expr: string; deps: Dep[] } {
+export function bindRefs(src: string, scope: RefScope = NO_SHEETS): { expr: string; deps: Dep[] } {
   const deps: Dep[] = []
   const expr = mapRefs(src, (u) => {
     const name = `_a1_${deps.length}`
-    if (!u.to) {
-      deps.push({ name, cells: [u.from] })
+    const sheet = u.sheet
+    if (sheet !== undefined && !scope.has(sheet)) {
+      deps.push({ name, sheet, cells: [], missing: true })
       return name
     }
-    const cells = expandRange({ from: u.from, to: u.to })
-    deps.push(cells === null
-      ? { name, cells: [], tooBig: true }
-      : { name, cells })
+    if (!u.to) {
+      deps.push({ name, sheet, cells: [{ ...u.from, sheet }] })
+      return name
+    }
+    if (rectSize(u.from, u.to) > RANGE_CELL_MAX) {
+      deps.push({ name, sheet, cells: [], tooBig: true })
+      return name
+    }
+    const box = scope.clip({ from: u.from, to: u.to }, sheet)
+    const cells = box === null ? [] : expandRange(box)
+    if (cells === null) {
+      deps.push({ name, sheet, cells: [], tooBig: true })
+      return name
+    }
+    if (sheet !== undefined) for (const c of cells as ScopedRef[]) c.sheet = sheet
+    const width = box === null ? 0 : Math.abs(box.to.col - box.from.col) + 1
+    deps.push({ name, sheet, cells, width })
     return name
   })
   // The scanner leaves `#REF!` alone (it is not a reference), so look for it in
@@ -119,12 +251,15 @@ export function bindRefs(src: string): { expr: string; deps: Dep[] } {
 }
 
 /** Every position a formula reads, for the dependency graph. */
-export const cellDeps = (src: string): CellRef[] =>
-  bindRefs(src).deps.flatMap((d) => d.cells)
+export const cellDeps = (src: string, scope?: RefScope): ScopedRef[] =>
+  bindRefs(src, scope).deps.flatMap((d) => d.cells)
 
 // --- evaluation -------------------------------------------------------------
 
-const ERR_REF = (): FormulaError => new FormulaError(REF_ERR, 'the referenced cell was deleted')
+const ERR_REF = (why = 'the referenced cell was deleted'): FormulaError =>
+  new FormulaError(REF_ERR, why)
+const ERR_SHEET = (name: string): FormulaError =>
+  new FormulaError(REF_ERR, `there is no sheet called "${name}" in this workbook`)
 const ERR_BIG = (): FormulaError =>
   new FormulaError('#VALUE!', 'the range covers too many cells to evaluate')
 const ERR_CYCLE = (): FormulaError => new FormulaError('#CYCLE!')
@@ -141,20 +276,34 @@ const ERR_CYCLE = (): FormulaError => new FormulaError('#CYCLE!')
  * something specific and narrower — the cell you named was deleted — and
  * spending it on "you pointed past the end" would make the one error that
  * carries real information indistinguishable from a typo.
+ *
+ * A reference to a SHEET that is not there is the deleted case, not the past-
+ * the-end case, so it is `#REF!` for the whole formula. That is what Excel does
+ * with a deleted sheet, and it is the only answer that cannot be mistaken for
+ * data: `Pipeline!D2` reading blank would put an empty cell where a number was
+ * supposed to be, and `=Pipeline!D2*1.2` would then report 0.
  */
 export function evalCell(
   src: string,
-  read: (r: CellRef) => Cell,
-  opts: { now?: string; cols?: Map<string, Vec> } = {},
+  read: (r: ScopedRef) => Cell,
+  opts: { now?: string; cols?: Map<string, Vec>; scope?: RefScope } = {},
 ): Cell {
-  const { expr, deps } = bindRefs(formulaBody(src))
+  const { expr, deps } = bindRefs(formulaBody(src), opts.scope)
   if (deps.some((d) => d.dead)) return ERR_REF()
+  const gone = deps.find((d) => d.missing)
+  if (gone) return ERR_SHEET(gone.sheet ?? '')
   if (deps.some((d) => d.tooBig)) return ERR_BIG()
 
   // Column names stay visible, so a cell formula can also say `SUM(amount)`.
   // The generated names are added on top and cannot collide with them.
   const cols = new Map<string, Vec>(opts.cols ?? [])
-  for (const d of deps) cols.set(d.name, d.cells.map(read))
+  for (const d of deps) {
+    const vec: Vec = d.cells.map(read)
+    // A range knows its own shape, which is what VLOOKUP and INDEX(r, row, col)
+    // read to tell a 2-column table from a 20-row one.
+    if (d.width !== undefined) (vec as Vec & Shaped).__cols = d.width
+    cols.set(d.name, vec)
+  }
 
   const out = evaluate(expr, { cols, n: 1, now: opts.now })
   return out[0] ?? null
@@ -162,21 +311,98 @@ export function evalCell(
 
 // --- ordering ---------------------------------------------------------------
 
-/**
- * Compute every formula cell in the grid, in dependency order.
- *
- * Kahn's algorithm over CELLS. The edges run dependency → dependent, so the
- * queue holds cells whose inputs are all settled; anything left when it drains
- * is in a cycle. A cell that reads a non-formula position has no edge at all,
- * because a stored value is already settled.
- */
-export function recalcCells(src: CellSource, now?: string, cols?: Map<string, Vec>): CellRecalc {
-  const formulas = new Map<string, { row: number; col: number; src: string }>()
+/** How much of a rectangle a source occupies, when it has no opinion of its own. */
+function extentClip(src: CellSource, r: RangeRef): RangeRef | null {
+  if (src.unavailable) return null
+  const c0 = Math.min(r.from.col, r.to.col)
+  const c1 = Math.max(r.from.col, r.to.col)
+  const r0 = Math.min(r.from.row, r.to.row)
+  const r1 = Math.max(r.from.row, r.to.row)
+  if (c0 < 0 || r0 < 0 || c0 >= src.cols || r0 >= src.rows) return null
+  return {
+    from: { col: c0, row: r0, absCol: false, absRow: false },
+    to: {
+      col: Math.min(c1, src.cols - 1),
+      row: Math.min(r1, src.rows - 1),
+      absCol: false,
+      absRow: false,
+    },
+  }
+}
+
+const clipTo = (src: CellSource, r: RangeRef): RangeRef | null =>
+  src.clipRange ? src.clipRange(r) : extentClip(src, r)
+
+/** Every formula on a sheet — from its own index when it keeps one. */
+function formulasOf(src: CellSource): Array<{ row: number; col: number; src: string }> {
+  if (src.formulaCells) return [...src.formulaCells()]
+  const out: Array<{ row: number; col: number; src: string }> = []
   for (let r = 0; r < src.rows; r++) {
     for (let c = 0; c < src.cols; c++) {
       const f = src.formulaAt(r, c)
-      if (f !== undefined) formulas.set(cellKey(r, c), { row: r, col: c, src: f })
+      if (f !== undefined) out.push({ row: r, col: c, src: f })
     }
+  }
+  return out
+}
+
+/**
+ * Compute every formula cell in a WORKBOOK, in dependency order.
+ *
+ * Kahn's algorithm over cells, exactly as the single-sheet version always did —
+ * the only difference is that a node is now `<sheet>U+001F<col>,<row>` and an
+ * edge may cross a sheet boundary. That is what makes a cycle drawn THROUGH
+ * another sheet detectable at all: `Sheet1!A1 = Sheet2!A1 + 1` and
+ * `Sheet2!A1 = Sheet1!A1` is a circle, and per-sheet ordering can only see two
+ * halves of it, each of which looks perfectly settled on its own.
+ *
+ * A NODE IS NAMESPACED BY THE SHEET'S POSITION, not by its name, and every
+ * sheet computes. Names are not unique — renaming a tab to one already in use
+ * is allowed — so keying the graph by name would make the second "Sales" a
+ * sheet whose formulas silently never ran. What names DO decide is where a
+ * reference lands: `Sales!A1` resolves to the FIRST sheet of that name,
+ * case-insensitively as Excel matches, which is at least predictable.
+ *
+ * Returns one result per sheet, keyed by `id` where it has one and by `name`
+ * otherwise.
+ */
+export function recalcWorkbook(sheets: SheetSource[], now?: string): Map<string, CellRecalc> {
+  /** name → the sheet POSITION a reference to that name resolves to. */
+  const byName = new Map<string, number>()
+  sheets.forEach((s, i) => {
+    const k = sheetKey(s.name)
+    if (!byName.has(k)) byName.set(k, i)
+  })
+
+  const node = (at: number, row: number, col: number): string =>
+    `${at}${NODE_SEP}${cellKey(row, col)}`
+
+  /** Which sheet a reference lands on: the one it named, or the one it is on. */
+  const targetAt = (ref: ScopedRef, self: number): number =>
+    ref.sheet === undefined ? self : byName.get(sheetKey(ref.sheet)) ?? -1
+
+  const scopeFor = (self: number): RefScope => ({
+    has: (name) => byName.has(sheetKey(name)),
+    clip: (r, name) => {
+      const at = name === undefined ? self : byName.get(sheetKey(name)) ?? -1
+      const s = sheets[at]
+      return s ? clipTo(s.source, r) : null
+    },
+  })
+
+  // every formula in the workbook, and the one graph they all live in
+  const formulas = new Map<string, { at: number; row: number; col: number; src: string }>()
+  sheets.forEach((s, i) => {
+    for (const f of formulasOf(s.source)) {
+      formulas.set(node(i, f.row, f.col), { at: i, row: f.row, col: f.col, src: f.src })
+    }
+  })
+
+  const scopes = new Map<number, RefScope>()
+  const scopeOf = (at: number): RefScope => {
+    let sc = scopes.get(at)
+    if (!sc) { sc = scopeFor(at); scopes.set(at, sc) }
+    return sc
   }
 
   // edges, counted only between cells that BOTH hold formulas
@@ -184,8 +410,9 @@ export function recalcCells(src: CellSource, now?: string, cols?: Map<string, Ve
   const feeds = new Map<string, Set<string>>()
   for (const [k, f] of formulas) {
     const n = new Set<string>()
-    for (const ref of cellDeps(formulaBody(f.src))) {
-      const dk = cellKey(ref.row, ref.col)
+    for (const ref of cellDeps(formulaBody(f.src), scopeOf(f.at))) {
+      const at = targetAt(ref, f.at)
+      const dk = at < 0 ? '' : node(at, ref.row, ref.col)
       if (dk === k || !formulas.has(dk)) {
         // A self-reference is a cycle of one. It cannot be an edge (Kahn would
         // never dequeue it and it would look like an unrelated cycle), so it is
@@ -201,7 +428,6 @@ export function recalcCells(src: CellSource, now?: string, cols?: Map<string, Ve
   }
 
   const values = new Map<string, Cell>()
-  const order: string[] = []
   const left = new Map<string, number>()
   const queue: string[] = []
   for (const [k, n] of needs) {
@@ -209,28 +435,57 @@ export function recalcCells(src: CellSource, now?: string, cols?: Map<string, Ve
     if (n.size === 0) queue.push(k)
   }
 
-  /** What a reference sees: a computed value if we have one, else what is stored. */
-  const read = (r: CellRef): Cell => {
-    if (r.row < 0 || r.col < 0 || r.row >= src.rows || r.col >= src.cols) return null
-    const k = cellKey(r.row, r.col)
-    if (values.has(k)) return values.get(k)!
-    // BACKSTOP, and currently unreachable: every formula dependency is an edge,
-    // so Kahn settles it before this cell is dequeued, and a formula inside a
-    // cycle is never dequeued at all. It stays because the failure it prevents
-    // is silent — a future change to the edge rules would otherwise let a
-    // reference read a stored value that a formula was about to overwrite, and
-    // the result would be a plausible number nobody could tell was stale.
-    // Deliberately not covered by the rig: a check that cannot fail is worse
-    // than no check, and this line's whole job is to be redundant.
-    if (formulas.has(k)) return ERR_CYCLE()
-    return src.valueAt(r.row, r.col)
+  /**
+   * What a reference sees: a computed value if we have one, else what is stored.
+   *
+   * The unqualified case is the hot one — a range over ten thousand cells on
+   * this sheet is ten thousand calls — so it resolves without a lookup.
+   */
+  const readFrom = (self: number) => {
+    const own = sheets[self]
+    return (r: ScopedRef): Cell => {
+      const at = r.sheet === undefined ? self : byName.get(sheetKey(r.sheet)) ?? -1
+      const s = r.sheet === undefined ? own : sheets[at]
+      if (!s) return ERR_SHEET(r.sheet ?? '')
+      if (s.source.unavailable) return new FormulaError('#N/A', s.source.unavailable)
+      if (r.row < 0 || r.col < 0 || r.row >= s.source.rows || r.col >= s.source.cols) return null
+      const k = node(at, r.row, r.col)
+      if (values.has(k)) return values.get(k)!
+      // BACKSTOP, and currently unreachable: every formula dependency is an
+      // edge, so Kahn settles it before this cell is dequeued, and a formula
+      // inside a cycle is never dequeued at all. It stays because the failure
+      // it prevents is silent — a future change to the edge rules would
+      // otherwise let a reference read a stored value that a formula was about
+      // to overwrite, and the result would be a plausible number nobody could
+      // tell was stale. Deliberately not covered by the rig: a check that
+      // cannot fail is worse than no check, and this line's job is redundancy.
+      if (formulas.has(k)) return ERR_CYCLE()
+      return s.source.valueAt(r.row, r.col)
+    }
   }
 
+  // The column vectors a sheet's own formulas can name (`SUM(amount)`), built
+  // at most once per sheet and only for a sheet that computes something.
+  const vecs = new Map<number, Map<string, Vec> | undefined>()
+  const vectorsOf = (at: number): Map<string, Vec> | undefined => {
+    if (!vecs.has(at)) vecs.set(at, sheets[at]?.vectors?.())
+    return vecs.get(at)
+  }
+  const readers = new Map<number, (r: ScopedRef) => Cell>()
+  const readerOf = (at: number): (r: ScopedRef) => Cell => {
+    let rd = readers.get(at)
+    if (!rd) { rd = readFrom(at); readers.set(at, rd) }
+    return rd
+  }
+
+  const order: string[] = []
   while (queue.length) {
     const k = queue.shift()!
     const f = formulas.get(k)!
     order.push(k)
-    values.set(k, evalCell(f.src, read, { now, cols }))
+    values.set(k, evalCell(f.src, readerOf(f.at), {
+      now, cols: vectorsOf(f.at), scope: scopeOf(f.at),
+    }))
     for (const d of feeds.get(k) ?? []) {
       const rem = (left.get(d) ?? 1) - 1
       left.set(d, rem)
@@ -242,8 +497,283 @@ export function recalcCells(src: CellSource, now?: string, cols?: Map<string, Ve
   for (const k of formulas.keys()) {
     if (!values.has(k)) { cycles.push(k); values.set(k, ERR_CYCLE()) }
   }
-  return { values, cycles, order }
+
+  // split back out, per sheet, in the keys the callers already use
+  const out = new Map<string, CellRecalc>()
+  const keyed = sheets.map((s) => s.id ?? s.name)
+  for (const k of keyed) {
+    if (!out.has(k)) out.set(k, { values: new Map(), cycles: [], order: [] })
+  }
+  const bucket = (id: string): CellRecalc | undefined =>
+    out.get(keyed[Number(id.slice(0, id.indexOf(NODE_SEP)))])
+  const cellOf = (id: string): string => id.slice(id.indexOf(NODE_SEP) + 1)
+  for (const [id, v] of values) bucket(id)?.values.set(cellOf(id), v)
+  for (const id of order) bucket(id)?.order.push(cellOf(id))
+  for (const id of cycles) bucket(id)?.cycles.push(cellOf(id))
+  return out
 }
+
+/**
+ * Compute every formula cell in ONE sheet, in dependency order.
+ *
+ * The single-sheet case of `recalcWorkbook`, and the shape every caller used
+ * before sheets could reference each other. A qualified reference here names a
+ * sheet this call cannot see, so it reads `#REF!` — pass the whole workbook to
+ * resolve one.
+ */
+export function recalcCells(src: CellSource, now?: string, cols?: Map<string, Vec>): CellRecalc {
+  const one: SheetSource = { name: '', source: src, vectors: cols && (() => cols) }
+  return recalcWorkbook([one], now).get('')!
+}
+
+// --- the sheets themselves ---------------------------------------------------
+//
+// One `CellSource` per sheet KIND, so that the workbook a formula resolves
+// against is assembled in one place rather than three. The grid, Find and the
+// validator each built their own view of a dataset sheet before this, which was
+// survivable while a formula could only see its own sheet and is not now: a
+// reference across sheets means every sheet has to be addressable by whoever
+// happens to be recalculating, including the one that is not on screen.
+
+/** The canonical key of a spreadsheet cell, and the A1 spelling read as well. */
+function posOf(key: string): { row: number; col: number } | null {
+  const i = key.indexOf(',')
+  if (i > 0) {
+    const col = Number(key.slice(0, i))
+    const row = Number(key.slice(i + 1))
+    if (Number.isInteger(col) && Number.isInteger(row) && col >= 0 && row >= 0) return { row, col }
+    return null
+  }
+  const r = parseRef(key)
+  return r ? { row: r.row, col: r.col } : null
+}
+
+/**
+ * A SPREADSHEET sheet (`kind: 'canvas'`) as a grid of positions.
+ *
+ * Keyed by `cellKey(row, col)` — what `setCanvasCells` writes (store.ts) — and
+ * an A1 key is read too, because `preview.ts` and `validate.ts` were written
+ * against that spelling and files exist with it. Reading both is tolerance at
+ * the edge, not a second convention: nothing here ever writes a key.
+ *
+ * NOTHING IS SCANNED TWICE. The sparse map is walked ONCE, into the three
+ * things a recalculation asks for — the cells, the formulas, and how far each
+ * column reaches. Without that last index `SUM(A1:A100000)` on a sheet holding
+ * three numbers would expand a hundred thousand references to find them, which
+ * is the whole cost this kind exists to avoid.
+ */
+export function canvasCellSource(sheet: Pick<CanvasSheet, 'cells'>): CellSource {
+  const cells = new Map<string, CanvasCell>()
+  const formulas: Array<{ row: number; col: number; src: string }> = []
+  /** column → the last row of it that holds anything */
+  const reach = new Map<number, number>()
+  let rows = 0
+  let cols = 0
+
+  for (const [key, cell] of Object.entries(sheet.cells ?? {})) {
+    const p = posOf(key)
+    // A key that names no position is left alone: it is somebody else's data or
+    // a typo, and inventing a position for it would put a value on the sheet
+    // that the file does not say is there. validate.ts reports it.
+    if (!p || !cell) continue
+    cells.set(cellKey(p.row, p.col), cell)
+    if (p.row >= rows) rows = p.row + 1
+    if (p.col >= cols) cols = p.col + 1
+    const far = reach.get(p.col)
+    if (far === undefined || p.row > far) reach.set(p.col, p.row)
+    const f = cell.f
+    if (typeof f === 'string' && f.trim() !== '') formulas.push({ row: p.row, col: p.col, src: f })
+  }
+
+  return {
+    rows,
+    cols,
+    formulaAt: (r, c) => {
+      const f = cells.get(cellKey(r, c))?.f
+      return typeof f === 'string' && f.trim() !== '' ? f : undefined
+    },
+    valueAt: (r, c) => {
+      const cell = cells.get(cellKey(r, c))
+      // A cell holding only a formula stores no value: its number is computed,
+      // and reading a stale `v` back would be the cache-that-looks-authoritative
+      // failure the header warns about.
+      return cell === undefined || cell.v === undefined ? null : (cell.v as Cell)
+    },
+    formulaCells: () => formulas,
+    clipRange: (r) => {
+      const c0 = Math.min(r.from.col, r.to.col)
+      const c1 = Math.max(r.from.col, r.to.col)
+      const r0 = Math.min(r.from.row, r.to.row)
+      const r1 = Math.max(r.from.row, r.to.row)
+      if (c0 < 0 || r0 < 0 || c0 >= cols || r0 >= rows) return null
+      // How far down this BAND of columns anything reaches — not how far the
+      // sheet reaches, so a stray cell in column Z costs column A nothing.
+      let last = -1
+      for (const [col, far] of reach) {
+        if (col >= c0 && col <= c1 && far > last) last = far
+      }
+      if (last < r0) return null
+      return {
+        from: { col: c0, row: r0, absCol: false, absRow: false },
+        to: {
+          col: Math.min(c1, cols - 1),
+          row: Math.min(r1, last),
+          absCol: false,
+          absRow: false,
+        },
+      }
+    },
+  }
+}
+
+/** Row index → rid, walking the run-length runs rather than expanding them. */
+const ridAtRow = (sheet: TableSheet, row: number): number => {
+  let seen = 0
+  for (const [start, count] of sheet.rids) {
+    if (row < seen + count) return start + (row - seen)
+    seen += count
+  }
+  return -1
+}
+
+/** rid → row index. The inverse, and just as cheap. */
+const rowOfRid = (sheet: TableSheet, rid: number): number => {
+  let seen = 0
+  for (const [start, count] of sheet.rids) {
+    if (rid >= start && rid < start + count) return seen + (rid - start)
+    seen += count
+  }
+  return -1
+}
+
+/**
+ * A DATASET sheet (`kind: 'table'`) as a grid of positions, so `Pipeline!D2`
+ * means what a reader plainly thinks it means: the cell two rows down the
+ * fourth column of that table.
+ *
+ * Column ORDER is the sheet's own, hidden columns included. A reference is a
+ * position and the position must not move because somebody hid a column — the
+ * grid draws a subset, the file has all of them, and the file is what a formula
+ * addresses.
+ *
+ * `computed` is that sheet's column formulas, already evaluated (formula.ts's
+ * `recalc`). Without it a computed column reads as its stored value, which is
+ * usually nothing at all.
+ */
+export function tableCellSource(sheet: TableSheet, computed?: Map<string, Vec>): CellSource {
+  const rows = sheet.rids.reduce((n, [, count]) => n + count, 0)
+  const columns = sheet.columns
+  return {
+    rows,
+    cols: columns.length,
+    formulaAt: (r, c) => {
+      const col = columns[c]
+      if (!col) return undefined
+      const f = sheet.cells?.[`${col.id}:${ridAtRow(sheet, r)}`]?.f
+      return typeof f === 'string' && f.trim() !== '' ? f : undefined
+    },
+    valueAt: (r, c) => {
+      const col = columns[c]
+      if (!col) return null
+      const over = sheet.cells?.[`${col.id}:${ridAtRow(sheet, r)}`]
+      if (over && 'v' in over) return over.v as Cell
+      const comp = computed?.get(col.id)
+      return (comp ? comp[r] ?? null : readCell(sheet.data[col.id], r) as Cell)
+    },
+    formulaCells: () => {
+      const out: Array<{ row: number; col: number; src: string }> = []
+      const index = new Map(columns.map((c, i) => [c.id, i]))
+      for (const [key, over] of Object.entries(sheet.cells ?? {})) {
+        const f = over?.f
+        if (typeof f !== 'string' || f.trim() === '') continue
+        const i = key.indexOf(':')
+        if (i < 0) continue
+        const col = index.get(key.slice(0, i))
+        const row = rowOfRid(sheet, Number(key.slice(i + 1)))
+        // A formula whose column or row is gone is not a formula anywhere: it
+        // has no position, so it computes nothing and is reported by the
+        // validator rather than evaluated against a cell it does not occupy.
+        if (col === undefined || row < 0) continue
+        out.push({ row, col, src: f })
+      }
+      return out
+    },
+  }
+}
+
+/** The column names a formula on a dataset sheet may use, id and name alike. */
+export function columnVectors(sheet: TableSheet, computed?: Map<string, Vec>): Map<string, Vec> {
+  const n = sheet.rids.reduce((a, [, c]) => a + c, 0)
+  const out = new Map<string, Vec>()
+  const put = (k: string, v: Vec) => { out.set(k, v); out.set(k.toLowerCase(), v) }
+  for (const c of sheet.columns) {
+    const v = computed?.get(c.id)
+      ?? Array.from({ length: n }, (_, i) => readCell(sheet.data[c.id], i) as Cell)
+    put(c.id, v)
+    put(c.name, v)
+  }
+  return out
+}
+
+/**
+ * A sheet whose cells exist but cannot be addressed — a pivot's numbers come
+ * from a spec, not from positions.
+ *
+ * `#N/A` and not a blank. The sheet is plainly full of numbers on screen, so
+ * "there is nothing there" would be a lie, and `=Pivot!B4*12` would report a
+ * confident zero. `#N/A` says the value is not available, which is exactly the
+ * situation.
+ */
+export const unaddressableSource = (why: string): CellSource => ({
+  rows: 0,
+  cols: 0,
+  formulaAt: () => undefined,
+  valueAt: () => null,
+  formulaCells: () => [],
+  clipRange: () => null,
+  unavailable: why,
+})
+
+/**
+ * Every sheet of a workbook, under the name a reference reaches it by.
+ *
+ * This is what turns `recalcWorkbook` from an interface into a feature: hand it
+ * the document and cross-sheet references resolve. `computed` supplies a table
+ * sheet's already-evaluated column formulas, because this module does not run
+ * them — formula.ts's `recalc` does, and doing it again here would be a second
+ * answer to the same question.
+ *
+ * Results come back keyed by SHEET ID, which the document keeps unique, rather
+ * than by the name a reference uses to reach it, which it does not.
+ */
+export function workbookSources(
+  doc: { sheets?: Sheet[] },
+  computed?: (sheet: TableSheet) => Map<string, Vec> | undefined,
+): SheetSource[] {
+  return (doc.sheets ?? []).map((s): SheetSource => {
+    if (s.kind === 'table') {
+      const t = s as TableSheet
+      const comp = computed?.(t)
+      return {
+        id: t.id,
+        name: t.name,
+        source: tableCellSource(t, comp),
+        vectors: () => columnVectors(t, comp),
+      }
+    }
+    if (s.kind === 'canvas') {
+      return { id: s.id, name: s.name, source: canvasCellSource(s as CanvasSheet) }
+    }
+    return {
+      id: s.id,
+      name: s.name,
+      source: unaddressableSource(
+        `the cells of ${s.kind} sheet "${s.name}" are derived and cannot be referenced by position`,
+      ),
+    }
+  })
+}
+
 
 /** A computed value as the grid should show it. Errors print as their code. */
 export const displayCell = (v: Cell): string =>
@@ -285,17 +815,24 @@ export function translateCellFormula(src: string, dRow: number, dCol: number): s
  * Returns the keys whose source CHANGED, and their new text. Rewriting the
  * unchanged ones too would work and would also put the whole sheet's formulas
  * into one undo step's inverse for an edit that touched three of them.
+ *
+ * `scope` is how a workbook says WHICH sheet the rows were inserted into, so
+ * that the formulas on every OTHER sheet can be rewritten by the same call: a
+ * reference is moved only when it points at the sheet that changed shape. With
+ * no scope the edit is taken to be on the sheet whose formulas these are, which
+ * is what the single-sheet callers have always meant.
  */
 export function shiftSheetFormulas(
   formulas: Iterable<[string, string]>,
   axis: 'row' | 'col',
   at: number,
   count: number,
+  scope?: ShiftScope,
 ): Array<[string, string]> {
   const out: Array<[string, string]> = []
   for (const [key, src] of formulas) {
     if (!isFormula(src)) continue
-    const next = `=${shiftRefsForInsert(formulaBody(src), axis, at, count)}`
+    const next = `=${shiftRefsForInsert(formulaBody(src), axis, at, count, scope)}`
     if (next !== src) out.push([key, next])
   }
   return out

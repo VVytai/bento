@@ -482,4 +482,6 @@ export const fr: Catalog = {
   "Click to change or remove this total": "Cliquez pour modifier ou retirer ce total",
   "No total": "Aucun total",
   "Sorted by {cols}": "Trié par {cols}",
+  "Drag to resize the column": "Faites glisser pour redimensionner la colonne",
+  "Drag to resize the row": "Faites glisser pour redimensionner la ligne",
 }

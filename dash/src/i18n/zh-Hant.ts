@@ -482,4 +482,6 @@ export const zhHant: Catalog = {
   "Click to change or remove this total": "按一下以變更或移除此合計",
   "No total": "無合計",
   "Sorted by {cols}": "依 {cols} 排序",
+  "Drag to resize the column": "拖曳以調整欄寬",
+  "Drag to resize the row": "拖曳以調整列高",
 }

@@ -172,9 +172,16 @@ export type Patch =
    * Cells on a SPREADSHEET sheet (`kind: 'canvas'` — the sparse A1 map that has
    * been in the format since commit one).
    *
-   * Keyed by `cellformula.cellKey(row, col)` = `` `${col},${row}` ``, both
-   * 0-based. One op carries MANY cells because a paste, a fill and a delete are
-   * each one edit to a reader and must be one undo step.
+   * Keyed by **A1 address** — `A1`, `B7` — which is the format's key for this
+   * kind and not a choice made here. model.ts calls it "the classic sparse A1
+   * map"; `validate.ts` raises `bad-canvas-key` for anything else; `preview.ts`
+   * parses A1 to find the used range for a file-manager thumbnail. It is NOT
+   * `cellformula.cellKey(row, col)` — that is an internal computation key for a
+   * recalc map, and writing it into the document would have made every cell
+   * this op wrote invisible to the validator, the thumbnail and any other build.
+   *
+   * One op carries MANY cells because a paste, a fill and a delete are each one
+   * edit to a reader and must be one undo step.
    *
    * A `null` or `undefined` entry REMOVES the cell rather than storing an empty
    * object — a sparse sheet whose cleared cells linger as `{}` is neither sparse

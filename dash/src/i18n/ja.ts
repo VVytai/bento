@@ -482,4 +482,6 @@ export const ja: Catalog = {
   "Click to change or remove this total": "クリックしてこの集計を変更または削除",
   "No total": "集計なし",
   "Sorted by {cols}": "{cols} で並べ替え",
+  "Drag to resize the column": "ドラッグして列の幅を変更",
+  "Drag to resize the row": "ドラッグして行の高さを変更",
 }

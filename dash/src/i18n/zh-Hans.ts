@@ -482,4 +482,6 @@ export const zhHans: Catalog = {
   "Click to change or remove this total": "点击以更改或移除此汇总",
   "No total": "无汇总",
   "Sorted by {cols}": "按 {cols} 排序",
+  "Drag to resize the column": "拖动以调整列宽",
+  "Drag to resize the row": "拖动以调整行高",
 }

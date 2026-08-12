@@ -482,4 +482,6 @@ export const de: Catalog = {
   "Click to change or remove this total": "Klicken, um diese Summe zu ändern oder zu entfernen",
   "No total": "Keine Summe",
   "Sorted by {cols}": "Sortiert nach {cols}",
+  "Drag to resize the column": "Ziehen, um die Spaltenbreite zu ändern",
+  "Drag to resize the row": "Ziehen, um die Zeilenhöhe zu ändern",
 }

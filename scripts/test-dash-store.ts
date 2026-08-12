@@ -406,10 +406,21 @@ roundTrip('a multi-patch commit', [
 // ----------------------------------------------------------------- refusals
 {
   const s = new Store(fresh())
+  // `applySteps` used to be the example of a reserved op refusing loudly. It is
+  // implemented now (steps.ts), so the example moved to one that is still
+  // reserved — the point being tested is the DEFAULT ARM, not the op: a patch
+  // this build does not know must throw, because a silent no-op is an edit the
+  // user believes landed.
   let threw = ''
-  try { s.commit({ op: 'applySteps', sheet: 'sh1', steps: [] }) } catch (e) { threw = String(e) }
+  try {
+    s.commit({ op: 'refreshBinding', sheet: 'sh1', cols: {} } as never)
+  } catch (e) { threw = String(e) }
   ok(threw.includes('not implemented'),
     'a reserved op REFUSES loudly rather than silently doing nothing')
+  const before0 = content(s.doc)
+  try { s.commit({ op: 'notAnOpAnyBuildHas' } as never) } catch { /* expected */ }
+  ok(content(s.doc) === before0,
+    'and a refused patch leaves the document exactly as it was — a half-applied refusal is worse than either outcome')
   s.readOnly = true
   const before = content(s.doc)
   s.commit({ op: 'setTitle', title: 'nope' })

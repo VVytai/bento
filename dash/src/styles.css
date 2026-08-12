@@ -1157,3 +1157,59 @@ html, body {
   --cmt: light-dark(#7c5cff, #a48bff);
   --cmt-wash: light-dark(#f2efff, #241f3d);
 }
+
+/* ————— the spreadsheet kind (grid.ts, `kind: 'canvas'`) —————
+   ONE HEADER LINE, not two. The dataset's header carries a name, a type
+   control, a filter caret and a sort mark, which is what forced it onto two
+   rows. A spreadsheet's column has none of those — it is not typed and cannot
+   be, because the type lives on the cell — so it carries the letter alone and
+   the row that would hold the name is not there to be empty. */
+.dg-canvas .dg-head-row { height: var(--row-h); }
+.dg-canvas .dg-head-row .dg-cell {
+  height: var(--row-h);
+  line-height: calc(var(--row-h) - 1px);
+  padding: 0;
+}
+.dg-ch {
+  flex-direction: row;
+  align-items: stretch;
+  justify-content: center;
+  position: relative;
+  background: var(--grid-head);
+}
+.dg-ch .dg-letter {
+  display: block;
+  flex: 1 1 auto;
+  height: var(--row-h);
+  line-height: var(--row-h);
+  text-align: center;
+  border-radius: 0;
+  padding: 0;
+}
+/* THE SPACER for the columns scrolled off to the left. One element instead of
+   five hundred empty ones — the horizontal half of the virtualiser, which the
+   dataset path never needed because a dataset has as many columns as the file
+   has and this kind has 16,384. It always sits behind the sticky gutter, so it
+   carries no rule of its own; a border here would draw a line inside a cell. */
+.dg-pad {
+  border-right: 0;
+  border-bottom: 1px solid var(--grid-line);
+  padding: 0;
+}
+.dg-canvas .dg-head-row .dg-pad { border-bottom: 0; background: var(--grid-head); }
+
+/* ROW HEIGHT, dragged from the gutter's bottom edge — the counterpart to the
+   column grip, and the reason `CanvasSheet.rows` exists. Wider than it looks
+   (4px of grab for a 1px line) because a resize handle you have to hunt for is
+   a resize handle nobody finds. */
+.dg-rgrip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 5px;
+  cursor: row-resize;
+  z-index: 4;
+}
+.dg-rgrip:hover { background: var(--accent); opacity: 0.5; }
+.dg-canvas .dg-gutter { position: sticky; }
