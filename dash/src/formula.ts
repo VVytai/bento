@@ -70,9 +70,18 @@ function lex(src: string): Tok[] {
       out.push({ t: 'num', v: Number(src.slice(i, j)) }); i = j; continue
     }
     if (c === '"') {
+      // The doubled-quote escape was UNREACHABLE: the loop condition excluded
+      // a quote, so the branch inside that handled a doubled one could never
+      // run. It did not fail loudly either — a string holding an escaped quote
+      // evaluated to everything BEFORE it and threw the rest away, so a formula
+      // with a quoted phrase in it silently lost its text from that point on.
+      // The loop now runs to the end of the source and decides at the quote.
       let j = i + 1, s = ''
-      while (j < src.length && src[j] !== '"') {
-        if (src[j] === '"' && src[j + 1] === '"') { s += '"'; j += 2; continue }
+      while (j < src.length) {
+        if (src[j] === '"') {
+          if (src[j + 1] === '"') { s += '"'; j += 2; continue }
+          break
+        }
         s += src[j++]
       }
       out.push({ t: 'str', v: s }); i = j + 1; continue

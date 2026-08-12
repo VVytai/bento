@@ -473,6 +473,15 @@ jobs:
         # workbook fits at all.
         run: node scripts/test-dash-steps.ts
 
+      - name: dash SQL surface
+        # SQL compiles to Step[] and does not evaluate anything itself — the
+        # answer is a frame over the same columns, so it stays live rather than
+        # becoming a copy that is wrong the moment somebody edits a cell. The
+        # checks that matter are the refusals: a plain JOIN declares card:'one'
+        # so a non-unique key STOPS the pipeline instead of doubling every
+        # total, and an edit statement is refused because a query is a question.
+        run: node scripts/test-dash-sql.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default

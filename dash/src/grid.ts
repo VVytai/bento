@@ -29,7 +29,7 @@ import {
 } from './select.ts'
 import { buildOrder, type ColumnFilter } from './filter.ts'
 import { evaluateRules, type CellStyle } from './condfmt.ts'
-import { colToLetters, parseRef } from './a1.ts'
+import { colToLetters, formatRef, parseRef } from './a1.ts'
 import { t } from './i18n.ts'
 import { resizeColumn, autoFitWidth, hiddenSet, readFrozen } from './rowcol.ts'
 import {
@@ -245,29 +245,36 @@ const MIN_COL_W = 32
 const MIN_ROW_H = 14
 
 /**
- * The write op for a canvas sheet — cells and sizes, the three maps the kind
- * has.
+ * Column widths and row heights — `CanvasSheet.cols` and `.rows`.
  *
- * NOT IN `store.ts`'s `Patch` UNION YET: that file belongs to the model owner,
- * and this is the shape asked for. The cast in `canvasPatch` is the only seam
- * and comes out in one line the moment the union carries the op. `null` (never
- * `undefined`) removes a key, because this object is also the collab wire
- * format and `JSON.stringify` erases an undefined value — the delete would
- * reach every other replica as a no-op.
+ * NOT IN `store.ts`'s `Patch` UNION YET, which is why the cast exists: it is
+ * one line and comes out the moment the union carries the op. It is a SEPARATE
+ * op from `setCanvasCells` rather than two more fields on it, because the two
+ * differ in the one way that matters to an inverse: `cells` is required on the
+ * kind and always exists, while `cols`/`rows` are optional — so this op has to
+ * create a container on the first write and delete it with the last key, or an
+ * apply-then-undo leaves `"cols": {}` in the file for every other reader to
+ * diff. `null` removes a key, for the reason `setCanvasCells` gives.
  */
-export interface SetCanvasCells {
-  op: 'setCanvasCells'
+export interface SetCanvasSizes {
+  op: 'setCanvasSizes'
   sheet: string
-  cells?: Record<string, CanvasCell | null>
   cols?: Record<string, number | null>
   rows?: Record<string, number | null>
 }
 
-const canvasPatch = (p: SetCanvasCells): Patch => p as unknown as Patch
+const sizePatch = (p: SetCanvasSizes): Patch => p as unknown as Patch
 
-/** A cell's address. `A1`, `Z10000` — the key the document is written with. */
+/**
+ * A cell's address. `A1`, `Z10000` — the key the document is written with.
+ *
+ * Through `formatRef`, which is the ONLY place an address is minted: it answers
+ * `#REF!` for a position that cannot exist rather than spelling something
+ * plausible, and a key this file assembled by hand would be a second spelling
+ * to keep in step with a1.ts's.
+ */
 export const canvasKey = (row: number, col: number): string =>
-  `${colToLetters(col)}${row + 1}`
+  formatRef({ row, col, absRow: false, absCol: false })
 
 /** The inverse, tolerant of the `$A$1` a hand-edited file may hold. */
 export function canvasPos(key: string): { row: number; col: number } | null {
@@ -2007,16 +2014,16 @@ export class Grid {
     const s = this.canvas
     if (!s || this.store.readOnly) return
     const key = axis === 'col' ? colToLetters(i) : String(i + 1)
-    this.store.commit(canvasPatch(axis === 'col'
-      ? { op: 'setCanvasCells', sheet: s.id, cols: { [key]: px } }
-      : { op: 'setCanvasCells', sheet: s.id, rows: { [key]: px } }))
+    this.store.commit(sizePatch(axis === 'col'
+      ? { op: 'setCanvasSizes', sheet: s.id, cols: { [key]: px } }
+      : { op: 'setCanvasSizes', sheet: s.id, rows: { [key]: px } }))
   }
 
   /** Write cells into a canvas sheet. One patch, one undo step. */
   private writeCanvas(cells: Record<string, CanvasCell | null>, run?: string): void {
     const s = this.canvas
     if (!s || this.store.readOnly || !Object.keys(cells).length) return
-    const p = canvasPatch({ op: 'setCanvasCells', sheet: s.id, cells })
+    const p: Patch = { op: 'setCanvasCells', sheet: s.id, cells }
     if (run) this.store.runEdit(run, p)
     else this.store.commit(p)
   }

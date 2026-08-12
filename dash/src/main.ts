@@ -31,6 +31,7 @@ import {
 import { putRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
 import { mountAbout, openAbout, rememberVersion, checkAtLaunch } from './about.ts'
+import { runSql, sqlRows } from './sql.ts'
 import { mountPanels } from './panels.ts'
 import { installStory } from './story.ts'
 import { Dashboard } from './dashboard.ts'
@@ -905,6 +906,27 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
       }
     },
     comments: () => flatComments(store.doc),
+    /**
+     * Ask the workbook a question.
+     *
+     * Compiles to `Step[]` and runs them, so the answer is a FRAME over the
+     * same columns rather than a copy — and `steps` is the pipeline you could
+     * paste into a sheet to make the answer live. That is the whole reason this
+     * is a compiler and not an embedded database: a query result that is a copy
+     * is wrong the moment anybody edits a cell.
+     */
+    sql: (text: string, opts?: { rows?: number }) => {
+      const r = runSql(text, { doc: store.doc })
+      showFindings(findingsEl, r.issues.filter((i) => i.severity === 'fatal') as never)
+      return {
+        ok: r.ok,
+        issues: r.issues,
+        steps: r.compiled.frames.map((f) => ({ name: f.name, from: f.from, steps: f.steps, select: f.select })),
+        columns: r.frame ? r.frame.columns.map((c) => ({ id: c.id, name: c.name })) : [],
+        n: r.frame ? r.frame.n : 0,
+        rows: r.frame ? sqlRows(r.frame, opts?.rows ?? 100) : [],
+      }
+    },
     // Matches slides: 'x-pseudo' audits unswept strings without a reload, and a
     // harness can read the locale it is about to be judged in.
     i18n: i18nApi,
