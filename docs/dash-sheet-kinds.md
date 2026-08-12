@@ -50,30 +50,50 @@ More than expected. This is not a from-scratch feature.
 - **`a1.ts` already lexes `Sheet1!A1` and `Table1[Col]`** as qualified names.
 - The tab strip already renders non-table kinds with a chip and a tooltip.
 
-## Model shape
+## Model shape — it is already in the format
 
-`kind: 'table'` stays the wire word for a dataset — renaming it would break
-every file that exists, and the UI label is a display concern (the same rule
-`select()` follows: values stay model words). The new kind is `kind: 'grid'`.
+**Correction to the first draft of this document, which proposed a new
+`kind: 'grid'`.** It is not needed. `CanvasSheet` already IS the spreadsheet
+kind, has been since commit one, and says so in its own header:
+
+> The classic sparse A1 map — the right tool for an invoice or a scratch pad,
+> the wrong one for 100k rows. In the format from commit one, because an escape
+> hatch added later is permanently second-class (PLATFORM §3).
+
+That decision was made before this conversation and was right. It carries
+exactly what a cell-typed sheet needs:
 
 ```ts
-export interface GridSheet {
-  id: string
-  name: string
-  kind: 'grid'
-  /** sparse — only cells somebody touched. `cellKey(row, col)` → value/formula */
-  cells: Record<string, GridCell>
-  /** how far the user has scrolled the frontier out, so an empty sheet is small */
-  extent?: { rows: number; cols: number }
-  /** per-cell display format, and column widths — NOT types */
-  widths?: Record<number, number>
-  comments?: Comment[]
+export interface CanvasSheet {
+  kind: 'canvas'
+  cells: Record<string, CanvasCell>   // sparse
+  cols?: Record<string, number>       // column widths
+  rows?: Record<string, number>       // row heights
+}
+export interface CanvasCell {
+  v?: unknown; f?: string             // value, formula
+  format?: string; note?: string
+  color?: string; bg?: string; bold?: boolean; align?: string
 }
 ```
 
-A cell's type is a property of its **value** (number, text, date, bool),
-resolved at read time, plus an optional per-cell format string. There is no
-column type, because on this kind of sheet there is no column.
+Note what `CanvasCell` already models: **per-cell colour, background, bold and
+alignment.** `docs/dash-release.md` lists "no cell formatting at all" as a gap —
+it is a gap in the dataset kind, and the format has always had the answer on
+this one.
+
+`kind: 'table'` stays the dataset. Adding a third kind when the second was put
+there for this purpose would leave two half-built spreadsheet kinds, which is
+worse than the problem.
+
+**What is missing is the implementation.** The tab strip greys a canvas sheet
+with "not editable in this build"; nothing renders or edits one. `validate.ts`,
+`preview.ts` and `pivot.ts` already branch on the kind, so the seams exist.
+
+**UI wording.** "Canvas" is the wire word and does not change (PLATFORM §3).
+The label a reader sees is **Spreadsheet**, the same way `select()` localises
+display labels while values stay model words. The tab chip stops saying
+"Canvas".
 
 ## The bridge, which is the actual product
 

@@ -2178,3 +2178,18 @@ rendering back into a number.
 Hits walk the VIEW VECTOR, so a find never jumps to a row the filter is hiding,
 and Replace patches are keyed by RID so a filter cannot re-target a write.
 
+
+### Correction, same day: the spreadsheet kind already existed
+
+The entry above proposed `kind: 'grid'`. Wrong — `CanvasSheet` is the
+spreadsheet kind and has been in the format since commit one, deliberately:
+"the classic sparse A1 map… in the format from commit one, because an escape
+hatch added later is permanently second-class (PLATFORM §3)". It carries the
+sparse cell map, per-cell value and formula, column widths and row heights, and
+per-cell colour/background/bold/alignment — which also answers the "no cell
+formatting at all" gap for that kind.
+
+So the decision stands and the model change is nil: `table` is the dataset,
+`canvas` is the spreadsheet, and the work is implementation, not format. Adding
+a third kind would have left two half-built spreadsheet kinds. "Canvas" stays
+the wire word; the label a reader sees is "Spreadsheet".
