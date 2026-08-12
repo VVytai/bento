@@ -454,6 +454,16 @@ jobs:
         # be a row the filter is hiding) and the replace refusals.
         run: node scripts/test-dash-find.ts
 
+      - name: dash spreadsheet-cells rig
+        # The setCanvasCells patch, which writes the SPREADSHEET kind's sparse
+        # A1 map. Sparseness is not a size optimisation: a cleared cell has to
+        # be GONE, or an undone sheet is unequal to a fresh one and two
+        # replicas disagree about whether a cell exists. Also pins the
+        # collaboration fallback — the CRDT has never heard of this op, and
+        # localOne's default arm ships a whole-state snapshot rather than
+        # dropping it.
+        run: node scripts/test-dash-canvascells.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default

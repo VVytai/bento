@@ -29,7 +29,7 @@
 // means rewriting the store.
 
 import { applySheetProps } from './rowcol.ts'
-import type { CellOverride, Comment, View, Column, ColumnData, DashDoc, Measure, Sheet, Step, TableSheet } from './model.ts'
+import type { CellOverride, Comment, View, Column, ColumnData, DashDoc, Measure, Sheet, Step, TableSheet, CanvasCell, CanvasSheet } from './model.ts'
 
 type Listener = () => void
 export type StoreEvent = 'doc' | 'view' | 'selection'
@@ -168,6 +168,20 @@ export type Patch =
    */
   | { op: 'setComment'; sheet: string; id: string; comment?: Comment; at?: number }
   /**
+   * Cells on a SPREADSHEET sheet (`kind: 'canvas'` — the sparse A1 map that has
+   * been in the format since commit one).
+   *
+   * Keyed by `cellformula.cellKey(row, col)` = `` `${col},${row}` ``, both
+   * 0-based. One op carries MANY cells because a paste, a fill and a delete are
+   * each one edit to a reader and must be one undo step.
+   *
+   * A `null` or `undefined` entry REMOVES the cell rather than storing an empty
+   * object — a sparse sheet whose cleared cells linger as `{}` is neither sparse
+   * nor equal to the same sheet reached another way. `null` is the spelling that
+   * survives JSON, which is what a collaborator receives.
+   */
+  | { op: 'setCanvasCells'; sheet: string; cells: Record<string, CanvasCell | null> }
+  /**
    * RESERVED. Both need the transform engine, which does not exist yet. They
    * are in the union now because the discriminant cannot be retrofitted once
    * patches are also CRDT ops. `applyPatch` refuses them loudly rather than
@@ -301,6 +315,12 @@ const table = (doc: DashDoc, id: string): TableSheet => {
   return s
 }
 
+const canvas = (doc: DashDoc, id: string): CanvasSheet => {
+  const s = doc.sheets.find((x: Sheet) => x.id === id)
+  if (!s || s.kind !== 'canvas') throw new Error(`no spreadsheet sheet ${id}`)
+  return s
+}
+
 /**
  * Apply one patch, and return the patch that undoes it.
  *
@@ -330,6 +350,24 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       }
     }
 
+    case 'setCanvasCells': {
+      const sheet = canvas(doc, p.sheet)
+      // No `dropEmpty` twin of `setOverrides`: `cells` is REQUIRED on a
+      // CanvasSheet and `parseDoc` always materialises it, so there is no
+      // container to leave behind and no divergence to create.
+      const was: Record<string, CanvasCell | null> = {}
+      for (const [k, v] of Object.entries(p.cells)) {
+        // the PREVIOUS value, or null for "there was nothing here" — so the
+        // inverse of creating a cell REMOVES it rather than blanking it
+        was[k] = sheet.cells[k] ?? null
+        if (v === undefined || v === null) delete sheet.cells[k]
+        else sheet.cells[k] = v
+      }
+      return {
+        inverse: { op: 'setCanvasCells', sheet: p.sheet, cells: was },
+        touched: { sheet: p.sheet },
+      }
+    }
     case 'setOverrides': {
       const sheet = table(doc, p.sheet)
       const existed = sheet.cells !== undefined
