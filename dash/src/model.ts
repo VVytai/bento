@@ -176,6 +176,17 @@ export type Step =
   | { op: 'sort'; by: string; dir: 'asc' | 'desc' }
   | { op: 'group'; by: string[]; agg: Array<{ fn: string; of?: string; as: string }> }
   | { op: 'join'; with: string; on: [string, string]; card: 'one' | 'many'; fields: string[] }
+  /** Top-N. Typed here rather than riding the open fallback, because the SQL
+   *  surface writes these and an untyped step is one nobody can refactor. */
+  | { op: 'limit'; n: number; offset?: number }
+  /**
+   * Stack another sheet's rows onto this one. Columns match by NAME, never by
+   * position: SQL unions positionally because a result set has no stable column
+   * identity, and dash's columns do — so positional matching would file amounts
+   * under dates the moment two sheets carry the same columns in a different
+   * order.
+   */
+  | { op: 'union'; with: string | string[]; all?: boolean }
   /** Hand corrections to a DERIVED sheet, keyed by a business key rather than a
    *  row position, so a re-import cannot re-apply one to the wrong row. A patch
    *  whose key vanished is a `stale-patch` finding, not a disappearance. */

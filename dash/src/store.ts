@@ -29,6 +29,7 @@
 // means rewriting the store.
 
 import { applySheetProps } from './rowcol.ts'
+import { PROVENANCE_OPS } from './steps.ts'
 import type { CellOverride, Comment, View, Column, ColumnData, DashDoc, Measure, Sheet, Step, TableSheet, CanvasCell, CanvasSheet } from './model.ts'
 
 type Listener = () => void
@@ -350,6 +351,24 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       }
     }
 
+    case 'applySteps': {
+      const sheet = table(doc, p.sheet)
+      // The leading PROVENANCE ops are the attested head and are never re-run
+      // (model.ts). `applySteps` owns the RE-EXECUTABLE tail and nothing above
+      // it, so the inverse is bounded by the STEPS rather than by the data they
+      // produce — a whole-sheet inverse would put document-sized snapshots into
+      // a byte-capped history.
+      let cut = sheet.steps.findIndex(
+        (s) => !PROVENANCE_OPS.has((s as { op?: string }).op ?? ''),
+      )
+      if (cut < 0) cut = sheet.steps.length
+      const was = sheet.steps.slice(cut)
+      sheet.steps = [...sheet.steps.slice(0, cut), ...p.steps]
+      return {
+        inverse: { op: 'applySteps', sheet: p.sheet, steps: was },
+        touched: { sheet: p.sheet, structural: true },
+      }
+    }
     case 'setCanvasCells': {
       const sheet = canvas(doc, p.sheet)
       // No `dropEmpty` twin of `setOverrides`: `cells` is REQUIRED on a

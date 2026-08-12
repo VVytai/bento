@@ -464,6 +464,15 @@ jobs:
         # dropping it.
         run: node scripts/test-dash-canvascells.ts
 
+      - name: dash step engine
+        # The relational pipeline the FORMAT has described since commit one and
+        # nothing executed. Includes a performance floor at 100k rows and a
+        # HELD-HEAP comparison against a row-shaped pipeline — wall clock does
+        # not discriminate between the two designs at this size, memory does
+        # (2.5 MB against 16.8 MB), and memory is what decides whether a
+        # workbook fits at all.
+        run: node scripts/test-dash-steps.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default
