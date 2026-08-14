@@ -1200,16 +1200,29 @@ html, body {
 
 /* ROW HEIGHT, dragged from the gutter's bottom edge — the counterpart to the
    column grip, and the reason `CanvasSheet.rows` exists. Wider than it looks
-   (4px of grab for a 1px line) because a resize handle you have to hunt for is
-   a resize handle nobody finds. */
+   (5px of grab for a 1px line) because a resize handle you have to hunt for is
+   a resize handle nobody finds.
+
+   WHOLLY INSIDE THE CELL, which is not a detail. `.dg-cell` is
+   `overflow: hidden`, so any part of a handle that hangs over the edge is
+   CLIPPED — it still measures in `getBoundingClientRect`, it still draws
+   nothing, and it does not hit-test. Straddling the boundary therefore makes
+   half the grab band dead while the handle looks symmetrical: measured on the
+   column grip, which sits at `right: -3px`, the outer 3px of a 7px handle
+   answer `elementFromPoint` with the CELL. A grip you have to aim at is worse
+   than a thinner one you can hit. */
 .dg-rgrip {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: -2px;
+  bottom: 0;
   height: 5px;
   cursor: row-resize;
   z-index: 4;
 }
 .dg-rgrip:hover { background: var(--accent); opacity: 0.5; }
+/* …and the same correction for the column grip, scoped to this kind. The
+   dataset header's grip shares a row with a filter caret and has been QA'd
+   against a real mouse where it stands; this one has the strip to itself. */
+.dg-canvas .dg-grip { right: 0; width: 6px; }
 .dg-canvas .dg-gutter { position: sticky; }

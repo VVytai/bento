@@ -190,6 +190,24 @@ export type Patch =
    */
   | { op: 'setCanvasCells'; sheet: string; cells: Record<string, CanvasCell | null> }
   /**
+   * Column widths and row heights on a SPREADSHEET sheet.
+   *
+   * `cols` is keyed by column LETTER and `rows` by the 1-based row number — the
+   * two halves of an A1 address, so `"C": 180` reads as the column a reader can
+   * see. A `null` removes the key, for the reason `setCanvasCells` gives.
+   *
+   * A SEPARATE OP from `setCanvasCells` rather than two more fields on it,
+   * because the containers differ in the one way an inverse cares about:
+   * `cells` is required on the kind and always exists, while `cols`/`rows` are
+   * optional — so this op creates a container on the first write and deletes it
+   * with the last key, or an apply-then-undo leaves `"cols": {}` in the file
+   * for every other reader to diff.
+   */
+  | {
+      op: 'setCanvasSizes'; sheet: string
+      cols?: Record<string, number | null>; rows?: Record<string, number | null>
+    }
+  /**
    * RESERVED. Both need the transform engine, which does not exist yet. They
    * are in the union now because the discriminant cannot be retrofitted once
    * patches are also CRDT ops. `applyPatch` refuses them loudly rather than
@@ -391,6 +409,39 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       }
       return {
         inverse: { op: 'setCanvasCells', sheet: p.sheet, cells: was },
+        touched: { sheet: p.sheet },
+      }
+    }
+
+    case 'setCanvasSizes': {
+      const sheet = canvas(doc, p.sheet)
+      const axis = (
+        which: 'cols' | 'rows', want: Record<string, number | null> | undefined,
+      ): Record<string, number | null> | undefined => {
+        if (!want) return undefined
+        const bag = (sheet[which] ??= {})
+        const was: Record<string, number | null> = {}
+        for (const [k, v] of Object.entries(want)) {
+          was[k] = bag[k] ?? null
+          if (v === undefined || v === null) delete bag[k]
+          else bag[k] = v
+        }
+        // THE CONTAINER GOES WITH ITS LAST KEY, in both directions. `cols` and
+        // `rows` are OPTIONAL on the kind, so absent and `{}` say the same
+        // thing — and if only the forward patch dropped it, undoing the FIRST
+        // width ever set would leave `"cols": {}` behind, which is a file that
+        // differs from the one the edit started with and a diff every other
+        // reader has to explain.
+        if (!Object.keys(bag).length) delete sheet[which]
+        return was
+      }
+      const cols = axis('cols', p.cols)
+      const rows = axis('rows', p.rows)
+      return {
+        inverse: {
+          op: 'setCanvasSizes', sheet: p.sheet,
+          ...(cols ? { cols } : {}), ...(rows ? { rows } : {}),
+        },
         touched: { sheet: p.sheet },
       }
     }

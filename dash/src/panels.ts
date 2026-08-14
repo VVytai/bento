@@ -324,9 +324,19 @@ export function mountPanels(host: PanelsHost): Panels {
     right.textContent = ''
     const sheet = currentSheet()
     if (!sheet) {
+      // A SPREADSHEET IS NOT A MISSING TABLE. `currentSheet()` returns only
+      // table sheets, so this arm caught the spreadsheet kind too and told the
+      // reader "No table sheet is open" — which reads as an error about a sheet
+      // they are looking at and editing. Every control in this panel is a
+      // COLUMN property (type, format, width, total) and a spreadsheet has no
+      // columns, so there is genuinely nothing here for it; saying that plainly
+      // is the whole fix.
+      const shown = store.doc.sheets.find((x) => x.id === grid.showingId())
       const p = document.createElement('p')
       p.className = 'dp-empty'
-      p.textContent = t('No table sheet is open.')
+      p.textContent = shown?.kind === 'canvas'
+        ? t('A spreadsheet types each cell on its own, so there are no column properties to set here. Formatting follows the cell.')
+        : t('No table sheet is open.')
       right.appendChild(p)
       return
     }

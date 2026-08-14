@@ -33,8 +33,8 @@ import { colToLetters, formatRef, parseRef } from './a1.ts'
 import { t } from './i18n.ts'
 import { resizeColumn, autoFitWidth, hiddenSet, readFrozen } from './rowcol.ts'
 import {
-  cellKey, isFormula, recalcCells, translateCellFormula, shiftSheetFormulas,
-  type CellSource,
+  cellKey, isFormula, recalcCells, recalcWorkbook, translateCellFormula,
+  shiftSheetFormulas, workbookSources, type CellSource,
 } from './cellformula.ts'
 import { mountFind, type FindUI, type Hit } from './find.ts'
 
@@ -245,27 +245,6 @@ const MIN_COL_W = 32
 const MIN_ROW_H = 14
 
 /**
- * Column widths and row heights — `CanvasSheet.cols` and `.rows`.
- *
- * NOT IN `store.ts`'s `Patch` UNION YET, which is why the cast exists: it is
- * one line and comes out the moment the union carries the op. It is a SEPARATE
- * op from `setCanvasCells` rather than two more fields on it, because the two
- * differ in the one way that matters to an inverse: `cells` is required on the
- * kind and always exists, while `cols`/`rows` are optional — so this op has to
- * create a container on the first write and delete it with the last key, or an
- * apply-then-undo leaves `"cols": {}` in the file for every other reader to
- * diff. `null` removes a key, for the reason `setCanvasCells` gives.
- */
-export interface SetCanvasSizes {
-  op: 'setCanvasSizes'
-  sheet: string
-  cols?: Record<string, number | null>
-  rows?: Record<string, number | null>
-}
-
-const sizePatch = (p: SetCanvasSizes): Patch => p as unknown as Patch
-
-/**
  * A cell's address. `A1`, `Z10000` — the key the document is written with.
  *
  * Through `formatRef`, which is the ONLY place an address is minted: it answers
@@ -357,38 +336,6 @@ export function canvasCellEdit(prev: CanvasCell | undefined, text: string): Canv
 /** Clearing a cell — the same rule, with no text to store. */
 export const canvasCellClear = (prev: CanvasCell | undefined): CanvasCell | null =>
   canvasCellEdit(prev, '')
-
-/**
- * The sheet as a plain grid of positions, which is all cellformula.ts wants.
- *
- * BOUNDED BY THE USED RANGE, not by the frontier: `recalcCells` scans
- * rows × cols looking for formulas, so handing it the ruled area would scan a
- * million empty rows on every recalculation. A reference past the used range
- * reads as empty, which is what `evalCell` does with an out-of-range ref
- * anyway ("A50 on a ten-row sheet is a blank cell in every spreadsheet ever
- * written").
- *
- * KNOWN COST: the scan is O(usedRows × usedCols) map lookups, so a lone cell
- * typed at A1000000 makes every recalculation proportional to its address even
- * though the sheet holds one cell. Measured in scripts/test-dash-canvas.ts. The
- * fix is a sparse pass in cellformula.ts — that file's `recalcCells` is written
- * for a dense grid — and it is not this file's to make.
- */
-export function canvasSource(sheet: CanvasSheet): CellSource {
-  const used = canvasUsed(sheet)
-  return {
-    rows: used.rows,
-    cols: used.cols,
-    formulaAt: (r, c) => {
-      const f = sheet.cells[canvasKey(r, c)]?.f
-      return typeof f === 'string' && f !== '' ? f : undefined
-    },
-    valueAt: (r, c) => {
-      const cell = sheet.cells[canvasKey(r, c)]
-      return (cell && 'v' in cell ? cell.v : null) as never
-    },
-  }
-}
 
 /** Does this sheet hold any formula at all? Skips the recalculation if not. */
 export function canvasHasFormulas(sheet: CanvasSheet): boolean {
@@ -492,7 +439,13 @@ export class Grid {
       // A canvas sheet has no order vector and no columns to count — its extent
       // comes out of its own keys, and `paintCanvas` sizes the selection from
       // it. All this listener owes it is "the cells changed, look again".
-      if (this.canvas) { this.cvDirty = true; this.paint(); return }
+      // …and ANNOUNCE. The formula bar is written only from a selection change,
+      // so a document swapped underneath the grid (an agent's `loadDoc`, a
+      // recovery, an undo of the edit the bar is describing) left the bar
+      // holding the OLD sheet's cell — observed reading "North" over an empty
+      // spreadsheet. The value under the cursor is a fact about the document,
+      // so it is re-read whenever the document changes.
+      if (this.canvas) { this.cvDirty = true; this.paint(); this.announce(); return }
       // A structural edit invalidates the order VECTOR: it holds row indices,
       // and insert/delete renumber the rows underneath them. Leaving it alone
       // left the grid drawing blanks and rows in an order matching nothing.
@@ -552,6 +505,11 @@ export class Grid {
   onSheetChange?: (id: string) => void
 
   /** Point the grid at a different sheet — an import adds one and shows it. */
+  /** The id of the sheet on screen, whatever its kind — `sheet` narrows to a
+   *  table and throws on a spreadsheet, which is not what a caller asking
+   *  "which tab am I on" wants. */
+  showingId(): string { return this.sheetId }
+
   setSheet(id: string): void {
     this.sheetId = id
     this.sort = null
@@ -651,6 +609,27 @@ export class Grid {
     this.head = this.host.querySelector('.dg-head-row')!
     this.foot = this.host.querySelector('.dg-foot-row')!
     this.scroller.addEventListener('scroll', () => this.paint(), { passive: true })
+    // A WINDOW THAT CHANGES SIZE IS A DIFFERENT WINDOW, and until this the grid
+    // only ever repainted on a scroll, an edit or a sheet switch. Two ways to
+    // see it, and the second is why this is not a nicety:
+    //   • resize the browser taller and the new space stays blank until you
+    //     scroll — the virtualiser painted for the old height;
+    //   • paint while the scroller measures ZERO (a tab that is not
+    //     compositing, a pane laid out after boot) and a SPREADSHEET comes out
+    //     a stub, because on that kind the viewport is one of the terms that
+    //     decides how far the sheet is ruled. Measured exactly that: nine rows
+    //     and one column, on a sheet with a cell at Z2000.
+    // Guarded on the measurement actually changing, so this cannot become a
+    // repaint loop with a layout that paint() itself provokes.
+    if (typeof ResizeObserver !== 'undefined') {
+      let seen = ''
+      new ResizeObserver(() => {
+        const now = `${this.scroller.clientWidth}x${this.scroller.clientHeight}`
+        if (now === seen) return
+        seen = now
+        this.paint()
+      }).observe(this.scroller)
+    }
     this.paint()
   }
 
@@ -856,6 +835,11 @@ export class Grid {
   paint(): void {
     const cv = this.canvas
     if (cv) { this.paintCanvas(cv); return }
+    // …and put back what the spreadsheet path borrowed. A grid that had shown a
+    // canvas kept its 16,000-column width and its single-line header CSS the
+    // moment it was pointed back at a dataset.
+    this.host.classList.remove('dg-canvas')
+    this.table.style.width = ''
     const s = this.sheet
     const all = rowCount(s)
     if (s.columns.some((c) => c.formula)) {
@@ -1619,17 +1603,34 @@ export class Grid {
   // disagreeing about what Tab does — and diverges exactly where the kinds do:
   // no columns, no rids, no order vector, no end.
 
-  /** Recompute what only a document change can alter: the used range and the formulas. */
+  /**
+   * Recompute what only a document change can alter: the used range and the
+   * formulas.
+   *
+   * THROUGH THE WORKBOOK, not through this sheet alone. `recalcWorkbook` is
+   * what makes `Sheet1!A1` resolve, and a spreadsheet that cannot reach another
+   * sheet is half a spreadsheet (docs/dash-sheet-kinds.md says so in as many
+   * words). `workbookSources` assembles every sheet — including this one, as
+   * the SPARSE `canvasCellSource`, which walks the cell map once and hands over
+   * its formulas rather than being scanned rows × cols for them.
+   *
+   * A table sheet's COLUMN formulas are not supplied, so a cross-sheet
+   * reference into a calculated column reads blank rather than its number.
+   * That is a gap in this call site, not in the engine: `workbookSources` takes
+   * a `computed` callback, and it is eager per sheet, so filling it means
+   * running formula.ts's `recalc` over every table sheet in the workbook on
+   * every keystroke. It wants a cache that does not exist yet.
+   *
+   * CACHED, because `paint` runs on every scroll event and a recalculation does
+   * not depend on where the window is.
+   */
   private cvRefresh(s: CanvasSheet): void {
     if (!this.cvDirty) return
     this.cvDirty = false
     this.cvUsed = canvasUsed(s)
-    // Cached because `paint` runs on every scroll event and a recalculation
-    // does not depend on where the window is. The table path recomputes in
-    // paint(); here the scan is over the used RANGE rather than over a column
-    // count, so a wide sheet would pay it forty times a second.
     this.cellValues = canvasHasFormulas(s)
-      ? recalcCells(canvasSource(s), this.store.doc.modified).values
+      ? recalcWorkbook(workbookSources(this.store.doc), this.store.doc.modified)
+        .get(s.id)?.values ?? EMPTY_CELLS
       : EMPTY_CELLS
   }
 
@@ -1770,7 +1771,14 @@ export class Grid {
     this.sel.resize(ext.rows, ext.cols)
     const rs = this.rowSizes(s, ext.rows)
     const lefts = this.colLefts(s, ext.cols)
+    // BOTH AXES have to be declared, and only one of them was. The sizer's
+    // HEIGHT is what gives the scrollbar something to run down; without a WIDTH
+    // the scroller's extent is whatever the painted window happens to measure,
+    // so scrolling right stopped four columns past the edge of the screen and
+    // the sheet appeared to end at K. The dataset path never needed it — every
+    // column it has is in the DOM — and that is exactly why it was missing.
     this.table.style.height = `${rs.total}px`
+    this.table.style.width = `${lefts[ext.cols]}px`
 
     // The window, both ways. Vertically because a sheet is a million rows deep;
     // HORIZONTALLY too, which the dataset path never needed — it has as many
@@ -2014,9 +2022,9 @@ export class Grid {
     const s = this.canvas
     if (!s || this.store.readOnly) return
     const key = axis === 'col' ? colToLetters(i) : String(i + 1)
-    this.store.commit(sizePatch(axis === 'col'
+    this.store.commit(axis === 'col'
       ? { op: 'setCanvasSizes', sheet: s.id, cols: { [key]: px } }
-      : { op: 'setCanvasSizes', sheet: s.id, rows: { [key]: px } }))
+      : { op: 'setCanvasSizes', sheet: s.id, rows: { [key]: px } })
   }
 
   /** Write cells into a canvas sheet. One patch, one undo step. */

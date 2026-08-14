@@ -40,7 +40,7 @@
 import './tabs.css'
 import { t } from './i18n.ts'
 import { lsGet, lsSet } from '../../kernel/src/storage.ts'
-import type { Column, DashDoc, Sheet, TableSheet } from './model.ts'
+import type { Column, DashDoc, Sheet, TableSheet, CanvasSheet } from './model.ts'
 import type { Patch, Store } from './store.ts'
 import type { Grid } from './grid.ts'
 import type { SetSheetProps } from './rowcol.ts'
@@ -55,6 +55,22 @@ const DRAG_SLOP = 4
 const NEW_ROWS = 20
 
 export const isTable = (s: { kind?: unknown }): s is TableSheet => s.kind === 'table'
+
+/**
+ * Can the grid SHOW this sheet?
+ *
+ * Distinct from `isTable`, and the distinction is the whole of the two-kinds
+ * design: `isTable` answers "does this have columns and rids" — which is what
+ * a row count, a chart binding or a filter needs — while this answers "does
+ * clicking the tab do anything". A spreadsheet (`canvas`) has neither columns
+ * nor rids and opens perfectly well.
+ *
+ * Every gate that used `isTable` to mean "openable" greyed the spreadsheet kind
+ * out, which was correct while nothing could render one and became the reason
+ * the kind looked unimplemented after it was.
+ */
+export const isOpenable = (s: { kind?: unknown }): boolean =>
+  s.kind === 'table' || s.kind === 'canvas'
 
 const rowsOf = (s: TableSheet): number => s.rids.reduce((n, [, c]) => n + c, 0)
 
@@ -112,6 +128,18 @@ export function mintSheetName(doc: DashDoc, base: string): string {
  * shorter than the sheet is malformed to every OTHER reader of the JSON even
  * though it reads correctly inside this build (rowcol.ts `fitToRows`).
  */
+/**
+ * An empty SPREADSHEET sheet — cells typed one by one, no columns, no rids.
+ *
+ * `cells` is empty and stays empty until somebody types: the kind is sparse, so
+ * a new sheet costs its name. There is no `steps` provenance record because
+ * there is no pipeline to record — a spreadsheet is not derived from anything,
+ * which is exactly the difference the two kinds exist to express.
+ */
+export function blankSpreadsheet(id: string, name: string): CanvasSheet {
+  return { id, name, kind: 'canvas', cells: {} }
+}
+
 export function blankSheet(id: string, name: string, at: string): TableSheet {
   const cols: Column[] = ['A', 'B', 'C'].map((letter, i) => ({
     id: `${id}-c${i + 1}`, name: `${t('Column')} ${letter}`, type: 'text', w: 130,
@@ -230,8 +258,8 @@ export function sheetAfterDelete(doc: DashDoc, deleted: string, showing: string)
   if (showing !== deleted) return showing
   const at = doc.sheets.findIndex((s) => s.id === deleted)
   if (at < 0) return showing
-  for (let i = at + 1; i < doc.sheets.length; i++) if (isTable(doc.sheets[i])) return doc.sheets[i].id
-  for (let i = at - 1; i >= 0; i--) if (isTable(doc.sheets[i])) return doc.sheets[i].id
+  for (let i = at + 1; i < doc.sheets.length; i++) if (isOpenable(doc.sheets[i])) return doc.sheets[i].id
+  for (let i = at - 1; i >= 0; i--) if (isOpenable(doc.sheets[i])) return doc.sheets[i].id
   return null
 }
 
@@ -247,7 +275,7 @@ export function deleteSheetPlan(
 ): { patch: Patch; show: string | null } | { refuse: string } {
   const sheet = doc.sheets.find((s) => s.id === id)
   if (!sheet) return { refuse: t('That sheet is not in this workbook.') }
-  if (isTable(sheet) && doc.sheets.filter(isTable).length < 2) {
+  if (isOpenable(sheet) && doc.sheets.filter(isOpenable).length < 2) {
     return { refuse: t('A workbook needs at least one sheet.') }
   }
   return {
@@ -268,7 +296,7 @@ export function stepSheet(doc: DashDoc, from: string, dir: -1 | 1): string | nul
   const at = doc.sheets.findIndex((s) => s.id === from)
   if (at < 0) return null
   for (let i = at + dir; i >= 0 && i < doc.sheets.length; i += dir) {
-    if (isTable(doc.sheets[i])) return doc.sheets[i].id
+    if (isOpenable(doc.sheets[i])) return doc.sheets[i].id
   }
   return null
 }
@@ -279,7 +307,10 @@ export function stepSheet(doc: DashDoc, from: string, dir: -1 | 1): string | nul
  *  a vague one. */
 export function describeKind(kind: string): { chip: string; why: string } {
   if (kind === 'pivot') return { chip: t('Pivot'), why: t('pivot table — open it from ＋ Pivot') }
-  if (kind === 'canvas') return { chip: t('Canvas'), why: t('canvas sheet — not editable in this build') }
+  // "Canvas" is the WIRE word and does not change (PLATFORM §3). What a reader
+  // sees is "Spreadsheet", the same way select() localises display labels while
+  // values stay model words.
+  if (kind === 'canvas') return { chip: t('Spreadsheet'), why: t('spreadsheet — cells are typed one by one, and it has no columns') }
   return { chip: kind, why: t('{kind} sheet — not editable in this build').replace('{kind}', kind) }
 }
 
@@ -394,7 +425,7 @@ export function mountTabs(host: TabsHost): Tabs {
     label.textContent = sheet.name || t('(untitled sheet)')
     el.appendChild(label)
 
-    if (!isTable(sheet)) {
+    if (!isOpenable(sheet)) {
       // HONEST, NOT HIDDEN. The sheet is really in the file; a tab that is
       // missing reads as a sheet that was deleted. The chip says what it is at
       // a glance and the tooltip says why it will not open.
@@ -405,8 +436,17 @@ export function mountTabs(host: TabsHost): Tabs {
       badge.className = 'dx-tab-kind'
       badge.textContent = chip
       el.appendChild(badge)
-    } else {
+    } else if (isTable(sheet)) {
       el.title = `${sheet.name} — ${rowsOf(sheet)} × ${sheet.columns.length}`
+    } else {
+      // A spreadsheet has no row or column COUNT to report — it is sparse and
+      // unbounded, so the only honest number is how many cells hold something.
+      const n = Object.keys((sheet as CanvasSheet).cells ?? {}).length
+      el.title = `${sheet.name} — ${t('spreadsheet, {n} cell(s) used').replace('{n}', String(n))}`
+      const badge = document.createElement('span')
+      badge.className = 'dx-tab-kind'
+      badge.textContent = describeKind('canvas').chip
+      el.appendChild(badge)
     }
     return el
   }
@@ -453,7 +493,7 @@ export function mountTabs(host: TabsHost): Tabs {
     // A tab this build cannot open explains itself rather than doing nothing:
     // the menu's first line is what the sheet IS, and the operations that DO
     // work on it (duplicate, delete, move) are right there under it.
-    if (!isTable(sheet)) { openMenu(el, sheet); return }
+    if (!isOpenable(sheet)) { openMenu(el, sheet); return }
     if (sheet.id === showing()) return
     grid.setSheet(sheet.id)
   })
@@ -565,7 +605,7 @@ export function mountTabs(host: TabsHost): Tabs {
       // move a sheet you cannot see, and the strip has no reason to scroll the
       // tab you just dropped back into view.
       const moved = store.doc.sheets.find((s) => s.id === id)
-      if (moved && isTable(moved) && id !== showing()) grid.setSheet(id)
+      if (moved && isOpenable(moved) && id !== showing()) grid.setSheet(id)
       refresh(true)
     }
     window.addEventListener('mousemove', move)
@@ -651,7 +691,7 @@ export function mountTabs(host: TabsHost): Tabs {
       const r = duplicateSheetPatches(store.doc, sheet.id)
       if (!r) return
       commit(r.patches)
-      if (isTable(r.sheet)) grid.setSheet(r.id)
+      if (isOpenable(r.sheet)) grid.setSheet(r.id)
       refresh(true)
     })
     sep(menu)
@@ -689,16 +729,42 @@ export function mountTabs(host: TabsHost): Tabs {
     refresh(true)
   }
 
-  addBtn.addEventListener('click', () => {
+  /** Make a sheet of either kind and show it. */
+  const addSheetOf = (kind: 'table' | 'canvas'): void => {
     if (ro()) return
     const doc = store.doc
     const id = mintSheetId(doc)
-    commit({
-      op: 'setSheet', id,
-      sheet: blankSheet(id, mintSheetName(doc, t('Sheet')), new Date().toISOString()),
-    })
+    const sheet = kind === 'canvas'
+      ? blankSpreadsheet(id, mintSheetName(doc, t('Spreadsheet')))
+      : blankSheet(id, mintSheetName(doc, t('Sheet')), new Date().toISOString())
+    commit({ op: 'setSheet', id, sheet })
     grid.setSheet(id)
     refresh(true)
+  }
+
+  // THE TWO KINDS ARE OFFERED AT THE POINT OF CREATION, because that is the only
+  // moment the choice is cheap — and a menu of two is the plainest way to teach
+  // that the difference exists at all. A plain click still makes a dataset: it
+  // is what the app was, and what an import produces.
+  addBtn.addEventListener('click', () => {
+    if (ro()) return
+    const menu = popover(addBtn)
+    const row = (label: string, why: string, kind: 'table' | 'canvas'): void => {
+      const b = document.createElement('button')
+      b.className = 'dx-tab-menu-row'
+      b.innerHTML = ''
+      const strong = document.createElement('span')
+      strong.className = 'dx-tab-menu-title'
+      strong.textContent = label
+      const sub = document.createElement('span')
+      sub.className = 'dx-tab-menu-why'
+      sub.textContent = why
+      b.append(strong, sub)
+      b.addEventListener('click', () => { menu.remove(); addSheetOf(kind) })
+      menu.appendChild(b)
+    }
+    row(t('Dataset'), t('Typed columns — for volume, joins and charts'), 'table')
+    row(t('Spreadsheet'), t('Typed cells — for a scratch pad, and =SUM anywhere'), 'canvas')
   })
 
   /**

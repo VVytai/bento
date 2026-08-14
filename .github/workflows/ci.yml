@@ -482,6 +482,13 @@ jobs:
         # total, and an edit statement is refused because a query is a question.
         run: node scripts/test-dash-sql.ts
 
+      - name: dash spreadsheet rig
+        # Rendering and editing the SPREADSHEET kind — unbounded, sparse, typed
+        # per cell. The check that matters is that a formula BELOW the data
+        # lands in a cell that did not exist, without allocating the rows it
+        # skipped: that gesture is why the kind exists.
+        run: node scripts/test-dash-canvas.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default

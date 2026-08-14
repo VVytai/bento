@@ -362,7 +362,14 @@ console.log('\nnon-table sheets are named as what they are')
 {
   ok(describeKind('pivot').chip === 'Pivot' && describeKind('pivot').why.includes('pivot'),
     'a pivot says pivot')
-  ok(describeKind('canvas').chip === 'Canvas', 'a canvas says canvas')
+  // "Canvas" is the WIRE word and stays in the format (PLATFORM §3); what a
+  // reader sees is "Spreadsheet". The chip used to say Canvas and the tooltip
+  // said "not editable in this build", which was true until the kind was
+  // implemented and is the sort of label that outlives its own truth.
+  ok(describeKind('canvas').chip === 'Spreadsheet',
+    'a canvas sheet calls itself a Spreadsheet — the wire word is not the reader\'s word')
+  ok(!/not editable/.test(describeKind('canvas').why),
+    'and it no longer claims to be unopenable, because it opens')
   // The failure this replaced: everything non-table was labelled a canvas
   // sheet, so a pivot the app itself created described itself as something
   // else. A future kind must carry its own name through.
