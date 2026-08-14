@@ -714,8 +714,14 @@ a.ed-btn { text-decoration: none; }  /* the update block's "What's new" link is 
   flex-direction: column;
   gap: 8px;
   padding: 11px 13px;
+  /* An even 1px rule, like every other surface in this dialog. The card used
+     to carry a 3px peach stripe down its leading edge — the generic
+     "callout" tic, and the only accent stripe anywhere in the app (the two
+     other thick borders are a CSS triangle and a quiet neutral rule on
+     .ed-lang-warn). It was redundant as well as out of place: the heading
+     names the version and the primary button already carries the accent. It
+     was also a hard-coded #FF9E8A, so it ignored the theme tokens. */
   border: 1px solid var(--line);
-  border-inline-start: 3px solid #FF9E8A;
   border-radius: 10px;
 }
 .ed-about-release {
