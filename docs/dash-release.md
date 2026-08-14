@@ -115,10 +115,11 @@ Still true, and worth knowing before cutting `dash-v0.3.0`:
   clipped. Rows are virtualised, so a naive print can only ever emit the ~55
   rows on screen — this needs a real page builder, repeated headers and page
   breaks, as slides has.
-- **No cell formatting at all.** No bold, no italic, no per-cell colour in the
-  model — `CellOverride` carries value and formula only. ⌘B and ⌘I are unbound
-  because there is nothing to bind them to. Conditional formats exist; manual
-  ones do not.
+- **No cell formatting on the DATASET kind.** `CellOverride` carries value and
+  formula only, so ⌘B and ⌘I have nothing to bind to there. The SPREADSHEET kind
+  now has format, bold, alignment and colours per cell — the format always
+  carried them and the panel finally offers them — so this is a gap in one kind,
+  not in the app. Italic, underline, borders and wrap are absent from both.
 - ~~**Stale readouts.**~~ **Done.** `applyView()` — which every sort, filter,
   clear, sheet switch and structural edit funnels through — now announces, and
   the status text lives in `grid.ts` (`viewStatusText`) because the grid owns
@@ -128,10 +129,9 @@ Still true, and worth knowing before cutting `dash-v0.3.0`:
 
 ## 3 · Correctness debt with a known shape
 
-- **`exportCsv` exports the wrong sheet.** It takes
-  `sheets.find(kind === 'table')` — the FIRST table sheet in the workbook,
-  regardless of which one is on screen. Correct-looking when a workbook had one
-  sheet; plainly wrong now there are tabs.
+- ~~**`exportCsv` exports the wrong sheet.**~~ **Done** — it takes the sheet on
+  screen, and refuses with a reason on a spreadsheet rather than silently
+  exporting a different sheet.
 
 - **Pivot and canvas sheets cannot be renamed.** `applySheetProps` narrows
   through `table(doc, id)` and throws otherwise, so the tab strip ships a

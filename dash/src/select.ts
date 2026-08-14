@@ -876,7 +876,7 @@ export type FillMode = 'copy' | 'series'
  */
 export function fillCells(seeds: FillCell[], target: number, mode: FillMode): FillCell[] {
   if (target <= 0 || !seeds.length) return []
-  if (seeds.some((s) => s.f !== undefined)) {   // NEGATIVE CONTROL 2: mode ignored
+  if (mode === 'copy' || seeds.some((s) => s.f !== undefined)) {
     return Array.from({ length: target }, (_, i) => {
       const k = i % seeds.length
       return seeds[k].f !== undefined ? { f: seeds[k].f, src: k } : { v: seeds[k].v }
