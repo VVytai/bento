@@ -59,7 +59,13 @@ function readPattern(fmt: string | undefined): {
     prefix: at >= 0 ? body.slice(0, at) : '',
     suffix: at >= 0 ? body.slice(at + digits.length) : '',
     group: digits.includes(','),
-    dp: dot >= 0 ? digits.length - dot - 1 : null,
+    // `null` means "decide from the value" (0 for an integer, 2 otherwise) and
+    // is right ONLY when the pattern says nothing about digits at all. A
+    // pattern with digits and no decimal point says something very definite —
+    // NO decimals — and answering `null` there made "#,##0" print 1,234.50 and
+    // "0" print 7.60. Formatting a column as a whole number has never worked on
+    // either kind of sheet; Excel rounds, and so do we now.
+    dp: dot >= 0 ? digits.length - dot - 1 : (digits ? 0 : null),
     pct,
   }
 }

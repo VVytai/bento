@@ -107,10 +107,10 @@ const KEEP_ENGLISH = new Map<string, string>([
  * countable as translated because they are.
  */
 const SAME_AS_ENGLISH: Record<string, string[]> = {
-  es: ['Total', 'editor'],
-  fr: ['Date', 'Format', 'Total', 'Type'],
+  es: ['Total', 'editor', 'General'],
+  fr: ['Auto', 'Date', 'Format', 'Total', 'Type'],
   ja: ['OK'],
-  de: ['Dashboard', 'Format', 'Name', 'OK', 'Text', 'Updates'],
+  de: ['Dashboard', 'Format', 'Name', 'OK', 'Symbol', 'Text', 'Updates'],
   it: ['Dashboard', 'File', 'Formula', 'Max', 'Min', 'OK', 'Password', 'vs', 'editor'],
 }
 

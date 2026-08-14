@@ -47,7 +47,7 @@
   cursor: pointer;
 }
 .dx-tab-btn:hover { background: var(--hover); color: var(--ink); }
-.dx-tab-btn:focus-visible { outline: 2px solid var(--sel-ring); outline-offset: 1px; }
+.dx-tab-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .dx-tab-add { font-size: 12px; }
 .dx-tab-hide { margin-left: auto; opacity: 0.7; }
 .dx-tab-show { display: none; }
@@ -110,7 +110,7 @@
   white-space: nowrap;
 }
 .dx-tab:hover { background: var(--hover); color: var(--ink); }
-.dx-tab:focus-visible { outline: 2px solid var(--sel-ring); outline-offset: -2px; }
+.dx-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 
 /* ————— THE ACTIVE TAB —————
    ONE signal, carried by the ink, plus a 2px rule in the same colour.
@@ -190,7 +190,11 @@
   min-width: 168px;
   max-width: 220px;
   padding: 4px;
-  border: 1px solid var(--line);
+  /* --line-strong, like .dx-menu / .dx-pop / .dxs-menu: dash states that its
+     floating surfaces are ONE style, and this was the one that wasn't. On the
+     dark ground --line (#1f2731) against --surface (#1b222c) is barely an edge
+     at all, which is exactly when a menu over a grid needs one. */
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-pop);
@@ -214,7 +218,8 @@
   white-space: nowrap;
 }
 .dx-tab-menu button:hover:not(:disabled) { background: var(--hover); }
-.dx-tab-menu button:disabled { color: var(--muted); opacity: 0.6; cursor: default; }
+/* 0.35 — one figure for a dead control across the app; see .dx-btn[disabled] */
+.dx-tab-menu button:disabled { color: var(--muted); opacity: 0.35; cursor: default; }
 .dx-tab-sep { height: 1px; margin: 4px 2px; background: var(--line); }
 .dx-tab-note {
   margin: 2px 4px 6px;

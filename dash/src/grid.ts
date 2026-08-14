@@ -25,7 +25,7 @@ import { readCell, type Patch, type Store } from './store.ts'
 import { recalc, isErr, type Vec } from './formula.ts'
 import {
   Selection, keyToAction, applyMotion, contains, tsvFromRange, parseTsv,
-  fillSeries, type Range,
+  fillCells, type Box, type FillCell, type FillMode, type Range,
 } from './select.ts'
 import { buildOrder, type ColumnFilter } from './filter.ts'
 import { evaluateRules, type CellStyle } from './condfmt.ts'
@@ -1345,18 +1345,161 @@ export class Grid {
   private clipTop: number | null = null
   private clipLeft: number | null = null
 
-  /** Fill the selection down from its first row, continuing a series if there is one. */
+  /**
+   * What a cell IS, for a fill — its formula source, or its STORED value.
+   *
+   * Deliberately not `valueAt`, which answers what the cell SHOWS. Seeding a
+   * fill from the shown value writes a formula's result back as a constant, and
+   * — when the formula errored — writes the error OBJECT into the column, which
+   * is not a value any column can hold. Both destroy the cell they copied, and
+   * the file afterwards holds no evidence of what was there.
+   */
+  private sourceAt(row: number, ci: number): FillCell {
+    const cv = this.canvas
+    if (cv) {
+      const cell = cv.cells[canvasKey(row, ci)]
+      if (typeof cell?.f === 'string' && cell.f !== '') return { f: cell.f }
+      return { v: cell && 'v' in cell ? cell.v : null }
+    }
+    const s = this.sheet
+    const c = cols(s)[ci]
+    if (!c) return { v: null }
+    const rid = ridAt(this.store, s, row)
+    const r = dataRow(s, rid)
+    const f = this.formulaAtPos(r, s.columns.findIndex((x) => x.id === c.id))
+    if (f !== undefined) return { f }
+    const over = s.cells?.[`${c.id}:${rid}`]
+    if (over && 'v' in over) return { v: over.v }
+    // A COMPUTED column is defined by its expression: the write path refuses to
+    // touch one, so what is read here can only ever be a seed for its own
+    // column and never lands anywhere.
+    const comp = this.computed.get(c.id)
+    return { v: comp ? comp[r] : readCell(s.data[c.id], r) }
+  }
+
+  /**
+   * ⌘D — the TOP row of the selection, copied down over the rest.
+   *
+   * Excel's Fill Down, and one seed row exactly: reading a second row and
+   * detecting a series between them is the fill HANDLE's job, where the drag
+   * says which cells are the seed. Conflating them made ⌘D over four rows
+   * alternate rows one and two down the column, overwriting the other two.
+   */
   fillDownSelection(): void {
     const b = this.sel.bounds()
     if (b.bottom <= b.top) return
-    const block: unknown[][] = []
+    this.fillVertical(b, b.top, 'copy')
+  }
+
+  /**
+   * The fill HANDLE, released. `seed` is the block that was selected when the
+   * drag began — that block is the seed, and everything the drag added below it
+   * continues the series it reads out of them.
+   */
+  fillHandleTo(seed: Box): void {
+    const b = this.sel.bounds()
+    if (b.bottom <= seed.bottom) return
+    this.fillVertical({ ...b, left: seed.left, right: seed.right }, seed.bottom, 'series')
+  }
+
+  /**
+   * One fill, both kinds, one undo step.
+   *
+   * `seedBottom` is the last row of the seed band (rows `b.top..seedBottom`);
+   * everything below it is written. The seed rows themselves are never
+   * rewritten — a fill must leave what it copied byte-identical, and rewriting
+   * a formula cell "unchanged" is a chance to get the translation wrong by
+   * zero.
+   */
+  private fillVertical(b: Box, seedBottom: number, mode: FillMode): void {
+    if (this.store.readOnly) return
+    const rows = b.bottom - b.top + 1
+    const seedRows = seedBottom - b.top + 1
+    if (seedRows < 1 || rows <= seedRows) return
+    // per column: the filled cells, and the seed row each formula came from
+    const out = new Map<number, FillCell[]>()
     for (let c = b.left; c <= b.right; c++) {
-      const seeds = [this.valueAt(b.top, c)]
-      if (b.bottom - b.top >= 1) seeds.push(this.valueAt(b.top + 1, c))
-      const filled = fillSeries(seeds, b.bottom - b.top + 1)
-      filled.forEach((v, i) => { (block[i] ??= [])[c - b.left] = v })
+      const seeds: FillCell[] = []
+      for (let r = b.top; r <= seedBottom; r++) seeds.push(this.sourceAt(r, c))
+      out.set(c, fillCells(seeds, rows, mode))
     }
-    this.writeBlock(b.top, b.left, block)
+    if (this.canvas) this.writeCanvasFill(b, seedRows, out)
+    else this.writeTableFill(b, seedRows, out)
+  }
+
+  /** The filled cells, written into a DATASET — values and formulas together. */
+  private writeTableFill(b: Box, seedRows: number, out: Map<number, FillCell[]>): void {
+    const s = this.sheet
+    const vis = cols(s)
+    const patches: Patch[] = []
+    const byCol = new Map<string, { rids: number[]; v: unknown[] }>()
+    const keys: string[] = []
+    const overs: Array<Record<string, unknown> | null> = []
+    for (const [c, filled] of out) {
+      const col = vis[c]
+      if (!col || col.formula) continue        // a computed column is its expression
+      for (let i = seedRows; i < filled.length; i++) {
+        const rid = ridAt(this.store, s, b.top + i)
+        if (rid < 0) continue
+        const key = `${col.id}:${rid}`
+        const cell = filled[i]
+        if (cell.f !== undefined) {
+          // Translated by the distance in CANONICAL rows: the grid reads
+          // through a sort order, so a fill down the screen under a sort moves
+          // the addresses by however far the rows actually are apart.
+          const srcRid = ridAt(this.store, s, b.top + (cell.src ?? 0))
+          const dRow = dataRow(s, rid) - dataRow(s, srcRid)
+          keys.push(key)
+          overs.push({ ...(s.cells?.[key] ?? {}), f: translateCellFormula(cell.f, dRow, 0) })
+          continue
+        }
+        // THE LAST GATE. An error is a computed thing and has no business in
+        // storage — nothing upstream produces one any more, and if anything
+        // ever does again it stops here rather than in somebody's file.
+        if (isErr(cell.v)) continue
+        const e = byCol.get(col.id) ?? { rids: [], v: [] }
+        e.rids.push(rid); e.v.push(cell.v)
+        byCol.set(col.id, e)
+        // filling a plain value over a formula cell removes the formula
+        const had = s.cells?.[key]
+        if (had?.f !== undefined) {
+          const { f: _f, ...rest } = had
+          keys.push(key)
+          overs.push(Object.keys(rest).length ? rest : null)
+        }
+      }
+    }
+    for (const [col, e] of byCol) patches.push({ op: 'setCells', sheet: s.id, col, rids: e.rids, v: e.v })
+    if (keys.length) patches.push({ op: 'setOverrides', sheet: s.id, keys, v: overs as never, dropEmpty: true })
+    if (patches.length) this.store.commit(patches)
+  }
+
+  /** The same fill on a SPREADSHEET: one cell is `{v}` or `{f}` at an A1 key. */
+  private writeCanvasFill(b: Box, seedRows: number, out: Map<number, FillCell[]>): void {
+    const cv = this.canvas
+    if (!cv) return
+    const cells: Record<string, CanvasCell | null> = {}
+    for (const [c, filled] of out) {
+      if (c >= CANVAS_MAX_COLS) continue
+      for (let i = seedRows; i < filled.length; i++) {
+        const r = b.top + i
+        if (r >= CANVAS_MAX_ROWS) continue
+        const key = canvasKey(r, c)
+        const had = cv.cells[key]
+        const { v: _v, f: _f, ...rest } = had ?? {}
+        const cell = filled[i]
+        if (cell.f !== undefined) {
+          cells[key] = { ...rest, f: translateCellFormula(cell.f, r - (b.top + (cell.src ?? 0)), 0) }
+          continue
+        }
+        if (isErr(cell.v)) continue
+        const next: CanvasCell | null = cell.v == null || cell.v === ''
+          ? (Object.keys(rest).length ? rest : null)
+          : { ...rest, v: cell.v }
+        if (next !== null || had !== undefined) cells[key] = next
+      }
+    }
+    this.writeCanvas(cells)
   }
 
   /** Fires after every repaint — how an overlay knows to re-place its markers. */
@@ -1902,7 +2045,10 @@ export class Grid {
         const up = () => {
           document.removeEventListener('mousemove', move)
           document.removeEventListener('mouseup', up)
-          this.fillDownSelection()
+          // The block that was selected when the drag began IS the seed — so
+          // two cells holding 1 and 2 continue 3, 4, 5. ⌘D is the other
+          // gesture and copies one row; they must not share a call.
+          this.fillHandleTo(start)
           this.announce()
         }
         document.addEventListener('mousemove', move)
@@ -2159,7 +2305,7 @@ export class Grid {
         const up = () => {
           document.removeEventListener('mousemove', move)
           document.removeEventListener('mouseup', up)
-          this.fillDownSelection()
+          this.fillHandleTo(start)   // the selected block seeds the series
           this.announce()
         }
         document.addEventListener('mousemove', move)

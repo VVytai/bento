@@ -32,9 +32,10 @@
 // so a panel that assigned to a column would be an edit with no inverse.
 
 import './panels.css'
-import { t } from './i18n.ts'
+import { t, locale } from './i18n.ts'
 import { lsJson, lsSet } from '../../kernel/src/storage.ts'
 import { TYPE_LABEL } from './format.ts'
+import { buildCellProps, type CellRange, type PanelKit } from './cellprops.ts'
 import { mountTabs, renameSheetPatch } from './tabs.ts'
 import type { Column, ColumnType, TableSheet } from './model.ts'
 import type { Patch, Store } from './store.ts'
@@ -318,25 +319,53 @@ export function mountPanels(host: PanelsHost): Panels {
 
   const ro = (): boolean => store.readOnly
 
+  /**
+   * What the last cell edit needs to say — "3 values could not be read as this
+   * format", almost always. Held here rather than in cellprops.ts because the
+   * panel is rebuilt from scratch on every document event, so a message stored
+   * inside the section would not survive the commit that produced it.
+   */
+  let cellMessage = ''
+
   // --- the properties panel -------------------------------------------------
 
   function renderProps(): void {
     right.textContent = ''
     const sheet = currentSheet()
     if (!sheet) {
-      // A SPREADSHEET IS NOT A MISSING TABLE. `currentSheet()` returns only
-      // table sheets, so this arm caught the spreadsheet kind too and told the
-      // reader "No table sheet is open" — which reads as an error about a sheet
-      // they are looking at and editing. Every control in this panel is a
-      // COLUMN property (type, format, width, total) and a spreadsheet has no
-      // columns, so there is genuinely nothing here for it; saying that plainly
-      // is the whole fix.
-      const shown = store.doc.sheets.find((x) => x.id === grid.showingId())
+      // A SPREADSHEET IS NOT A MISSING TABLE, and it is not an EMPTY panel
+      // either. `currentSheet()` returns only table sheets, so this arm caught
+      // the spreadsheet kind too — first with "No table sheet is open", which
+      // reads as an error about a sheet you are looking at, and then with an
+      // honest sentence saying there was nothing here. There is now: a
+      // spreadsheet types and paints each CELL, so the panel shows the cell.
+      const canvas = grid.canvas
+      if (canvas) {
+        buildCellProps({
+          host: right,
+          kit: KIT,
+          sheet: canvas,
+          ranges: grid.sel.ranges() as CellRange[],
+          cursor: grid.sel.cursor,
+          readOnly: ro(),
+          locale: locale(),
+          commit,
+          message: cellMessage,
+          say: (m) => {
+            // Shown until the next edit or the next selection — a refusal is
+            // about the edit that just happened, not about the sheet.
+            if (m === cellMessage) return
+            cellMessage = m
+            render(true)
+          },
+        })
+        buildWorkbookSection()
+        applyAccordion(right)
+        return
+      }
       const p = document.createElement('p')
       p.className = 'dp-empty'
-      p.textContent = shown?.kind === 'canvas'
-        ? t('A spreadsheet types each cell on its own, so there are no column properties to set here. Formatting follows the cell.')
-        : t('No table sheet is open.')
+      p.textContent = t('No table sheet is open.')
       right.appendChild(p)
       return
     }
@@ -605,6 +634,9 @@ export function mountPanels(host: PanelsHost): Panels {
   const announced = grid.onSelectionChange
   grid.onSelectionChange = (summary, ref, value) => {
     announced?.(summary, ref, value)
+    // A refusal describes the cells it happened to. Moving off them takes the
+    // sentence with it, or it hangs over a selection it was never about.
+    cellMessage = ''
     render()
   }
 
@@ -791,4 +823,17 @@ function toggle_(value: boolean, onChange: (v: boolean) => void): HTMLInputEleme
   cb.checked = value
   cb.addEventListener('change', () => onChange(cb.checked))
   return cb
+}
+
+/**
+ * The row builders, handed to the sections that live in their own file.
+ *
+ * PASSED, not re-declared. cellprops.ts draws rows in this panel and could have
+ * built its own — and then a control there would be 2px off one here, which is
+ * the shape of drift nobody files a bug about and everybody sees. These are the
+ * same functions the Column section uses, so there is one spelling of a row and
+ * a change to it moves every section at once.
+ */
+const KIT: PanelKit = {
+  section, row, readonlyRow, note, text, number, select, check: toggle_,
 }

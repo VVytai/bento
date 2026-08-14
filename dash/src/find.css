@@ -55,7 +55,8 @@
   width: min(360px, calc(100% - 32px));
   background: var(--surface);
   color: var(--ink);
-  border: 1px solid var(--line);
+  /* --line-strong: one floating-surface style, same as .dx-menu / .dx-pop */
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-pop);
   font-size: var(--fs-ui);

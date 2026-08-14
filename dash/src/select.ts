@@ -827,6 +827,64 @@ export function parseTsv(text: string): string[][] {
 // rows 5..20, so the caller asks for 16 and gets 16, with no off-by-one
 // arithmetic at the call site. Asking for fewer than there are seeds truncates.
 
+/**
+ * A cell as a FILL reads it: the formula it holds, or the value it stores.
+ *
+ * NEVER the computed value of a formula, and that distinction is the whole
+ * reason this type exists. A fill that seeds from what a cell SHOWS turns a
+ * formula into the constant it happened to evaluate to — and, when the
+ * evaluation failed, writes the ERROR OBJECT into the column as if somebody had
+ * typed it. Both are silent data loss: the file afterwards holds no record that
+ * there was ever a formula, or a number, there.
+ */
+export interface FillCell {
+  /** the stored value, when the cell has no formula */
+  v?: unknown
+  /** the formula SOURCE (`=B1*2`), when it has one */
+  f?: string
+  /**
+   * Which seed this output came from, for a formula. The caller translates the
+   * references by however far the cell moved, and only it knows the distance —
+   * a dataset reads through a sort order, so the visible gap is not the gap the
+   * addresses moved by.
+   */
+  src?: number
+}
+
+/**
+ * The two fill GESTURES, which are not one operation:
+ *
+ *   'copy'   — ⌘D. The top row of the selection is laid over the rest, exactly
+ *              as it stands. Excel's Fill Down, and the reason ⌘D on a column
+ *              of numbers does not invent a count.
+ *   'series' — the fill HANDLE. The selected block IS the seed and the drag
+ *              extends it, so two seeds mean a step and the fill continues.
+ *
+ * Sharing one implementation is what made ⌘D over a two-row selection read TWO
+ * seeds and alternate them down the column, overwriting every other row with
+ * its neighbour's value.
+ */
+export type FillMode = 'copy' | 'series'
+
+/**
+ * Fill `target` cells from `seeds`.
+ *
+ * A FORMULA IS COPIED, NEVER CONTINUED. Excel does not read a series out of
+ * expressions and neither does this: when any seed holds a formula the seeds
+ * repeat in order, each output remembering (`src`) which seed it came from so
+ * the caller can translate its references. Values fill by the mode's rule.
+ */
+export function fillCells(seeds: FillCell[], target: number, mode: FillMode): FillCell[] {
+  if (target <= 0 || !seeds.length) return []
+  if (seeds.some((s) => s.f !== undefined)) {   // NEGATIVE CONTROL 2: mode ignored
+    return Array.from({ length: target }, (_, i) => {
+      const k = i % seeds.length
+      return seeds[k].f !== undefined ? { f: seeds[k].f, src: k } : { v: seeds[k].v }
+    })
+  }
+  return fillSeries(seeds.map((s) => s.v), target).map((v) => ({ v }))
+}
+
 /** Repeat the seeds until the target is covered. The fill handle's plain drag. */
 export function fillDown(values: unknown[], target: number): unknown[] {
   if (target <= 0 || !values.length) return []

@@ -1,0 +1,81 @@
+/* SPDX-License-Identifier: MIT
+   Copyright (c) 2026 The Bento authors
+   The Cell section of the properties panel — three controls panels.css has no
+   shape for, and nothing else. Everything that CAN be a `.dp-row` is one: two
+   stylesheets describing the same row is how a panel starts to look like two
+   panels. */
+
+/* ————— the format preview —————
+   A value, printed the way the chosen pattern prints it. It sits where a
+   control sits (110px, right-aligned in the row) so the section keeps its
+   column, and it is monospace-tabular so switching decimals moves the digits
+   you are looking at rather than the whole string. */
+.dc-preview {
+  width: 110px;
+  flex: none;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 7px);
+  background: var(--wash);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  line-height: 17px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* the cell is empty, so this is a SAMPLE — it must not read as the cell's value */
+.dc-preview-sample { color: var(--muted); font-style: italic; }
+
+/* ————— colour, with an off state —————
+   `<input type="color">` always holds a colour, so "no background" cannot be
+   said by the swatch. The × is the off switch; the diagonal slash is what says
+   the swatch is not in effect, since the input still paints its fallback. */
+.dc-colour {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: 110px;
+  flex: none;
+}
+.dc-colour input[type='color'] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 23px;
+  padding: 0 1px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 7px);
+  background: var(--surface);
+  cursor: pointer;
+}
+.dc-colour input[type='color']:disabled { cursor: default; opacity: 0.5; }
+
+/* Not set: the swatch is showing a DEFAULT, not the cell's colour, and it has
+   to say so — otherwise every unstyled cell looks like it was painted. */
+.dc-colour-off input[type='color'] {
+  opacity: 0.4;
+  background:
+    linear-gradient(to top right,
+      transparent calc(50% - 1px), var(--line-strong) 50%, transparent calc(50% + 1px));
+}
+
+.dc-clear {
+  flex: none;
+  width: 20px;
+  height: 23px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 7px);
+  background: var(--surface);
+  color: var(--muted);
+  font: 13px/1 inherit;
+  cursor: pointer;
+}
+.dc-clear:hover:not(:disabled) { color: var(--ink); border-color: var(--line-strong); }
+.dc-clear:disabled { opacity: 0.35; cursor: default; }
+
+/* the currency symbol is one or two glyphs; 110px of input for `£` reads as a
+   field that wants a sentence */
+.dp-row input.dp-narrow { width: 56px; }

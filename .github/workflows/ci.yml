@@ -489,6 +489,23 @@ jobs:
         # skipped: that gesture is why the kind exists.
         run: node scripts/test-dash-canvas.ts
 
+      - name: dash cell format and type rig
+        # Per-cell number format, coercion and appearance on a SPREADSHEET
+        # sheet. The checks that matter are the data-eating ones: 01234 must not
+        # silently become 1234, 1/2 must never become a date, an ambiguous
+        # d/m/yyyy is refused rather than guessed, and formatting twenty cells
+        # is ONE patch and ONE undo.
+        run: node scripts/test-dash-cellprops.ts
+
+      - name: dash theme rig
+        # A stylesheet has no type system: an undeclared token is a dead rule
+        # and a light-dark() fed a length is an invalid declaration — both
+        # silent, and both had SHIPPED. --accent-ink drew nothing and every
+        # shadow in the app computed to "none". The light palette is also
+        # diffed against slides' :root so the two cannot drift one grey at a
+        # time again.
+        run: node scripts/test-dash-theme.ts
+
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
         # 1280x720, so they used to hang 200px off the right edge of a default

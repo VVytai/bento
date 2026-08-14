@@ -49,7 +49,14 @@ import { t, i18nApi } from './i18n.ts'
 import {
   parseDoc, docBytes, docBudget, rowCount, DOC_BUDGET_FSA, DOC_BUDGET_DOWNLOAD,
   type DashDoc, type ParseResult, type Column, type ColumnType, type TableSheet,
+  type Sheet,
 } from './model.ts'
+// THE ONE TABLE that says which toolbar actions run on which sheet kind, and
+// why the others do not. It lives in tabs.ts because that is where the app
+// already keeps what a KIND is (`isTable`, `isOpenable`, `describeKind`) and
+// because a rig can import it with no DOM — main.ts boots on evaluation, so it
+// can never be imported at all. See the block above `ACTIONS` for the rest.
+import { ACTIONS, ACTION_IDS, actionReason, type ActionId } from './tabs.ts'
 import { Store } from './store.ts'
 import { starterDoc } from './starter.ts'
 import { validateDoc } from './validate.ts'
@@ -304,6 +311,83 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
 
   const grid = new Grid({ el: app.querySelector<HTMLElement>('.dx-grid')!, store, sheetId: doc.sheets[0].id })
 
+  // --- can this action run on the sheet in front of the reader? ---------------
+  //
+  // TWO HALVES, AND BOTH ARE NEEDED. The table (tabs.ts `ACTIONS`) decides; this
+  // is where its answer reaches the reader, in both the places it has to:
+  //
+  //   1. `gateActions` DISABLES the button and puts the reason in its tooltip,
+  //      so the answer is there before the click. Never hides it: a control that
+  //      vanishes reads as a bug in the app, while a greyed one that says
+  //      "Charts bind to a dataset's columns — this is a spreadsheet" teaches
+  //      the difference the two kinds exist to express.
+  //   2. `dataset()` re-asks at the CALL SITE, because a disabled button is not
+  //      a guarantee. A click can already be in flight when a collaborator's op
+  //      deletes the sheet, `store.replaceDoc` swaps every sheet under the bar
+  //      (About's restore, drop-open, recovery), and a menu item clicked as the
+  //      grid changes sheets runs against the new one. Before this, all of those
+  //      landed on `grid.sheet`, whose throw is `Uncaught Error: grid needs a
+  //      table sheet` — a console line under an app whose console nobody has
+  //      open, with nothing on screen at all.
+  //
+  // Both read the same string from the same table, so a reader who clicks
+  // anyway is told exactly what the tooltip said rather than something new.
+
+  /** The sheet on screen, whatever its kind — `grid.sheet` narrows and throws. */
+  const shownSheet = (): Sheet | undefined =>
+    store.doc.sheets.find((s) => s.id === grid.showingId())
+
+  /** Its kind, or `''` when the grid points at nothing that is still there. */
+  const shownKind = (): string =>
+    String((shownSheet() as { kind?: unknown } | undefined)?.kind ?? '')
+
+  /**
+   * The dataset this action needs — or null, HAVING SAID WHY, through the same
+   * banner every other refusal in this file uses. Never a throw, and never
+   * silence: doing nothing at all is what taught people the toolbar is
+   * decorative.
+   */
+  const dataset = (act: ActionId): TableSheet | null => {
+    const sheet = shownSheet()
+    if (sheet && sheet.kind === 'table') return sheet
+    showFindings(findingsEl, [{
+      message: actionReason(act, shownKind()) ||
+        t('This action needs a dataset sheet, and the sheet on screen is not one.'),
+    }])
+    // The bar disagreed with the document for as long as it took to click, so
+    // put it right on the way out.
+    gateActions(true)
+    return null
+  }
+
+  /**
+   * Paint the table onto the bar.
+   *
+   * WORKBOOK-SCOPED ACTIONS ARE SKIPPED ENTIRELY rather than enabled: Undo,
+   * Redo and Save have owners of their own (`syncHistoryButtons`, the read-only
+   * lock), and a loop that wrote `disabled = false` for every ungated action
+   * would light Redo up with an empty stack every time the reader changed tabs.
+   *
+   * Cached on the KIND, because `doc` fires on every keystroke in a cell and
+   * nothing about a keystroke can change this answer.
+   */
+  let gatedFor: string | null = null
+  const gateActions = (force = false): void => {
+    const kind = shownKind()
+    if (!force && kind === gatedFor) return
+    gatedFor = kind
+    for (const id of ACTION_IDS) {
+      if (ACTIONS[id].on === 'workbook') continue
+      const btn = app.querySelector<HTMLButtonElement>(`[data-act="${id}"]`)
+      if (!btn) continue
+      // the tooltip it was built with, kept so re-enabling can put it back
+      if (btn.dataset.tip === undefined) btn.dataset.tip = btn.title
+      const why = actionReason(id, kind)
+      btn.disabled = !!why
+      btn.title = why || (btn.dataset.tip ?? '')
+    }
+  }
+
   // --- the formula bar and the status bar, both driven by the selection
   grid.onSelectionChange = (summary, ref, value) => {
     refEl.textContent = ref
@@ -343,7 +427,14 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     if (grid.handleKey(e)) e.preventDefault()
   })
   grid.onRetype = (col, x, y) => retype(store, col, x, y)
-  grid.onEditFormula = (col) => { void editFormula(store, grid, col) }
+  // Double-clicking a computed cell. It can only arrive from the dataset grid —
+  // a spreadsheet has no formula COLUMNS — but the sheet is looked up rather
+  // than narrowed, so a repaint that lands between the double-click and this
+  // callback cannot throw.
+  grid.onEditFormula = (col) => {
+    const sheet = dataset('formula')
+    if (sheet) void editFormula(store, sheet, col)
+  }
 
   // --- chart: bound to columns, derived at render, never stored
   const chartEl = app.querySelector<HTMLElement>('.dx-chart')!
@@ -374,8 +465,14 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     // truthful about, so the panel closes rather than keeping the last numbers
     // it happens to be holding on screen.
     if (!sheet) { teardown = null; binding = null; chartSheetId = null; chartEl.hidden = true; return }
-    const shown = grid.sheet
-    chartTitle.textContent = chartHeading(sheet, binding, shown.id)
+    // THE SHEET ON SCREEN, READ WITHOUT NARROWING. This was `grid.sheet`, and
+    // `drawChart` runs on `doc`, on `view` and on every sheet change — so with a
+    // chart open, switching to a SPREADSHEET tab threw out of the redraw, and
+    // afterwards every keystroke on that sheet threw again. The chart is pinned
+    // to its own sheet and only needs the shown one to say so.
+    const shown = shownSheet()
+    const shownId = shown?.id ?? ''
+    chartTitle.textContent = chartHeading(sheet, binding, shownId)
     kindBtn.textContent = binding.kind[0].toUpperCase() + binding.kind.slice(1)
     teardown = renderChart(chartBody, sheet, binding,
       // the grid's freshly computed formula columns, so the chart shows the
@@ -383,7 +480,7 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
       // only while the grid is showing THIS sheet. `grid.computed` is keyed by
       // column id and belongs to `grid.sheet`; handing it to another sheet's
       // chart charts one sheet's formulas under another's column names.
-      sheet.id === shown.id
+      sheet.id === shownId
         ? (grid.computed as Map<string, unknown[]>)
         : (recalc(sheet, store.doc.modified).values as Map<string, unknown[]>),
       {
@@ -392,15 +489,20 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
         // and every total must follow, or the chart draws bars for rows the
         // reader cannot see (measured: £97,050 beside a £69,050 footer).
         rows: store.order[sheet.id] ?? null,
-        showing: shown.id === sheet.id ? null : { id: shown.id, name: shown.name },
+        showing: shown && shown.id !== sheet.id ? { id: shown.id, name: shown.name } : null,
         onRebind: () => {
-          const next = defaultBinding(grid.sheet)
+          // "Chart this sheet instead" — and the sheet it would rebind to can be
+          // a spreadsheet, which has no columns to bind. Same guard, same
+          // sentence as the toolbar's tooltip.
+          const to = dataset('chart')
+          if (!to) return
+          const next = defaultBinding(to)
           if (!next) {
             showFindings(findingsEl, [{ message: t('This sheet has no numeric column to chart yet.') }])
             return
           }
           binding = next
-          chartSheetId = grid.sheet.id
+          chartSheetId = to.id
           drawChart()
         },
       })
@@ -424,43 +526,74 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     chartEl.hidden = true
     clearPivot()
     teardown?.(); teardown = null
-    vizDown?.(); vizDown = null; viz = null
+    vizDown?.(); vizDown = null; viz = null; vizSheetId = null
   })
   app.querySelector('[data-act="chart"]')!.addEventListener('click', () => {
+    const sheet = dataset('chart')
+    if (!sheet) return
     clearPivot()
-    vizDown?.(); vizDown = null; viz = null
-    binding = defaultBinding(grid.sheet)
-    chartSheetId = grid.sheet.id
+    vizDown?.(); vizDown = null; viz = null; vizSheetId = null
+    binding = defaultBinding(sheet)
+    chartSheetId = sheet.id
     if (!binding) { showFindings(findingsEl, [{ message: t('This sheet has no numeric column to chart yet.') }]); return }
     chartEl.hidden = false
     drawChart()
   })
-  app.querySelector('[data-act="formula"]')!.addEventListener('click', () => { void addFormula(store, grid) })
+  app.querySelector('[data-act="formula"]')!.addEventListener('click', () => {
+    // THE SHEET IS CAPTURED HERE, not read again when the dialog closes. The
+    // form is modal but the document is not frozen behind it: a remote op or a
+    // restore can land while it is open, and re-reading afterwards would add
+    // the column to whatever sheet is showing THEN rather than the one the
+    // dialog named.
+    const sheet = dataset('formula')
+    if (sheet) void addFormula(store, sheet)
+  })
 
   // --- 3D: the same panel, a different renderer. Geometry is derived from the
   // columns exactly as the 2D chart's series are, so nothing is stored.
   let viz: Viz3dBinding | null = null
   let vizDown: (() => void) | null = null
+  // PINNED TO ITS OWN SHEET, exactly as the 2D chart is and for the same two
+  // reasons. `draw3d` runs on `doc`, so reading `grid.sheet` threw the moment a
+  // spreadsheet tab was open with a plot up — and before that it silently
+  // rebuilt one sheet's geometry from another sheet's columns on every switch.
+  let vizSheetId: string | null = null
   const KINDS3D: Viz3dKind[] = ['scatter', 'surface', 'bars', 'globe']
+  const vizSheet = (): TableSheet | null => {
+    const s = store.doc.sheets.find((x) => x.id === vizSheetId)
+    return s && s.kind === 'table' ? s : null
+  }
   const draw3d = () => {
     if (!viz || chartEl.hidden) return
     vizDown?.(); teardown?.(); teardown = null
-    const sheet = grid.sheet
+    const sheet = vizSheet()
+    // The sheet it was about has gone. Nothing left to be truthful about, so
+    // the panel closes rather than holding the last geometry it happened to
+    // build — the rule `drawChart` already follows.
+    if (!sheet) { vizDown = null; viz = null; vizSheetId = null; chartEl.hidden = true; return }
+    const shownId = grid.showingId()
     chartTitle.textContent = `3D ${viz.kind} · ` +
       [viz.x, viz.y, viz.z, viz.lat, viz.lon].filter(Boolean)
-        .map((id) => sheet.columns.find((c) => c.id === id)?.name ?? id).join(' / ')
+        .map((id) => sheet.columns.find((c) => c.id === id)?.name ?? id).join(' / ') +
+      // WHOSE numbers these are, whenever they are not the sheet on screen.
+      (sheet.id === shownId ? '' : ` · ${sheet.name}`)
     kindBtn.textContent = viz.kind[0].toUpperCase() + viz.kind.slice(1)
-    const scene = buildScene(sheet, viz, grid.computed as Map<string, unknown[]>)
+    const scene = buildScene(sheet, viz, sheet.id === shownId
+      ? (grid.computed as Map<string, unknown[]>)
+      : (recalc(sheet, store.doc.modified).values as Map<string, unknown[]>))
     vizDown = mountViz3d(chartBody, scene)
   }
   store.on('doc', () => { if (viz) draw3d() })
   app.querySelector('[data-act="viz3d"]')!.addEventListener('click', () => {
+    const sheet = dataset('viz3d')
+    if (!sheet) return
     clearPivot()
-    viz = defaultViz3d(grid.sheet)
+    viz = defaultViz3d(sheet)
     if (!viz) {
       showFindings(findingsEl, [{ message: t('This sheet needs at least three numeric columns, or a latitude and longitude, to plot in 3D.') }])
       return
     }
+    vizSheetId = sheet.id
     binding = null
     chartEl.hidden = false
     draw3d()
@@ -482,9 +615,6 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   // CHAINED, never assigned: mountPanels and mountComments are already on this
   // hook, and replacing it silently unhooks the sheet list and the comment
   // markers. (Registered last, so it runs after both.)
-  const chartAfterSheetChange = grid.onSheetChange
-  grid.onSheetChange = (id) => { chartAfterSheetChange?.(id); drawChart() }
-
   // --- pivot. A pivot is a DOCUMENT, not a view: "revenue by region by
   // quarter" is an argument about what the data means, somebody built it, and
   // "look at the pivot on sheet 3" has to name something that exists in the
@@ -501,7 +631,14 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     // control that does nothing to what is on screen. Hidden here and restored
     // by the chart path below.
     kindBtn.hidden = true
-    const computed = grid.computed as Map<string, unknown[]>
+    // `grid.computed` IS KEYED BY COLUMN ID AND BELONGS TO THE SHOWN SHEET, so
+    // handing it to a pivot pinned to another one summarises this sheet's
+    // formulas under that sheet's column names — the mistake `drawChart` names
+    // in its own comment. Off the source sheet (a spreadsheet tab included),
+    // recompute the source's own values instead.
+    const computed = src.id === grid.showingId()
+      ? (grid.computed as Map<string, unknown[]>)
+      : (recalc(src, store.doc.modified).values as Map<string, unknown[]>)
     pivotDown = mountPivot(chartBody, runPivot(src, pivotSpec, { computed }), { sheet: src, computed })
   }
   const clearPivot = (): void => {
@@ -510,15 +647,50 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   }
   store.on('doc', () => { if (pivotSpec) drawPivot() })
 
+  // REGISTERED AFTER ALL THREE PANELS EXIST, and that is not tidiness: this
+  // closure calls `drawPivot`, a `const` declared above, and a sheet switch
+  // arriving between the two would be a temporal-dead-zone ReferenceError out of
+  // boot — the same class of landmine `esc()` carries a paragraph about at the
+  // foot of this file.
+  const chartAfterSheetChange = grid.onSheetChange
+  // ALL THREE PANELS, not just the 2D chart. Each early-returns unless it is
+  // the one on screen, and each has something to correct on a switch: the chart
+  // says whose sheet it is about, the 3D title now does too, and the pivot picks
+  // between the grid's computed map and its own recalculation depending on
+  // whether its source is still the sheet in front of the reader. Left off this
+  // hook they corrected themselves only at the next keystroke.
+  grid.onSheetChange = (id) => {
+    chartAfterSheetChange?.(id)
+    drawChart(); draw3d(); drawPivot()
+    gateActions()
+  }
+  // AND ON `doc`, because a sheet switch is not the only way the kind under the
+  // toolbar changes: About's restore, drop-open, recovery and a remote op all
+  // replace the sheet list while the reader stands still. Cached on the kind, so
+  // the common case — a keystroke in a cell — costs one string comparison.
+  store.on('doc', () => gateActions())
+  gateActions(true)
+
+
   app.querySelector('[data-act="import-xlsx"]')!.addEventListener('click', () => {
     void pickXlsx(store, findingsEl, grid)
   })
   app.querySelector('[data-act="export-xlsx"]')!.addEventListener('click', () => {
-    void saveXlsx(store, grid, findingsEl)
+    // WORKBOOK-SCOPED: it writes every dataset in the file, so the sheet on
+    // screen cannot make it unavailable. All it takes from the grid is the
+    // computed map, and only when the sheet on screen is the one that map
+    // belongs to — it used to reach for `grid.sheet.id` unconditionally and
+    // reject the whole export with an unhandled rejection on a spreadsheet tab.
+    const shown = shownSheet()
+    void saveXlsx(store, findingsEl, shown && shown.kind === 'table'
+      ? { id: shown.id, computed: grid.computed as Map<string, unknown[]> }
+      : null)
   })
 
   app.querySelector('[data-act="pivot"]')!.addEventListener('click', () => {
-    const spec = defaultPivot(grid.sheet)
+    const from = dataset('pivot')
+    if (!from) return
+    const spec = defaultPivot(from)
     if (!spec) {
       showFindings(findingsEl, [{ message:
         t('This sheet needs a category column and a numeric column to pivot.') } as never])
@@ -530,9 +702,9 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     const id = `pivot-${Math.floor(Date.now() % 1e8).toString(36)}`
     store.commit({
       op: 'setSheet', id,
-      sheet: newPivotSheet(id, `${grid.sheet.name} — ${t('pivot')}`, spec),
+      sheet: newPivotSheet(id, `${from.name} — ${t('pivot')}`, spec),
     } as never)
-    binding = null; viz = null; vizDown?.(); vizDown = null
+    binding = null; viz = null; vizDown?.(); vizDown = null; vizSheetId = null
     pivotSpec = spec
     chartEl.hidden = false
     drawPivot()
@@ -555,19 +727,32 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   // The hook: a workbook that presents itself. A step is a saved VIEW — filter,
   // sort, chart binding, camera, caption — and stepping between them morphs the
   // chart from the model, because both frames are already in the file.
+  // A CAPTURE-PHASE GUARD IN FRONT OF story.ts's OWN LISTENER, because this is
+  // the one action whose click handler is not in this file. The disabled button
+  // stops a reader, and `stopImmediatePropagation` stops everything else: a
+  // dispatched click, an automated one, a listener that runs before the bar has
+  // been re-gated. Capture always beats bubble, so mount order does not matter.
+  const storyBtn = app.querySelector<HTMLElement>('[data-act="story"]')!
+  storyBtn.addEventListener('click', (e) => {
+    if (!dataset('story')) e.stopImmediatePropagation()
+  }, true)
   installStory({
     store,
-    button: app.querySelector<HTMLElement>('[data-act="story"]')!,
-    sheetId: () => grid.sheet.id,
+    button: storyBtn,
+    // `showingId()`, not `grid.sheet.id`. The Story button is disabled on a
+    // sheet a step cannot describe, but these are read by the panel while it is
+    // OPEN — and the reader can change tabs underneath it, which is a sheet
+    // switch mid-gesture and used to throw out of Capture.
+    sheetId: () => grid.showingId(),
     filters: () => grid.filters,
     sorts: () => grid.sorts,
     // A step pairs ONE sheet with ONE chart, so it may only capture the chart
     // when the chart is about the sheet being captured. The chart is pinned and
     // the story captures `grid.sheet`, so without this a step could store a
     // Pipeline chart against Sheet 2 and play back a pairing nobody ever saw.
-    chart: () => (chartSheetId === grid.sheet.id ? binding : null),
+    chart: () => (chartSheetId === grid.showingId() ? binding : null),
     viz: () => viz,
-    computed: (id) => (id === grid.sheet.id ? (grid.computed as Map<string, unknown[]>) : undefined),
+    computed: (id) => (id === grid.showingId() ? (grid.computed as Map<string, unknown[]>) : undefined),
   })
 
   const notes: Notice[] = []
@@ -641,7 +826,10 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   // exists — it takes it as the dirty signal for the edits it makes itself.
   const aboutHooks = {
     store,
-    showingSheet: () => grid.sheet.id,
+    // KIND-AGNOSTIC. `planReplace` is asked "which sheet is the reader on, so
+    // the new workbook can keep them there" — and on a spreadsheet the narrowing
+    // accessor answered that question by throwing, out of About's own restore.
+    showingSheet: () => grid.showingId(),
     showSheet: (id: string) => grid.setSheet(id),
     onDirty: markDirty,
     // so Offline mode can HANG UP an open relay socket, not merely refuse the
@@ -694,7 +882,10 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   // with it. about.ts's `planReplace` is the fix, and it is shared, not copied.
   const openHost = {
     store,
-    showingSheet: () => grid.sheet.id,
+    // KIND-AGNOSTIC. `planReplace` is asked "which sheet is the reader on, so
+    // the new workbook can keep them there" — and on a spreadsheet the narrowing
+    // accessor answered that question by throwing, out of About's own restore.
+    showingSheet: () => grid.showingId(),
     showSheet: (id: string) => grid.setSheet(id),
     afterSwap: (next: DashDoc) => {
       // the chrome nothing else refreshes: the title field is written once at
@@ -780,7 +971,10 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   }
   store.on('doc', () => queueMicrotask(syncHistoryButtons))
   syncHistoryButtons()
-  app.querySelector('[data-act="export"]')!.addEventListener('click', () => exportCsv(store))
+  app.querySelector('[data-act="export"]')!.addEventListener('click', () => {
+    const sheet = dataset('export')
+    if (sheet) exportCsv(store, sheet)
+  })
   app.querySelector('[data-act="import"]')!.addEventListener('click', () => {
     void pickCsv(store, findingsEl, grid)
   })
@@ -1023,9 +1217,18 @@ function retype(store: Store, col: Column, x: number, y: number): void {
 
 // --- export -----------------------------------------------------------------
 
-function exportCsv(store: Store): void {
-  const sheet = store.doc.sheets.find((s) => s.kind === 'table') as TableSheet | undefined
-  if (!sheet) return
+/**
+ * The sheet on screen, as a CSV.
+ *
+ * THE SHEET IS PASSED IN, and that is the whole fix. This used to be
+ * `sheets.find(kind === 'table')` — the FIRST dataset in the workbook, not the
+ * one the reader is looking at. With one sheet it was indistinguishable from
+ * correct; with tabs, "Download this sheet as CSV" on sheet four wrote sheet
+ * one, under sheet four's name, with no indication at all. On a spreadsheet tab
+ * it wrote a dataset the reader might not even have open. docs/dash-sheet-kinds
+ * calls this defect out by name.
+ */
+function exportCsv(store: Store, sheet: TableSheet): void {
   const q = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s)
   const n = sheet.rids.reduce((a, [, c]) => a + c, 0)
   const lines = [sheet.columns.map((c) => q(c.name)).join(',')]
@@ -1089,8 +1292,7 @@ function formulaProblem(sheet: TableSheet, expr: string): string | null {
 const columnHint = (sheet: TableSheet): string =>
   `${t('Columns')}: ${sheet.columns.map((c) => (/\s/.test(c.name) ? `[${c.name}]` : c.name)).join(', ')}`
 
-async function addFormula(store: Store, grid: Grid): Promise<void> {
-  const sheet = grid.sheet
+async function addFormula(store: Store, sheet: TableSheet): Promise<void> {
   // The old default was literally `Value * Probability` — the starter
   // workbook's own column names, prefilled into every workbook in the world.
   // On any other sheet it is a formula referring to two columns that do not
@@ -1116,8 +1318,7 @@ async function addFormula(store: Store, grid: Grid): Promise<void> {
 }
 
 /** Double-clicking a computed cell edits the expression that produced it. */
-async function editFormula(store: Store, grid: Grid, col: Column): Promise<void> {
-  const sheet = grid.sheet
+async function editFormula(store: Store, sheet: TableSheet, col: Column): Promise<void> {
   const got = await askForm({
     title: t('Formula for “{col}”').replace('{col}', col.name),
     fields: [{ key: 'expr', label: t('Formula'), value: col.formula ?? '', mono: true }],
@@ -1295,7 +1496,14 @@ function popover(x: number, y: number, html: string): HTMLElement {
 function openFilterMenu(
   store: Store, grid: Grid, colId: string, x: number, y: number, viewEl: HTMLElement,
 ): void {
-  const col = grid.sheet.columns.find((c) => c.id === colId)
+  // CAPTURED ONCE, at the moment the caret was clicked. The menu is about THIS
+  // sheet's column, and every handler below used to re-read `grid.sheet` when
+  // the item was picked — a window the keyboard can walk straight through,
+  // since ctrl+PgDn switches sheets without dismissing an open popover. On a
+  // spreadsheet that re-read is a throw; on another dataset it is the wrong
+  // sheet's column, hidden or frozen, silently.
+  const sheet = grid.sheet
+  const col = sheet.columns.find((c) => c.id === colId)
   if (!col) return
   const numeric = col.type === 'number' || col.type === 'money' || col.type === 'percent'
   const el = popover(x, y,
@@ -1310,7 +1518,7 @@ function openFilterMenu(
     `<button data-a="hide">${t('Hide this column')}</button>` +
     `<button data-a="fit">${t('Fit width to content')}</button>` +
     `<div class="dx-pop-sep"></div>` +
-    `<button data-a="freeze">${frozenTo(grid, colId) ? t('Unfreeze columns') : t('Freeze up to this column')}</button>`)
+    `<button data-a="freeze">${frozenTo(sheet, colId) ? t('Unfreeze columns') : t('Freeze up to this column')}</button>`)
   const input = el.querySelector<HTMLInputElement>('.dx-pop-in')!
   // DELEGATED, not a second copy. The menu used to compute this line itself,
   // which meant two renderings of the same fact — and the menu's ran last, so
@@ -1334,16 +1542,16 @@ function openFilterMenu(
             : { op: 'contains', v },
         })
       } else if (a === 'clear') grid.clearView()
-      else if (a === 'hide') store.commit(setHidden(grid.sheet, colId, true))
+      else if (a === 'hide') store.commit(setHidden(sheet, colId, true))
       else if (a === 'freeze') {
         // "up to this column" counts VISIBLE position, which is what the reader
         // pointed at; a hidden column between them would otherwise freeze one
         // more column than the menu item named.
-        const at = grid.sheet.columns.filter((c) => !c.hidden).findIndex((c) => c.id === colId)
-        store.commit(freezeAt(grid.sheet, 0, frozenTo(grid, colId) ? 0 : at + 1))
+        const at = sheet.columns.filter((c) => !c.hidden).findIndex((c) => c.id === colId)
+        store.commit(freezeAt(sheet, 0, frozenTo(sheet, colId) ? 0 : at + 1))
       }
       else if (a === 'fit') {
-        const sh = grid.sheet
+        const sh = sheet
         const comp = grid.computed.get(colId)
         store.commit(resizeColumn(sh, colId,
           autoFitWidth((row) => comp ? comp[row] : readCellOf(sh, colId, row), col,
@@ -1357,9 +1565,9 @@ function openFilterMenu(
 }
 
 /** Is the freeze already exactly at this column? Then the item offers to undo it. */
-const frozenTo = (grid: Grid, colId: string): boolean => {
-  const at = grid.sheet.columns.filter((c) => !c.hidden).findIndex((c) => c.id === colId)
-  return readFrozen(grid.sheet).cols === at + 1
+const frozenTo = (sheet: TableSheet, colId: string): boolean => {
+  const at = sheet.columns.filter((c) => !c.hidden).findIndex((c) => c.id === colId)
+  return readFrozen(sheet).cols === at + 1
 }
 
 /** Open a .xlsx. Every worksheet arrives as its own dash sheet. */
@@ -1395,10 +1603,25 @@ async function pickXlsx(store: Store, host: HTMLElement, grid: Grid): Promise<vo
  * never stored — without them a computed column exports empty, and the exporter
  * says so in its findings rather than shipping blanks quietly.
  */
-async function saveXlsx(store: Store, grid: Grid, host: HTMLElement): Promise<void> {
+async function saveXlsx(
+  store: Store, host: HTMLElement,
+  shown: { id: string; computed: Map<string, unknown[]> } | null,
+): Promise<void> {
+  // WHAT IS NOT IN THE FILE HAS TO BE SAID. `exportXlsx` writes dataset sheets
+  // and skips every other kind in silence, so a workbook of two datasets and a
+  // spreadsheet downloads as a plausible-looking .xlsx that is quietly missing a
+  // third of the work. It reports the no-datasets case itself; the dropped ones
+  // it does not, and a colleague opening the file has no way to know.
+  const dropped = store.doc.sheets.filter((s) => s.kind !== 'table')
+  if (dropped.length === store.doc.sheets.length) {
+    showFindings(host, [{
+      message: t('This workbook has no dataset sheet, and .xlsx export writes datasets. Nothing was downloaded.'),
+    }])
+    return
+  }
   const r = await exportXlsx(store.doc, {
     at: new Date(),
-    computed: { [grid.sheet.id]: grid.computed as Map<string, unknown[]> },
+    computed: shown ? { [shown.id]: shown.computed } : {},
   })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(new Blob([r.bytes as BlobPart], {
@@ -1407,7 +1630,14 @@ async function saveXlsx(store: Store, grid: Grid, host: HTMLElement): Promise<vo
   a.download = xlsxFileName(store.doc.title)
   a.click()
   setTimeout(() => URL.revokeObjectURL(a.href), 1000)
-  showFindings(host, r.findings as never)
+  showFindings(host, [
+    ...(r.findings as unknown as Notice[]),
+    ...(dropped.length ? [{
+      message: t('{n} sheet(s) are not datasets and are not in the .xlsx: {names}.')
+        .replace('{n}', String(dropped.length))
+        .replace('{names}', dropped.map((s) => s.name).join(', ')),
+    }] : []),
+  ])
 }
 
 const readCellOf = (sheet: TableSheet, colId: string, row: number): unknown =>

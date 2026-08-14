@@ -40,27 +40,83 @@
 :root {
   color-scheme: light dark;
 
-  /* ————— ground and chrome ————— */
+  /* ————— ground and chrome —————
+     THE LIGHT VALUES ARE bento/slides' VALUES, to the byte. slides
+     (slides/src/styles.css :root) is the shipped app and its palette is the
+     suite's; where dash had picked a neighbouring grey for the same job the
+     two apps drifted for no reason anybody could state, and a user moving
+     between them saw two different products. The DARK values are dash's own —
+     slides is `color-scheme: only light` and has none to copy.
+
+     The name on the left is dash's; slides' name for the same thing is given
+     in the comment, and is aliased at the foot of this block so a rule ported
+     from slides resolves without being rewritten. */
   --bg: light-dark(#ffffff, #0e1319);          /* the page, and the sheet itself */
-  --panel: light-dark(#f8fafc, #161c24);       /* chrome bands: top bar, status bar */
+  /* chrome bands: top bar, status bar. slides: --chrome */
+  --panel: light-dark(#f5f7fa, #161c24);
   /* Raised opaque surfaces — menus, dialogs, popovers, inputs, buttons, the
      side panels. On white it IS the page colour; on dark it has to lift off
      the page or a menu floating over the grid has no edge but its shadow, and
      shadows barely read on a dark ground. */
   --surface: light-dark(#ffffff, #1b222c);
-  --hover: light-dark(#f1f5f9, #26303d);       /* menu rows, buttons, list items */
+  /* menu rows, buttons, list items. slides: --chrome-2 */
+  --hover: light-dark(#eceff4, #26303d);
   /* A wash for hover states drawn OVER unknown content (a chart band, a table
      row that may already be tinted). Alpha, not a colour, for that reason. */
   --wash: light-dark(rgb(0 0 0 / 0.04), rgb(255 255 255 / 0.07));
   --line: light-dark(#e3e8ef, #1f2731);
   --line-strong: light-dark(#cbd5e1, #2f3a49);
   --ink: light-dark(#1e2a3a, #d6dee9);
-  --muted: light-dark(#64748b, #93a0b2);
+  /* Secondary ink — control labels, panel rows. slides: --ink-2. dash had no
+     such token and reached for --muted, which is a CAPTION grey and a step too
+     light for a word somebody is meant to act on. */
+  --ink-2: light-dark(#31445c, #b9c5d4);
+  /* MEASURED, and the reason this is slides' #5b6472 rather than the #64748b
+     dash had: --muted carries 11–11.5px captions, and at #64748b it was
+     4.34:1 on --hover and 4.22:1 on --accent-wash — under AA on the two
+     grounds a caption most often lands on. slides' grey is 5.19:1 and 5.30:1
+     on those same two, 5.57:1 on --panel, and it is the same hue family. */
+  --muted: light-dark(#5b6472, #93a0b2);
   --accent: #f7a600;
+  /* Ink for a word that MEANS amber — a partial total, a "＋ add" invitation —
+     where the amber itself is 2.02:1 on white and cannot be the text. slides:
+     --accent-ink. dash referenced this name in two rules and never declared
+     it, so both silently fell back and neither mark ever appeared; the dark
+     value is the amber ink --warn-ink already uses, so the app carries one
+     amber-on-dark and not two. MEASURED: 6.92:1 on white, 9.22:1 on the dark
+     header band. */
+  --accent-ink: light-dark(#7a5200, #f0b357);
   --slash: #ff9e8a;                            /* the wordmark's peach */
-  --scrim: light-dark(rgb(20 30 45 / 0.42), rgb(2 5 9 / 0.66));
-  --shadow-pop: light-dark(0 12px 32px rgb(15 23 42 / 0.16), 0 12px 32px rgb(0 0 0 / 0.55));
-  --shadow-dialog: light-dark(0 24px 64px rgb(15 23 42 / 0.34), 0 24px 64px rgb(0 0 0 / 0.7));
+  /* Focus, and the selection ring, are ONE colour — see the focus note below.
+     slides calls it --blue and uses it for the same job. */
+  --blue: var(--sel-ring);
+  /* slides' scrim and its two shadow tiers (popover, dialog), verbatim. */
+  --scrim: light-dark(rgb(15 23 36 / 0.38), rgb(2 5 9 / 0.66));
+  /* ————— THE SHADOWS HAVE TO BE BUILT THIS WAY, and it is not a style choice —————
+     `light-dark()` is a <color> function. A CUSTOM property holds any token
+     stream, so `--shadow-pop: light-dark(0 12px 32px …, …)` is a perfectly
+     legal declaration — and then `box-shadow: var(--shadow-pop)` substitutes a
+     colour function into a position that wants lengths, the declaration is
+     INVALID AT COMPUTED-VALUE TIME, and box-shadow falls back to its initial
+     `none`. Silently. MEASURED before this change, on the built shell:
+     `getComputedStyle(document.querySelector('.dx-about')).boxShadow` was
+     "none" — every menu, every popover, the save menu, the find bar, the help
+     card, the About dialog and the phone drawers had been drawing NO shadow at
+     all, on both grounds, for as long as the tokens have existed.
+
+     This is the same trap --bar-opacity fell into a few lines below, which is
+     why the note there says any non-colour theme-varying token needs another
+     shape. The shape is here: vary the COLOUR, which light-dark() can carry,
+     and keep the lengths outside it. A media query would also work but would
+     NOT follow the explicit light/dark override (that override flips
+     `color-scheme`, and only light-dark() reads it) — so a reader who picks
+     Light on a dark desktop would get light surfaces wearing dark-tuned
+     shadows. `scripts/test-dash-theme.ts` now fails on any light-dark() whose
+     light half is not a colour. */
+  --shadow-pop-color: light-dark(rgb(15 23 36 / 0.18), rgb(0 0 0 / 0.55));
+  --shadow-dialog-color: light-dark(rgb(15 23 36 / 0.3), rgb(0 0 0 / 0.7));
+  --shadow-pop: 0 12px 32px var(--shadow-pop-color);
+  --shadow-dialog: 0 18px 50px var(--shadow-dialog-color);
 
   /* ————— semantic ————— */
   --warn-bg: light-dark(#fffbeb, #221b0d);     /* the findings strip */
@@ -171,6 +227,24 @@
   --fs-ui: 13px;         /* control and menu text */
   --fs-small: 11.5px;    /* captions, sub-labels, meta */
   --fs-micro: 11px;      /* section headers, badges */
+
+  /* ————— the suite's type face —————
+     slides' stack, verbatim (slides/src/styles.css html,body). It was already
+     the same faces on every platform either stack can reach — system-ui and
+     -apple-system both resolve to SF on macOS/iOS and to Segoe UI on Windows —
+     but "the same faces by coincidence" is not the same claim as "the same
+     stack", and only one of them survives somebody adding a font.
+     NAMED, because pivot.css already asks for `var(--ui, …)` and nothing
+     declared it: the pivot has been rendering off its own fallback rather
+     than off the app's font since it was written. */
+  --ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* ————— slides' names for things dash had already named —————
+     Aliases, not second definitions: a rule lifted out of slides/src/styles.css
+     resolves here unchanged, and there is still exactly one place each colour
+     is decided. */
+  --chrome: var(--panel);
+  --chrome-2: var(--hover);
 }
 
 /* THE EXPLICIT OVERRIDE IS NOT IN THIS FILE, and that is not an oversight.
@@ -195,7 +269,7 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--ink);
-  font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font: 14px/1.45 var(--ui);
   -webkit-text-size-adjust: 100%;
 }
 
@@ -205,14 +279,35 @@ html, body {
 .dx-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--line-strong);
+  /* 10px / 8px 14px / 1px --line: slides' topbar metrics (its .ed-topbar), so
+     the two apps' bars are the same object at the same height. dash's bar had
+     been 1px shorter with 2px less gap and a --line-strong rule under it —
+     three small differences that read, side by side, as two products. The bar
+     keeps its --panel tint rather than slides' white: dash's DOCUMENT is the
+     white sheet directly below, and a white bar over a white sheet leaves the
+     seam doing work a 1px line cannot. */
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
   background: var(--panel);
   flex: 0 0 auto;
   min-width: 0;
-  /* the notch: the app positions its own chrome and never asks the browser to pad it */
-  padding-top: max(7px, env(safe-area-inset-top));
+  /* THE NOTCH, AND THE HOST THAT LIES ABOUT IT. viewport-fit=cover puts the
+     page under the rounded corners, the Dynamic Island and the home indicator,
+     so fixed chrome insets itself. dash asked for the TOP only, in `env()`
+     only — which meant two failures slides had already fixed:
+       · a landscape phone put the end buttons under the corner curve, because
+         nothing inset the left or right edge; and
+       · inside bento/tray's WKWebView `env(safe-area-inset-*)` reads 0px even
+         when the device genuinely has insets (measured in tray: native
+         62/0/34/0, CSS 0px), so the tray publishes the real numbers as
+         `--tray-safe-*` (tray/ios/EditorViewController.swift) — and dash, not
+         reading them, drew its toolbar under the island.
+     max() keeps the normal padding on every device reporting 0, and in a
+     browser the variables are undefined, resolve to 0px, and env() does the
+     work as normal. The BACKGROUND still bleeds to the edge; only the content
+     is inset. */
+  padding: max(8px, env(safe-area-inset-top), var(--tray-safe-top, 0px)) max(14px, env(safe-area-inset-right), var(--tray-safe-right, 0px))
+           8px max(14px, env(safe-area-inset-left), var(--tray-safe-left, 0px));
 }
 .dx-mark {
   font-weight: 650;
@@ -225,8 +320,11 @@ html, body {
   font: inherit;
   font-weight: 600;
   border: 1px solid transparent;
-  border-radius: var(--radius);
-  padding: 4px 8px;
+  /* slides' .ed-title: 6px, 5px 8px, a --line hover edge and a --blue focus
+     edge. Same field, same app. */
+  border-radius: 6px;
+  padding: 5px 8px;
+  line-height: normal;   /* same reason as .dx-btn: match slides' 28.5px field */
   /* `flex: 0 1` and never `1 1`: the title is elastic, but it is not entitled
      to the slack — the buttons to its right are, and a growing title is what
      pushes them off the end. */
@@ -235,32 +333,87 @@ html, body {
   background: transparent;
   color: inherit;
 }
-.dx-title:hover { border-color: var(--line-strong); }
-.dx-title:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.dx-title:hover { border-color: var(--line); }
+.dx-title:focus { outline: none; border-color: var(--blue); background: var(--surface); }
 
 .dx-group { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 /* everything after the insert group is pushed to the far end */
 .dx-bar-end { margin-inline-start: auto; }
 
+/* slides' .ed-btn, adopted whole: 13px, 6px 9px, an 8px radius, --ink-2 for the
+   label, and a hover that FILLS rather than a border that darkens. dash's
+   button was 5px 10px on a 7px radius with a standing --line-strong box and a
+   0.5px press-shift — geometry nobody had a reason for, and a press animation
+   slides does not have and `prefers-reduced-motion` cannot switch off (that
+   media query kills transitions; a transform is not one).
+
+   The BOX comes back wherever a button stands on its own — see .dx-btn-boxed
+   below. In a toolbar, where a dozen of them sit in a row against a tinted
+   band, the boxes were the loudest thing on the screen. */
 .dx-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font: inherit;
   font-size: var(--fs-ui);
-  padding: 5px 10px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: inherit;
+  /* `normal`, not the body's 1.45. slides' .ed-btn inherits a body with no
+     line-height at all, so its buttons are 30px and its bar 47px; dash's body
+     sets 1.45, which put 2.8px of leading inside every button and made the bar
+     49.8px — a toolbar two pixels taller than the other app's for no reason
+     anyone chose. MEASURED after: button 29.8px, bar 47px, both slides'. */
+  line-height: normal;
+  color: var(--ink-2);
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
   cursor: pointer;
   white-space: nowrap;
   flex: 0 0 auto;
 }
-.dx-btn:hover { background: var(--hover); border-color: var(--muted); }
-.dx-btn:active { transform: translateY(0.5px); }
-.dx-btn[disabled] { opacity: 0.45; cursor: default; }
-.dx-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dx-btn:hover { background: var(--hover); }
+.dx-btn:active { background: var(--line); }
+/* 0.35, which is slides' figure for a dead control (.ed-arrange-btn:disabled,
+   .sv-btn[disabled]). dash had 0.45 here, 0.45 in the save menu and 0.6 in the
+   tab menu — three answers to one question. */
+.dx-btn[disabled] { opacity: 0.35; cursor: default; }
+/* FOCUS IS BLUE, NOT AMBER, and this is the one measurement in the file that
+   was a straightforward failure. The brand amber is 2.02:1 on white and 1.88:1
+   on the top bar's own band — WCAG 2.2 SC 1.4.11 asks 3:1 of a focus
+   indicator, so the ring a keyboard user navigates by was the least visible
+   mark in the app. --blue (= --sel-ring) is 4.82:1 light and 4.66:1 dark, and
+   it is already what tabs.css and find.css focus with, so this also settles an
+   argument dash was having with itself. slides focuses with --blue too
+   (.ed-title:focus). */
+.dx-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+/* A button that is NOT in a row of its own kind — a dialog's actions, the
+   gate's way out, the chart head — keeps a rest-state box, because there is
+   nothing around it to say it is a control. Exactly slides' arrangement:
+   ghost in the chrome, `.ed-about .ed-btn:not(.ed-btn-primary)` outlined in
+   the dialog. */
+.dx-about-actions .dx-btn,
+.dx-about .dx-btn,
+.dx-help .dx-btn,
+.dx-ask-foot .dx-btn,
+.dx-gate .dx-btn,
+.dx-btn-boxed {
+  /* --line-strong, where slides writes --line. slides' dialog is white and a
+     #e3e8ef edge on it is a box; dash's dialog is --surface on BOTH grounds,
+     and on the dark one --line (#1f2731) against --surface (#1b222c) is not an
+     edge at all — MEASURED in the dark About: the "Check for updates" button
+     read as a line of loose text. --line-strong is the weight dash already
+     boxes .dp-btn with, and it is what .dx-btn itself used before it became a
+     ghost, so nothing here is heavier than it was. */
+  border-color: var(--line-strong);
+  background: var(--surface);
+}
+.dx-about-actions .dx-btn:hover,
+.dx-about .dx-btn:hover,
+.dx-help .dx-btn:hover,
+.dx-ask-foot .dx-btn:hover,
+.dx-gate .dx-btn:hover,
+.dx-btn-boxed:hover { background: var(--hover); }
 .dx-i { flex: 0 0 auto; }
 /* the caret on a dropdown trigger is a hint, not a peer of the icon */
 .dx-dd-trig > .dx-i:last-child { opacity: 0.5; margin-inline-start: -2px; }
@@ -358,14 +511,16 @@ html, body {
   background: none;
   box-shadow: none;
 }
-/* …and as a row they are ordinary bar buttons again, not menu rows */
+/* …and as a row they are ordinary bar buttons again, not menu rows: the same
+   ghost .dx-btn everything else in the bar is, so the only difference between
+   this row and the group beside it is what the buttons say. */
 .dx-insert-dd > .dx-menu > .dx-btn {
   width: auto;
-  border: 1px solid var(--line-strong);
-  background: var(--surface);
-  padding: 5px 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 6px 9px;
 }
-.dx-insert-dd > .dx-menu > .dx-btn:hover { background: var(--hover); border-color: var(--muted); }
+.dx-insert-dd > .dx-menu > .dx-btn:hover { background: var(--hover); }
 .dx-insert-dd > .dx-menu .dx-i { color: inherit; }
 
 /* The People chip is a CHIP, so it takes the bar's height, not its own.
@@ -399,6 +554,14 @@ html, body {
    hanging past the right edge. A control you have to scroll to reach is a
    control that is missing, which is the one thing this whole section exists to
    prevent.
+
+   RE-MEASURED AGAIN when the bar took slides' metrics (10px gaps, 14px side
+   padding, 6px 9px buttons): the bar's requirement moved by about +12px, so the
+   figures below each shift by that much and every rung still clears. MEASURED
+   after, at the tightest point of each rung — 1601px: no overflow, the title at
+   232.8px of its 240 basis; 1381px: no overflow, title 237.1px; 1041px: no
+   overflow, title 185.7px of its 200 basis; 900/375/320px: no overflow.
+   `document.scrollWidth === clientWidth` at every one of them.
 
    One rung could not fix it honestly. Collapsing every label at 1575 would
    leave a 1440px laptop — the commonest window this app will ever open in —
@@ -458,7 +621,7 @@ html, body {
   .dx-insert-dd.open > .dx-menu { display: flex; }
   .dx-insert-dd > .dx-menu > .dx-btn {
     width: 100%;
-    border: 0;
+    border-color: transparent;
     background: transparent;
     padding: 6px 9px;
   }
@@ -476,12 +639,27 @@ html, body {
 }
 
 @media (max-width: 700px) {
-  .dx-bar { gap: 4px; padding-left: 8px; padding-right: 8px; }
+  /* the full padding is restated, not just the sides: a bare `padding-left`
+     here would drop the safe-area max() above on the one class of device that
+     has a notch to clear. slides restates it at each rung for the same
+     reason. */
+  .dx-bar {
+    gap: 4px;
+    padding: max(8px, env(safe-area-inset-top), var(--tray-safe-top, 0px)) max(8px, env(safe-area-inset-right), var(--tray-safe-right, 0px))
+             8px max(8px, env(safe-area-inset-left), var(--tray-safe-left, 0px));
+  }
   /* HIG touch targets. A 30px icon button is a mis-tap on glass. */
   .dx-bar > .dx-group > .dx-btn,
   .dx-bar > .dx-group .dx-dd-trig,
   .dx-bar > .dx-insert-dd > .dx-dd-trig { min-height: 38px; justify-content: center; }
   .dx-bar .dx-btn:not(.dx-btn-save):not(.dxs-caret) { min-width: 38px; }
+  /* Save is nested in .dxs-wrap, so it is not a direct child of a .dx-group and
+     the min-height above never reached it: MEASURED at 375px, every icon button
+     was 38px tall and Save — the one control on this bar a phone user is most
+     likely to be aiming at — was 29px, sitting short in the row. It is exempt
+     from the min-WIDTH (it keeps its word instead), not from the target size. */
+  .dx-bar .dxs-wrap > .dx-btn,
+  .dx-bar .dxs-caret { min-height: 38px; }
   .dx-bar .dx-menu .dx-btn { min-width: 0; min-height: 0; } /* menu rows are text */
   /* the trigger carets are the first thing to go: at this width the panel that
      opens is explanation enough, and 15px each is a whole button's worth */
@@ -797,7 +975,7 @@ html, body {
   align-self: center;
 }
 .dx-fx-input:hover { border-color: var(--line); }
-.dx-fx-input:focus { outline: none; border-color: var(--accent); background: var(--surface); }
+.dx-fx-input:focus { outline: none; border-color: var(--blue); background: var(--surface); }
 
 /* ————— status bar —————
    Excel's reads left: what you are looking at; right: what the selection adds
@@ -815,7 +993,9 @@ html, body {
   flex: 0 0 auto;
   min-height: 26px;
   font-variant-numeric: tabular-nums;
-  padding-bottom: max(3px, env(safe-area-inset-bottom));
+  /* the home indicator, and the tray's own number for it — same reasoning as
+     the top bar's padding, and this is the bar the indicator actually lands on */
+  padding-bottom: max(3px, env(safe-area-inset-bottom), var(--tray-safe-bottom, 0px));
 }
 .dx-status-view { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dx-status-sum {
@@ -1038,7 +1218,7 @@ html, body {
   padding: 4px 7px;
   color: var(--ink);
 }
-.dx-pop-in:focus { outline: none; border-color: var(--accent); }
+.dx-pop-in:focus { outline: none; border-color: var(--blue); }
 
 /* ————— selection outline and fill handle ————— */
 .dg-outline {

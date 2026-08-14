@@ -88,7 +88,7 @@
   width: 100%;
 }
 .dx-about-in:focus,
-.dx-about select:focus { outline: none; border-color: var(--accent); }
+.dx-about select:focus { outline: none; border-color: var(--blue); }
 .dx-about-in[disabled] { background: var(--panel); color: var(--muted); }
 
 .dx-about-actions {
@@ -110,7 +110,7 @@
   background: var(--surface);
   color: inherit;
 }
-.dx-about-paste:focus { outline: none; border-color: var(--accent); }
+.dx-about-paste:focus { outline: none; border-color: var(--blue); }
 
 .dx-about-vers {
   display: flex;
@@ -174,8 +174,10 @@
    neither looks like a control. */
 .dx-mark[data-about], .dx-ver[data-about] { cursor: pointer; }
 .dx-mark[data-about]:hover, .dx-ver[data-about]:hover { color: var(--accent); }
+/* --blue, like every other focus ring in the app: the amber is 2.02:1 on white
+   and misses SC 1.4.11's 3:1. See .dx-btn:focus-visible in styles.css. */
 .dx-mark[data-about]:focus-visible, .dx-ver[data-about]:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--blue);
   outline-offset: 2px;
   border-radius: 4px;
 }

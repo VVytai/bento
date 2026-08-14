@@ -38,7 +38,9 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
 }
-.dx-ask-in:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+/* --blue, not --accent: the amber ring is 2.02:1 on white and misses the 3:1
+   WCAG 2.2 SC 1.4.11 asks of a focus indicator. See .dx-btn:focus-visible. */
+.dx-ask-in:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
 /* A formula is read character by character — an l and a 1 have to differ. */
 .dx-ask-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
 .dx-ask-hint {
@@ -51,5 +53,10 @@
 }
 .dx-ask-err { margin: 0 0 10px; font-size: 12px; color: var(--err-ink); }
 .dx-ask-foot { display: flex; justify-content: flex-end; gap: 8px; }
-.dx-ask-go { background: var(--accent); color: #1e2a3a; border-color: transparent; }
-.dx-ask-go:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Scoped through .dx-ask-foot to out-rank styles.css's `.dx-ask-foot .dx-btn`
+   boxed rule, which is two classes and would otherwise repaint the primary as
+   an ordinary outlined button — the same specificity trap the .dx-dirty and
+   .dx-people-me notes in styles.css describe. */
+.dx-ask-foot .dx-ask-go { background: var(--accent); color: #1e2a3a; border-color: transparent; }
+.dx-ask-foot .dx-ask-go:hover { background: color-mix(in srgb, var(--accent) 88%, #000); }
+.dx-ask-go:disabled { opacity: 0.35; cursor: not-allowed; }

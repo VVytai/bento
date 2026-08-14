@@ -85,7 +85,7 @@ const rowsOf = (s: TableSheet): number => s.rids.reduce((n, [, c]) => n + c, 0)
 
 /** Rename a sheet. An empty name is refused rather than stored — a nameless tab
  *  is unclickable, and the previous name is the only thing left to fall back to. */
-export function renameSheetPatch(sheet: TableSheet, name: string): SetSheetProps | null {
+export function renameSheetPatch(sheet: { id: string; name: string }, name: string): SetSheetProps | null {
   const n = name.trim()
   if (!n || n === sheet.name) return null
   return { op: 'setSheetProps', sheet: sheet.id, props: { name: n } }
@@ -314,6 +314,142 @@ export function describeKind(kind: string): { chip: string; why: string } {
   return { chip: kind, why: t('{kind} sheet — not editable in this build').replace('{kind}', kind) }
 }
 
+// --- what a toolbar action can run on ------------------------------------------
+//
+// ONE TABLE, AND IT HAS TO BE ONE TABLE. Every control in the top bar answers
+// the same question — "can this run on the sheet in front of the reader?" — and
+// the answer is a property of the sheet's KIND, not of the button. Written as
+// eight guards it was right on the day each was written and wrong afterwards:
+// measured on a spreadsheet sheet, Formula, Chart, 3D, Pivot, Story and Export
+// were all lit, and four of them threw `Uncaught Error: grid needs a table
+// sheet` into a console nobody has open — no message, no column, no chart,
+// nothing at all on screen.
+//
+// A NINTH ACTION MUST LAND HERE. `scripts/test-dash-actions.ts` reads main.ts's
+// markup, collects every `data-act`, and fails if one has no row — so the table
+// cannot silently fall behind the bar. And the rule type is a UNION: a
+// kind-scoped action carries `why` or it does not compile. A control that is
+// unavailable without saying why teaches the reader that the toolbar is
+// decorative, which is the failure this whole table exists to prevent.
+//
+// WHY THIS LIVES IN tabs.ts. It is the module that already knows what a kind IS
+// (`isTable`, `isOpenable`, `describeKind`), it needs no DOM, and a rig can
+// import it. main.ts cannot be imported at all — it boots on evaluation.
+//
+// DISABLED, NEVER HIDDEN. A control that vanishes reads as a bug in the app; a
+// disabled one whose tooltip says "Charts bind to a dataset's columns — this is
+// a spreadsheet" teaches the difference the two kinds exist to express.
+
+/** Every `data-act` in the top bar. */
+export type ActionId =
+  | 'formula' | 'chart' | 'viz3d' | 'pivot' | 'dashboard' | 'story'
+  | 'undo' | 'redo'
+  | 'import' | 'export' | 'import-xlsx' | 'export-xlsx'
+  | 'save' | 'about' | 'help'
+
+/**
+ * `on: 'workbook'` means the action is not about the sheet on screen at all —
+ * Save, Undo, Import — so no sheet can make it unavailable and it needs no
+ * reason. Anything else names the kinds it runs on and MUST say why it does not
+ * run on the others.
+ */
+export type ActionRule =
+  | { on: 'workbook' }
+  | { on: readonly string[]; why: (kind: string) => string }
+
+/**
+ * The reasons, spelled out per action rather than composed from a noun and a
+ * sentence frame: a translator needs the whole sentence, and "{what} needs a
+ * {kind}" is not a sentence in every language. Each gated action gets two — one
+ * for a spreadsheet, which is the distinction worth teaching, and one for any
+ * other kind, which is a pivot today and something else later.
+ *
+ * t() IS CALLED INSIDE THE FUNCTION, never at module level: a catalogue loaded
+ * after this module is imported would otherwise never reach these strings.
+ */
+export const ACTIONS: Readonly<Record<ActionId, ActionRule>> = {
+  formula: {
+    on: ['table'],
+    why: (k) => k === 'canvas'
+      ? t('A formula column fills every row of a dataset. This is a spreadsheet — type = in a cell instead.')
+      : t('A formula column fills every row of a dataset, and this sheet is not one.'),
+  },
+  chart: {
+    on: ['table'],
+    why: (k) => k === 'canvas'
+      ? t('Charts bind to a dataset’s columns — this is a spreadsheet.')
+      : t('Charts bind to a dataset’s columns, and this sheet has none.'),
+  },
+  viz3d: {
+    on: ['table'],
+    why: (k) => k === 'canvas'
+      ? t('A 3D plot binds three of a dataset’s columns — this is a spreadsheet.')
+      : t('A 3D plot binds three of a dataset’s columns, and this sheet has none.'),
+  },
+  pivot: {
+    on: ['table'],
+    why: (k) => k === 'canvas'
+      ? t('A pivot summarises a dataset’s columns — this is a spreadsheet.')
+      : t('A pivot summarises a dataset’s columns, and this sheet has none.'),
+  },
+  story: {
+    on: ['table'],
+    why: (k) => k === 'canvas'
+      ? t('A story step saves a dataset’s view — its filters, sorts and chart. A spreadsheet has none.')
+      : t('A story step saves a dataset’s view — its filters, sorts and chart. This sheet has none.'),
+  },
+  export: {
+    on: ['table'],
+    why: (k) => k === 'canvas'
+      ? t('A CSV is one header row and one row per row. A spreadsheet has no columns to name — make a range into a dataset first.')
+      : t('A CSV is one header row and one row per row, and this sheet has no columns to name.'),
+  },
+  // Workbook-scoped, every one of them: they are about the FILE, and the sheet
+  // in front of the reader cannot make them wrong. Excel disables none of these
+  // on a worksheet either.
+  dashboard: { on: 'workbook' },
+  undo: { on: 'workbook' },
+  redo: { on: 'workbook' },
+  import: { on: 'workbook' },
+  'import-xlsx': { on: 'workbook' },
+  'export-xlsx': { on: 'workbook' },
+  save: { on: 'workbook' },
+  about: { on: 'workbook' },
+  help: { on: 'workbook' },
+}
+
+/** The table's own key list — what a caller iterates, and what the rig checks
+ *  main.ts's markup against. */
+export const ACTION_IDS = Object.keys(ACTIONS) as ActionId[]
+
+/** Does this action run on a sheet of this kind? `''` = the grid points at no
+ *  sheet at all, which is a kind nothing sheet-scoped can run on. */
+export function actionApplies(id: ActionId, kind: string): boolean {
+  const rule = ACTIONS[id]
+  if (!rule) return true              // unknown id: never disable what we cannot explain
+  if (rule.on === 'workbook') return true
+  return rule.on.includes(kind)
+}
+
+/**
+ * Why it cannot run here — `''` when it can.
+ *
+ * THE SAME STRING TWICE, deliberately: the tooltip on the disabled button and
+ * the banner a stale click reports are one sentence, so a reader who clicks
+ * anyway is told exactly what the tooltip already said rather than something
+ * new to reconcile.
+ */
+export function actionReason(id: ActionId, kind: string): string {
+  if (actionApplies(id, kind)) return ''
+  const rule = ACTIONS[id]
+  if (rule.on === 'workbook') return ''
+  // The grid points at a sheet that is not in the document any more — a
+  // delete, an undo, a remote op. Not "unavailable": say which of the two
+  // things is missing, because the reader can fix this one by clicking a tab.
+  if (!kind) return t('No sheet is open, so there is nothing for this to run on.')
+  return rule.why(kind)
+}
+
 // --- mount -------------------------------------------------------------------
 
 export interface TabsHost {
@@ -367,14 +503,19 @@ export function mountTabs(host: TabsHost): Tabs {
 
   const ro = (): boolean => store.readOnly
 
-  /** The sheet the grid is showing, read from the GRID — import and the About
-   *  dialog switch sheets too, so a local copy goes stale. */
+  /**
+   * The sheet the grid is showing, read from the GRID — import and the About
+   * dialog switch sheets too, so a local copy goes stale.
+   *
+   * `showingId()`, NOT `grid.sheet.id`. `sheet` narrows to a dataset and throws
+   * on anything else, and the try/catch that used to wrap it turned "I am on a
+   * spreadsheet" into "no sheet is open": measured, a workbook sitting on a
+   * spreadsheet tab highlighted NO tab at all, `stepSheet` walked from nowhere
+   * so ctrl+PgUp did nothing, and the strip could not tell a sheet switch from
+   * a repaint. The kind-agnostic accessor is the whole fix.
+   */
   function showing(): string {
-    try {
-      return grid.sheet.id
-    } catch {
-      return ''
-    }
+    return grid.showingId()
   }
 
   function commit(p: Patch | Patch[]): void {
@@ -502,7 +643,13 @@ export function mountTabs(host: TabsHost): Tabs {
     const el = tabAt(e)
     if (!el || ro()) return
     const sheet = sheetOf(el)
-    if (!sheet || !isTable(sheet)) return
+    // A NAME IS A NAME WHATEVER THE KIND. Renaming writes `setSheetProps`,
+    // which touches nothing but the name, and the tab strip refused it on a
+    // spreadsheet with the words "Only a table sheet can be renamed in this
+    // build" — a statement about this build that this build contradicts. Sheets
+    // the grid cannot open at all keep the refusal: a name you cannot see
+    // yourself typing is not an edit anyone can check.
+    if (!sheet || !isOpenable(sheet)) return
     e.preventDefault()
     startRename(el, sheet)
   })
@@ -527,7 +674,7 @@ export function mountTabs(host: TabsHost): Tabs {
 
   // --- rename in place ---------------------------------------------------------
 
-  function startRename(el: HTMLElement, sheet: TableSheet): void {
+  function startRename(el: HTMLElement, sheet: Sheet): void {
     const label = el.querySelector<HTMLElement>('.dx-tab-name')
     if (!label) return
     renaming = true
@@ -685,8 +832,9 @@ export function mountTabs(host: TabsHost): Tabs {
       return
     }
     const at = store.doc.sheets.findIndex((s) => s.id === sheet.id)
-    menuItem(menu, t('Rename'), () => startRename(el, sheet as TableSheet), !table,
-      table ? '' : t('Only a table sheet can be renamed in this build.'))
+    const open = isOpenable(sheet)
+    menuItem(menu, t('Rename'), () => startRename(el, sheet), !open,
+      open ? '' : t('The rename box is drawn on the tab, so a sheet this build cannot open cannot be renamed here.'))
     menuItem(menu, t('Duplicate'), () => {
       const r = duplicateSheetPatches(store.doc, sheet.id)
       if (!r) return
@@ -777,14 +925,21 @@ export function mountTabs(host: TabsHost): Tabs {
     menu.classList.add('dx-tab-menu-all')
     const cur = showing()
     for (const sheet of store.doc.sheets) {
-      const table = isTable(sheet)
+      // OPENABLE, not table. This list gated on `isTable`, so the one route to
+      // a sheet twenty tabs along refused to open a SPREADSHEET — greyed out,
+      // with a tooltip explaining what a spreadsheet is as though that were the
+      // reason — while clicking its tab opened it perfectly well. Exactly the
+      // trap this file's own header names: `isTable` answers "has columns",
+      // `isOpenable` answers "does clicking do anything", and only the second
+      // one is what a navigation list is asking.
+      const open = isOpenable(sheet)
       const kind = String((sheet as { kind?: unknown }).kind ?? '')
       const label = (sheet.id === cur ? '✓ ' : '') + (sheet.name || t('(untitled sheet)')) +
-        (table ? '' : ` · ${describeKind(kind).chip}`)
+        (isTable(sheet) ? '' : ` · ${describeKind(kind).chip}`)
       menuItem(menu, label, () => {
-        if (!table) return
+        if (!open) return
         grid.setSheet(sheet.id)
-      }, !table, table ? '' : describeKind(kind).why)
+      }, !open, open ? '' : describeKind(kind).why)
     }
   })
 
@@ -854,9 +1009,14 @@ export function mountTabs(host: TabsHost): Tabs {
   store.beforePatch((patches) => {
     const cur = showing()
     if (!cur) return
+    // `isOpenable`, not `isTable`: a SPREADSHEET renders now, so a patch that
+    // replaces the showing sheet with one is not a sheet the grid has to flee.
+    // Reading it as doomed jumped the reader to a different tab for no reason;
+    // reading a canvas→pivot swap as safe would leave the grid pointing at a
+    // sheet it cannot paint, which is the throw this hook exists to prevent.
     const doomed = patches.some((p) =>
       p.op === 'setSheet' && p.id === cur &&
-      (p.sheet === undefined || !isTable(p.sheet)))
+      (p.sheet === undefined || !isOpenable(p.sheet)))
     if (!doomed) return
     // computed against the document as it still is, which is what makes the
     // neighbour the RIGHT neighbour
