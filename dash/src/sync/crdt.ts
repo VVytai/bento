@@ -44,6 +44,70 @@
 //     `x`/`fill`. Cell overrides (the `cells` overlay) are a second key space
 //     on the same node, `o␟price`.
 //
+//   - A SPREADSHEET's cells are properties of the SHEET NODE, keyed by their A1
+//     ADDRESS: `s␟c1 ⟹ g␟B7` is the cell at B7, `p␟B7` its formatting, `w␟C`
+//     a column width, `h␟4` a row height. A `CanvasSheet` (kind:'canvas') has
+//     no rows and no columns to hang a node on — it is a sparse map — so the
+//     sheet is the only node there is, and the address is the only key the
+//     format offers.
+//
+//     WHY A POSITION KEY, when a position key is exactly what makes a row
+//     insert hard. The choice was made three times over and each answer says
+//     the same thing:
+//
+//       1. THE DOCUMENT SUPPLIES NO CELL IDENTITY. A dataset row carries a
+//          `rid` in the FILE — minted at insert, never reused — which is what
+//          lets `r␟s1␟7` mean the same row on two replicas that have never
+//          spoken. A spreadsheet cell carries nothing but its address. Any
+//          identity would have to be MINTED at adoption, and minted identically
+//          by every replica of the file, so it would be a function of the
+//          address anyway — plus a stored address↔identity map.
+//       2. THAT MAP WOULD BE O(CELLS). Invariant 2 above is that state is
+//          O(edits) and never O(rows); the map is one entry per NON-EMPTY cell
+//          whether anyone edited it or not, and it rides in the FILE
+//          (`collab.sync`). A 40k-cell invoice model would carry 40k identities
+//          to make a feature nobody has yet correct. The address is free: an
+//          untouched cell costs zero bytes here, exactly as an untouched row
+//          does.
+//       3. NOTHING MOVES A CELL TODAY. `store.ts` has exactly two spreadsheet
+//          patches — `setCanvasCells` and `setCanvasSizes` — and neither shifts
+//          an address. There is no insert-row, no insert-column, no cut-and-
+//          shift on this kind. A position key is only wrong once something
+//          moves, and identity bought before then is identity that has to be
+//          maintained through every read (`validate.ts`, `preview.ts`,
+//          `cellformula.ts` and the format itself all address by A1) for no
+//          convergence gained.
+//
+//     SO THE RULE FOR WHOEVER ADDS THE ROW INSERT, and it is the whole reason
+//     this paragraph is long: a patch that MOVES cells cannot be minted as
+//     `cvc` ops over the addresses it lands on. Two replicas inserting rows
+//     concurrently would each renumber the other's writes and no register
+//     ordering can repair it — the write and the shift are not the same kind
+//     of event. It needs either an explicit shift op that transforms the key
+//     space (and the registers with it, since a register keyed `g␟B7` is a
+//     claim about a POSITION), or a per-sheet row/column order of the kind the
+//     dataset kind has, at which point the cell keys become (rowId, colId) and
+//     stop being positions at all. Until one of those exists, an unhandled
+//     patch MUST keep falling through `localOne`'s default arm to the snapshot
+//     fallback: coarse and correct beats fine and wrong. The fallback is the
+//     safety net for this kind and must be narrowed, never removed.
+//
+//     TWO REGISTERS PER CELL, not one and not one per field. `v` (the value)
+//     and `f` (the formula that produced it) are one fact — splitting them
+//     merges a formula from one replica with a cached number from another and
+//     shows a cell that never existed anywhere — so they share a register with
+//     everything else the cell computes (`g␟`). Presentation (`format`,
+//     `color`, `bg`, `bold`, `align`, `note`) is independent of the value in
+//     both directions and gets its own (`p␟`), so bolding a cell while someone
+//     retypes it keeps both. That is the same split the dataset kind already
+//     makes between `v␟col` and `o␟col`, for the same reason.
+//
+//     Which registers a write CLAIMS is diffed against the pre-state at mint
+//     time (`localOne` runs before the store applies), because the patch always
+//     carries the whole cell — `cellprops.ts` writes `{...cell, bold:true}` —
+//     so the object alone cannot say what changed. The op carries the whole
+//     cell too, plus the claim mask, so a receiver in any state can apply it.
+//
 //   - Row ORDER is a FRACTIONAL INDEX over rids, and the trick that makes it
 //     affordable is that most rows never get one. rids are minted at insert
 //     and NEVER reused (rowcol.ts is emphatic about this), which is what makes
@@ -89,7 +153,7 @@
 // to.)
 
 import { applyPatch, readCell, type Patch } from '../store.ts'
-import type { CellOverride, Column, ColumnData, DashDoc, Sheet, TableSheet } from '../model.ts'
+import type { CanvasCell, CanvasSheet, CellOverride, Column, ColumnData, DashDoc, Sheet, TableSheet } from '../model.ts'
 
 /**
  * Sync format version — stamped into SyncStateJSON (`v`) and every wire frame
@@ -114,6 +178,67 @@ const vKey = (col: string): string => `v${NS}${col}`
 const oKey = (col: string): string => `o${NS}${col}`
 const isVKey = (k: string): boolean => k.charCodeAt(0) === 118 /* 'v' */ && k[1] === NS
 const keyCol = (k: string): string => k.slice(2)
+
+/* --- spreadsheet (kind:'canvas') key spaces, all on the SHEET node ---------
+ * `g␟B7` the cell's content, `p␟B7` its presentation, `w␟C` a column width,
+ * `h␟4` a row height. The separator is what keeps them out of the sheet's
+ * property namespace: U+001F cannot occur in a key `setSheetProps` can write. */
+const cvKey = (a1: string): string => `g${NS}${a1}`
+const cvPKey = (a1: string): string => `p${NS}${a1}`
+/** size key. `axis` is 'w' (column width, keyed by LETTER) or 'h' (row height,
+ *  keyed by the 1-based number) — the two halves of an A1 address, exactly as
+ *  `CanvasSheet.cols`/`rows` spell them. */
+const cvZKey = (axis: 'w' | 'h', k: string): string => `${axis}${NS}${k}`
+/** does this sheet-node register key address spreadsheet content? */
+const isCvKey = (k: string): boolean =>
+  k[1] === NS && (k[0] === 'g' || k[0] === 'p' || k[0] === 'w' || k[0] === 'h')
+const cvAddr = (k: string): string => k.slice(2)
+
+/**
+ * A cell's presentation fields.
+ *
+ * Everything NOT in this set is content — including keys a future build adds,
+ * which is the conservative direction: an unknown field lands in the register
+ * that already carries `v` and `f`, so at worst it is merged more coarsely than
+ * it could be, never incoherently.
+ */
+const CV_PRES = new Set(['format', 'color', 'bg', 'bold', 'align', 'note'])
+
+/** stable text for one half of a cell — the comparison mint-time diffing needs */
+const cvGroupText = (cell: CanvasCell | null | undefined, pres: boolean): string => {
+  if (!cell) return ''
+  const keys = Object.keys(cell).filter((k) => CV_PRES.has(k) === pres && cell[k] !== undefined).sort()
+  return keys.map((k) => `${JSON.stringify(k)}:${JSON.stringify(cell[k])}`).join(',')
+}
+
+/** which registers a write to this cell claims: 1 = content, 2 = presentation */
+const cvMask = (prev: CanvasCell | undefined, next: CanvasCell | null): number =>
+  (cvGroupText(prev, false) === cvGroupText(next, false) ? 0 : 1) |
+  (cvGroupText(prev, true) === cvGroupText(next, true) ? 0 : 2)
+
+/**
+ * The cell a claim produces: take the claimed halves from the payload, keep the
+ * rest of what is already there. A payload of `null` clears the halves it
+ * claims, and a cell left with nothing is REMOVED — a spreadsheet is sparse,
+ * and a cleared cell lingering as `{}` is neither sparse nor equal to the same
+ * sheet reached another way (store.ts is emphatic; test-dash-canvascells pins it).
+ */
+const cvMerge = (base: CanvasCell | undefined, payload: CanvasCell | null, mask: number): CanvasCell | null => {
+  const out: CanvasCell = { ...(base ?? {}) }
+  for (const half of [false, true]) {
+    if (!(mask & (half ? 2 : 1))) continue
+    for (const k of Object.keys(out)) if (CV_PRES.has(k) === half) delete out[k]
+    for (const [k, v] of Object.entries(payload ?? {})) {
+      if (CV_PRES.has(k) === half && v !== undefined) out[k] = v
+    }
+  }
+  return Object.keys(out).length ? out : null
+}
+
+const canvasOf = (doc: DashDoc, id: string): CanvasSheet | undefined => {
+  const s = doc.sheets.find((x) => x.id === id)
+  return s && s.kind === 'canvas' ? s : undefined
+}
 
 /** sheet id out of a sheet/column/row node id */
 const nodeSheet = (node: string): string => {
@@ -262,6 +387,30 @@ export interface CellOp extends OpBase { op: 'cell'; sh: string; col: string; ri
 export interface OvrOp extends OpBase { op: 'ovr'; sh: string; keys: string[]; v: Array<CellOverride | null> }
 
 /**
+ * SPREADSHEET cells (`kind:'canvas'`), keyed by A1 address on the sheet node.
+ *
+ * `v[i]` is the WHOLE cell as the writer left it (or `null` = removed, the
+ * spelling that survives JSON), and `m[i]` is which halves of it this write
+ * CLAIMS — 1 content, 2 presentation, 3 both. The payload is whole so a
+ * receiver in any state can apply the claim; the mask is what stops a bold
+ * click from also re-asserting a value the writer never touched.
+ *
+ * Many addresses per op because a paste, a fill and a delete are each one edit
+ * to a reader and must be one undo step — the same rule `setCanvasCells` gives.
+ */
+export interface CvCellOp extends OpBase {
+  op: 'cvc'; sh: string; keys: string[]; v: Array<CanvasCell | null>; m: number[]
+}
+
+/** SPREADSHEET column widths and row heights. `keys` are already prefixed
+ *  `w<letter>` / `h<number>`, so one op carries both axes exactly as the patch
+ *  does. `null` removes the entry (and the container with the last of them —
+ *  applyPatch owns that rule, and it is why this is a separate op there). */
+export interface CvSizeOp extends OpBase {
+  op: 'cvz'; sh: string; keys: string[]; v: Array<number | null>
+}
+
+/**
  * Row insert. `ord[i]` is the row's fractional key, never a position:
  * positions shift under concurrency and a key does not. `vals` is colId → one
  * value per rid, the shape store.ts's insertRows patch already carries.
@@ -309,7 +458,7 @@ export interface InsOp extends OpBase {
 export interface DelOp extends OpBase { op: 'del'; n: string }
 export interface OrdOp extends OpBase { op: 'ord'; n: string; ord: string }
 
-export type Op = SetOp | CellOp | OvrOp | RinsOp | RdelOp | InsOp | DelOp | OrdOp
+export type Op = SetOp | CellOp | OvrOp | CvCellOp | CvSizeOp | RinsOp | RdelOp | InsOp | DelOp | OrdOp
 
 // ---------------------------------------------------------------------------
 // serializable state
@@ -620,6 +769,42 @@ export class DashSync {
         })
         break
       }
+      case 'setCanvasCells': {
+        // Diffed against the PRE-state, which is the only place the claim can
+        // be computed: the patch carries whole cells (cellprops.ts writes
+        // `{...cell, bold:true}`), so the object alone cannot say whether the
+        // value moved, the formatting moved, or neither.
+        const sheet = canvasOf(doc, p.sheet)
+        const n = shNode(p.sheet)
+        const keys: string[] = []
+        const vals: Array<CanvasCell | null> = []
+        const masks: number[] = []
+        for (const [k, next] of Object.entries(p.cells)) {
+          const m = cvMask(sheet?.cells?.[k], next ?? null)
+          if (!m) continue // wrote what was already there: nothing to claim
+          keys.push(k)
+          vals.push(next ?? null)
+          masks.push(m)
+        }
+        if (!keys.length) break
+        const o = push<CvCellOp>({ ...this.stamp(), op: 'cvc', sh: p.sheet, keys, v: clone(vals), m: masks })
+        keys.forEach((k, i) => {
+          if (masks[i] & 1) this.setReg(n, cvKey(k), [o.l, o.a])
+          if (masks[i] & 2) this.setReg(n, cvPKey(k), [o.l, o.a])
+        })
+        break
+      }
+      case 'setCanvasSizes': {
+        const n = shNode(p.sheet)
+        const keys: string[] = []
+        const vals: Array<number | null> = []
+        for (const [k, v] of Object.entries(p.cols ?? {})) { keys.push(`w${k}`); vals.push(v ?? null) }
+        for (const [k, v] of Object.entries(p.rows ?? {})) { keys.push(`h${k}`); vals.push(v ?? null) }
+        if (!keys.length) break
+        const o = push<CvSizeOp>({ ...this.stamp(), op: 'cvz', sh: p.sheet, keys, v: vals.slice() })
+        keys.forEach((k) => this.setReg(n, cvZKey(k[0] as 'w' | 'h', k.slice(1)), [o.l, o.a]))
+        break
+      }
       case 'insertRows': {
         const before = this.rids[p.sheet] ?? []
         // Simulate the store's own splice (store.ts insertRows: ascending by
@@ -880,6 +1065,8 @@ export class DashSync {
       case 'set': this.applySet(doc, op, res); break
       case 'cell': this.applyCell(doc, op, res); break
       case 'ovr': this.applyOvr(doc, op, res); break
+      case 'cvc': this.applyCvCell(doc, op, res); break
+      case 'cvz': this.applyCvSize(doc, op, res); break
       case 'rins': this.applyRins(doc, op, res); break
       case 'rdel': this.applyRdel(doc, op, res); break
       case 'ins': this.applyIns(doc, op, res); break
@@ -1142,6 +1329,77 @@ export class DashSync {
     if (!keys.length) return
     applyPatch(doc, { op: 'setOverrides', sheet: op.sh, keys, v: clone(vals), dropEmpty: true })
     res.changed = true
+  }
+
+  // --- spreadsheet cells ----------------------------------------------------
+
+  /**
+   * A spreadsheet write: per-(address, half) LWW on the sheet node.
+   *
+   * The gates are the ones every other value op uses, in the same order and
+   * for the same reasons. A sheet we have not seen yet means its insert is
+   * still in flight, so the op WAITS (applyIns/applyDel drain the queue); a
+   * sheet that is dead means every replica will agree it is gone, so the
+   * register advances — states must converge on a value nobody can see — and
+   * the value is dropped. Nothing is parked for a resurrection here: a sheet
+   * insert carries `cells` wholesale and out-stamps everything inside it
+   * (docs/dash-collab.md §6.3), so a stash entry could only fight its own
+   * payload.
+   */
+  private applyCvCell(doc: DashDoc, op: CvCellOp, res: ApplyResult): void {
+    const n = shNode(op.sh)
+    const sheet = canvasOf(doc, op.sh)
+    if (!sheet && !this.dead(n) && !doc.sheets.some((s) => s.id === op.sh)) { this.pend(n, op); return }
+    const birth = this.births[n]
+    const cells: Record<string, CanvasCell | null> = {}
+    let any = false
+    for (let i = 0; i < op.keys.length; i++) {
+      const a1 = op.keys[i]
+      let mask = 0
+      for (const half of [1, 2]) {
+        if (!(op.m[i] & half)) continue
+        const key = half === 1 ? cvKey(a1) : cvPKey(a1)
+        if (older(op.l, op.a, this.reg(n, key))) continue
+        this.setReg(n, key, [op.l, op.a])
+        // a sheet insert is a whole-node assignment, `cells` included
+        if (birth && !newer(op.l, op.a, birth)) continue
+        if (!sheet || this.dead(n)) continue
+        mask |= half
+      }
+      if (!mask) continue
+      cells[a1] = cvMerge(sheet!.cells?.[a1], op.v[i], mask)
+      any = true
+    }
+    if (!any) return
+    applyPatch(doc, { op: 'setCanvasCells', sheet: op.sh, cells: clone(cells) })
+    res.changed = true
+  }
+
+  private applyCvSize(doc: DashDoc, op: CvSizeOp, res: ApplyResult): void {
+    const n = shNode(op.sh)
+    const sheet = canvasOf(doc, op.sh)
+    if (!sheet && !this.dead(n) && !doc.sheets.some((s) => s.id === op.sh)) { this.pend(n, op); return }
+    const birth = this.births[n]
+    const cols: Record<string, number | null> = {}
+    const rows: Record<string, number | null> = {}
+    let any = false
+    for (let i = 0; i < op.keys.length; i++) {
+      const axis = op.keys[i][0] as 'w' | 'h'
+      const k = op.keys[i].slice(1)
+      if (older(op.l, op.a, this.reg(n, cvZKey(axis, k)))) continue
+      this.setReg(n, cvZKey(axis, k), [op.l, op.a])
+      if (birth && !newer(op.l, op.a, birth)) continue
+      if (!sheet || this.dead(n)) continue
+      ;(axis === 'w' ? cols : rows)[k] = op.v[i]
+      any = true
+    }
+    if (!any) return
+    applyPatch(doc, {
+      op: 'setCanvasSizes', sheet: op.sh,
+      ...(Object.keys(cols).length ? { cols } : {}), ...(Object.keys(rows).length ? { rows } : {}),
+    })
+    res.changed = true
+    res.structure = true // widths and heights are layout, not paint
   }
 
   // --- rows -----------------------------------------------------------------
@@ -1721,6 +1979,10 @@ export class DashSync {
     if (!keys) return
     const st = (this.stash[id] ??= {})
     for (const [k, r] of Object.entries(keys)) {
+      // Spreadsheet cells are not node PROPERTIES: `node['g␟B7']` is not where
+      // the value lives, and replayStash would write that key onto the sheet
+      // object as junk. They travel in the sheet payload instead (§6.3).
+      if (isCvKey(k)) continue
       if (!(k in st) || cmpReg(st[k].r, r) !== 0) {
         st[k] = node[k] === undefined ? { r: clone(r) } : { v: clone(node[k]), r: clone(r) }
       }
@@ -1732,6 +1994,7 @@ export class DashSync {
     const st = this.stash[id]
     if (!st) return
     for (const [k, ent] of Object.entries(st)) {
+      if (isCvKey(k)) continue // not a property of the node — see stashNode
       const r = this.reg(id, k)
       if (!r || !regNewer(r, birth)) continue
       if (cmpReg(ent.r, r) !== 0) continue
@@ -1913,6 +2176,11 @@ export class DashSync {
           if (b && !regNewer(rr, b)) continue // superseded by a whole-node assignment
         }
         if (node[0] === 'r') { this.mergeCellReg(doc, rdoc, rstate, node, key, rr); continue }
+        // A spreadsheet cell/size lives in the sheet's own sparse maps, not in
+        // a property of the sheet object — the generic write below would put
+        // `"g␟B7": …` at the top level of the sheet and every reader of the
+        // file would have to explain it.
+        if (node[0] === 's' && isCvKey(key)) { this.mergeCvReg(doc, rdoc, node, key); continue }
         if (node !== DOC_NODE && this.dead(node)) {
           const src = remoteNode(rdoc, node)
           const rstash = rstate.stash?.[node]?.[key]
@@ -1933,6 +2201,33 @@ export class DashSync {
     if (res.structure) this.rematerialize(doc)
     this.snapRids(doc)
     return res
+  }
+
+  /**
+   * One spreadsheet register during a snapshot merge: the remote holds this
+   * half of the cell (or this width), so take its value out of the remote
+   * document's sparse map and write it into ours at the same address.
+   *
+   * Reads NOTHING that says which side is local — the value comes from
+   * whichever side's register won, which is what makes merge(A←B) and
+   * merge(B←A) land in the same place.
+   */
+  private mergeCvReg(doc: DashDoc, rdoc: DashDoc, node: string, key: string): void {
+    const sh = nodeSheet(node)
+    const sheet = canvasOf(doc, sh)
+    if (!sheet || this.dead(node)) return
+    const rsheet = canvasOf(rdoc, sh)
+    const addr = cvAddr(key)
+    if (key[0] === 'w' || key[0] === 'h') {
+      const v = (key[0] === 'w' ? rsheet?.cols : rsheet?.rows)?.[addr] ?? null
+      applyPatch(doc, {
+        op: 'setCanvasSizes', sheet: sh,
+        ...(key[0] === 'w' ? { cols: { [addr]: v } } : { rows: { [addr]: v } }),
+      })
+      return
+    }
+    const merged = cvMerge(sheet.cells?.[addr], rsheet?.cells?.[addr] ?? null, key[0] === 'g' ? 1 : 2)
+    applyPatch(doc, { op: 'setCanvasCells', sheet: sh, cells: { [addr]: clone(merged) } })
   }
 
   /** one cell register during a snapshot merge: read the winner's value out of
@@ -2284,6 +2579,17 @@ export function committable(doc: DashDoc, p: Patch): boolean {
       return true
     }
     case 'deleteRows': return !!table(p.sheet)
+    // The spreadsheet kind, and here the rule bites harder than elsewhere:
+    // `applyPatch`'s `canvas()` THROWS on a sheet that is gone (or that is a
+    // dataset), so an undo replaying a write into a sheet a collaborator
+    // deleted would not merely diverge, it would take the commit down. Reached
+    // through the same door as every other refusal: you cannot edit what is
+    // not there.
+    case 'setCanvasCells':
+    case 'setCanvasSizes': {
+      const s = doc.sheets.find((x) => x.id === p.sheet)
+      return !!s && s.kind === 'canvas'
+    }
     case 'addColumn': {
       const s = table(p.sheet)
       if (!s || s.columns.some((c) => c.id === p.column.id)) return false

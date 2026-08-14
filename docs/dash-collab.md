@@ -291,12 +291,37 @@ write into. Row inserts and deletes do not maintain it, so a sheet holding a
 packed column should not be edited structurally under collab. Pre-existing in
 the store; named here because collab makes it easier to hit.
 
-### 6.9 Canvas sheets sync only wholesale
+### 6.9 A spreadsheet cell is keyed by its ADDRESS, so nothing may move one
 
-`CanvasSheet.cells` has no patch op in `store.ts`, so nothing can express a
-canvas edit as an op. Canvas sheets travel in sheet inserts and snapshots only.
-The register scheme is reserved (`cell.<A1>` keys on the sheet node) so this is
-additive when the patches exist.
+`kind:'canvas'` cells are properties of the SHEET node keyed by A1 address
+(`g␟B7` content, `p␟B7` presentation, `w␟C` a width, `h␟4` a
+height), minted from `setCanvasCells` and `setCanvasSizes`. Per-cell LWW, and
+the two halves are independent — bolding a cell while someone else retypes it
+keeps both. `v` and `f` deliberately share ONE register: split, they would show
+a formula from one replica beside a cached number from another, which is a cell
+that existed nowhere.
+
+The address is the key because the FILE offers no cell identity. A dataset row
+carries a `rid` — minted at insert, never reused, IN the document — which is
+what makes `r␟s1␟7` mean the same row on two replicas that have never
+spoken. A spreadsheet cell carries only its address, so a minted id would have
+to be a stored address→id map: one entry per non-empty cell whether or not
+anyone ever edited it, riding in `collab.sync`, which is O(cells) against this
+engine's O(edits) invariant.
+
+The cost is stated rather than hidden. A patch that MOVES cells — a row or
+column insert, a cut-and-shift, none of which exist today — **cannot** be minted
+as cell ops over the addresses it lands on: two replicas shifting concurrently
+renumber each other's writes, and no register ordering repairs that. Such a
+patch must keep falling through to the snapshot fallback until there is an
+explicit shift op that transforms the key space, or a real per-sheet row/column
+order (at which point the keys become (rowId, colId) and stop being positions).
+`localOne`'s default arm sets `unsynced` for exactly this reason, and the rig
+pins it with a hypothetical `insertCanvasRows` that must mint ZERO ops.
+
+Rig: `scripts/test-dash-canvassync.ts` — the spreadsheet's own convergence rig,
+separate from `test-dash-sync.ts` on purpose, because this is a different
+convergence problem and not a wider one.
 
 ### 6.10 `steps` is a whole-array register
 

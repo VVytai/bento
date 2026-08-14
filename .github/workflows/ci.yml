@@ -412,6 +412,15 @@ jobs:
         # two it did not catch were found by widening it.
         run: node scripts/test-dash-sync.ts
 
+      - name: dash spreadsheet convergence rig
+        # The SPREADSHEET kind's own rig, separate from the dataset one because
+        # it is a different convergence problem: a dataset row has a rid, and a
+        # spreadsheet cell has only its address. It also pins the snapshot
+        # FALLBACK — a patch that would move cells must mint zero ops and arm
+        # the whole-state path, because two replicas shifting addresses
+        # concurrently renumber each other's writes and no ordering repairs it.
+        run: node scripts/test-dash-canvassync.ts
+
       - name: dash validator rig
         # 109 checks over the shapes that read as DATA rather than as damage —
         # a column shorter than the sheet has rows, a dictionary index past the
@@ -488,6 +497,29 @@ jobs:
         # lands in a cell that did not exist, without allocating the rows it
         # skipped: that gesture is why the kind exists.
         run: node scripts/test-dash-canvas.ts
+
+      - name: dash fill rig
+        # ⌘D and the fill handle. This guards a DATA LOSS bug that shipped:
+        # seeding from the computed value wrote error OBJECTS into stored
+        # columns and flattened formulas to constants, and ⌘D sharing an
+        # implementation with the handle made it alternate two seed rows. The
+        # two gestures are separate here, and a formula fills with its
+        # references translated.
+        run: node scripts/test-dash-fill.ts
+
+      - name: dash spreadsheet formula rig
+        # Formulas on the SPREADSHEET kind, including cross-sheet references.
+        # Sheet1!A1 used to bind to the LOCAL A1 — this sheet's number reported
+        # under another sheet's name — and ranges over a sparse sheet must cost
+        # the cells that exist, not the rectangle they span.
+        run: node scripts/test-dash-canvasformula.ts
+
+      - name: dash action-applicability rig
+        # One table saying which actions run on which sheet kind, and a reason
+        # for every one that does not. Six toolbar buttons used to throw
+        # "grid needs a table sheet" on a spreadsheet with nothing shown; the
+        # rig fails if an action is kind-scoped without a reason string.
+        run: node scripts/test-dash-actions.ts
 
       - name: dash cell format and type rig
         # Per-cell number format, coercion and appearance on a SPREADSHEET
