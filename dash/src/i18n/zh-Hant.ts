@@ -474,6 +474,7 @@ export const zhHant: Catalog = {
   "Check for updates automatically when this file is opened": "開啟此檔案時自動檢查更新",
   "Offline mode — block every network feature (updates, live collaboration)": "離線模式 — 封鎖所有網路功能（更新、即時協作）",
   "Offline mode is on: no update checks, no relay. Nothing leaves this computer. Sheets sync between tabs on this machine as before — that is not networking.": "離線模式已開啟：不檢查更新，不連線轉送伺服器。沒有任何內容離開這台電腦。本機各分頁之間的工作表同步照常進行 — 那不算連網。",
+  "This choice could not be saved — site data is blocked or full — so it holds for this tab and will be forgotten when you reload.": "此選擇無法儲存——網站資料遭到封鎖或已滿——因此僅在此分頁中有效，重新載入後將會遺失。",
   "Network features are available: the signed update check, and live collaboration when you start it.": "網路功能可用：經簽章的更新檢查，以及你啟動後的即時協作。",
   "Add a total to this column": "為此欄新增合計",
   "Click to change or remove this total": "按一下以變更或移除此合計",

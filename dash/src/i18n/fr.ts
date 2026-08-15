@@ -474,6 +474,7 @@ export const fr: Catalog = {
   "Check for updates automatically when this file is opened": "Rechercher les mises à jour automatiquement à l’ouverture de ce fichier",
   "Offline mode — block every network feature (updates, live collaboration)": "Mode hors ligne — bloque toute fonction réseau (mises à jour, collaboration en direct)",
   "Offline mode is on: no update checks, no relay. Nothing leaves this computer. Sheets sync between tabs on this machine as before — that is not networking.": "Le mode hors ligne est activé : aucune vérification de mise à jour, aucun relais. Rien ne quitte cet ordinateur. Les feuilles se synchronisent toujours entre les onglets de cette machine — ce n’est pas du réseau.",
+  "This choice could not be saved — site data is blocked or full — so it holds for this tab and will be forgotten when you reload.": "Ce choix n’a pas pu être enregistré — les données du site sont bloquées ou saturées — il ne vaut donc que pour cet onglet et sera oublié au rechargement.",
   "Network features are available: the signed update check, and live collaboration when you start it.": "Les fonctions réseau sont disponibles : la vérification de mise à jour signée, et la collaboration en direct lorsque vous la démarrez.",
   "Add a total to this column": "Ajouter un total à cette colonne",
   "Click to change or remove this total": "Cliquez pour modifier ou retirer ce total",

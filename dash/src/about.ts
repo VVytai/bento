@@ -546,17 +546,33 @@ export function openAbout(hooks: AboutHooks): void {
   // part of the app could set. For an app with live collaboration in it, the
   // privacy switch has to be reachable without a console.
   const offNote = note('')
+  // `stuck` is setOffline's return: whether the preference PERSISTED. It is
+  // session state, not a setting, so it resets with the dialog rather than
+  // being remembered.
+  let stuck = true
   const sayOffline = () => {
     offNote.textContent = offlineEnabled()
       ? t('Offline mode is on: no update checks, no relay. Nothing leaves this computer. Sheets sync between tabs on this machine as before — that is not networking.')
       : t('Network features are available: the signed update check, and live collaboration when you start it.')
+    // A switch that will not survive a reload still has to say so. This is the
+    // half the gate cannot tell you: `offlineEnabled()` now answers from the
+    // session flag, so the note above is TRUE for this tab either way, and the
+    // only thing left to be wrong about is how long it lasts.
+    if (!stuck) {
+      offNote.textContent += ' ' + t('This choice could not be saved — site data is blocked or full — so it holds for this tab and will be forgotten when you reload.')
+    }
   }
   sayOffline()
   card.append(check(
     t('Offline mode — block every network feature (updates, live collaboration)'),
     offlineEnabled(),
     (on) => {
-      setOffline(on)
+      // Take the RETURN. Swallowing it is the shipped bug this replaces:
+      // the checkbox was seeded once from offlineEnabled() and thereafter
+      // showed its own DOM state, so with storage blocked, ticking Offline
+      // left the box TICKED while the note under it read "Network features
+      // are available" — measured, the dialog contradicting itself on screen.
+      stuck = setOffline(on)
       // HANG UP, do not merely refuse the next call. Every join path in
       // online.ts already checks offlineEnabled(); an open socket does not.
       if (hooks.sync) {

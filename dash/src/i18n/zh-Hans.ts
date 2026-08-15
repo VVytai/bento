@@ -474,6 +474,7 @@ export const zhHans: Catalog = {
   "Check for updates automatically when this file is opened": "打开此文件时自动检查更新",
   "Offline mode — block every network feature (updates, live collaboration)": "离线模式 — 阻止所有网络功能（更新、实时协作）",
   "Offline mode is on: no update checks, no relay. Nothing leaves this computer. Sheets sync between tabs on this machine as before — that is not networking.": "离线模式已开启：不检查更新，不连接中继。没有任何内容离开这台电脑。本机各标签页之间的工作表同步照常进行 — 那不算联网。",
+  "This choice could not be saved — site data is blocked or full — so it holds for this tab and will be forgotten when you reload.": "此选择无法保存——站点数据被阻止或已满——因此它仅在此标签页中有效，重新加载后将会丢失。",
   "Network features are available: the signed update check, and live collaboration when you start it.": "网络功能可用：经签名的更新检查，以及你启动后的实时协作。",
   "Add a total to this column": "为此列添加汇总",
   "Click to change or remove this total": "点击以更改或移除此汇总",

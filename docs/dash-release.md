@@ -65,40 +65,40 @@ Still true, and worth knowing before cutting `dash-v0.3.0`:
 
 ## 1 · Loses or misstates data
 
-- **OFFLINE MODE DOES NOT FULLY HOLD** — dash's share of the privately reported
-  advisory that slides PR #305 fixes (GHSA-5c3x-xqp6-g94r). Verified against
-  dash today, not inferred:
-  - **The switch lies when storage is unavailable, and the dialog contradicts
-    itself while it happens.** `offlineEnabled()` reads
-    `try { lsGet('bento-offline') === 'on' } catch { return false }` — but its
-    catch is DEAD CODE: `lsGet` (kernel/src/storage.ts) has its own try/catch
-    returning `null`, so it never throws. The gate answers online because
-    `null === 'on'` is false, which is a different mechanism from the one this
-    entry first claimed and matters because the fix is different too. Corrected
-    after the bento/type session checked the same line.
-    Measured live in dash, with every `localStorage` call throwing as Safari
-    private browsing does: ticking Offline leaves the checkbox **TICKED** while
-    the note directly under it reads **"Network features are available"**. The
-    checkbox shows its own DOM state (it is seeded once from `offlineEnabled()`
-    at build time), the write is swallowed, and the note re-reads the gate — so
-    the two disagree on screen and the gate is the one telling the truth.
-  - **Another tab's decision is not honoured.** Nothing in dash or the kernel
-    listens for `storage`, so turning Offline on in one tab leaves a second
-    tab's relay socket open.
-  - **Nothing can be aborted.** There is no `AbortController` anywhere, so a
-    request already in flight when the switch is thrown completes.
-  Two of the six claims do NOT apply to dash for structural reasons: it has no
-  media element (no remote `src` to strip) and no pack channel (`packs: false`).
-  The manual *Check for updates* IS gated (about.ts) — but at the CALL SITE,
-  which is the shape the advisory says is the actual cause.
+- ~~**OFFLINE MODE DOES NOT FULLY HOLD**~~ — dash's share of the privately
+  reported advisory GHSA-5c3x-xqp6-g94r. **Done**, by merging slides PR #305
+  (`759fb93`) rather than by fixing anything here: the fix is one chokepoint,
+  `kernel/src/net.ts`, with a CI rig that bans `fetch`/`WebSocket`/
+  `XMLHttpRequest`/`sendBeacon`/`EventSource` outside it. dash was CONVERTED in
+  that PR rather than exempted from the scan, which is the right scope — a ban
+  list dash is exempt from is a ban list dash will violate. dash's whole
+  exposure was ONE call, `new WebSocket` in `sync/online.ts`, now `netWebSocket`.
 
-  **Do not fix this in dash.** The fix is one chokepoint, `kernel/src/net.ts`,
-  landing in PR #305 with a CI rig that bans `fetch`/`WebSocket`/
-  `XMLHttpRequest`/`sendBeacon`/`EventSource` outside it. A second chokepoint
-  here would fork the exact thing that PR exists to centralise. dash's whole
-  exposure is ONE call — `new WebSocket` in `sync/online.ts` — which becomes
-  `netWebSocket` when net.ts exists, and dash comes into scope of that rig
-  automatically. Track #305; do not pre-empt it.
+  Three of the six claims applied to dash and all three are closed by the
+  chokepoint: nothing listened for `storage` (a second tab kept its relay socket
+  after the first went offline), there was no `AbortController` anywhere, and
+  the switch lied when storage was unavailable. Two did NOT apply, structurally:
+  no media element (no remote `src`) and no pack channel (`packs: false`).
+
+  Worth keeping, because it is the part a chokepoint could not have fixed. The
+  old gate read `try { lsGet('bento-offline') === 'on' } catch { return false }`
+  and **the catch was DEAD CODE**: `lsGet` (kernel/src/storage.ts) has its own
+  try/catch returning `null`, so it never threw. It answered *online* because
+  `null === 'on'` is false. A fix aimed at the catch would have done nothing,
+  and `net.ts` would then have faithfully consulted a gate that was lying. #305
+  replaced the gate's SOURCE OF TRUTH instead — `sessionOffline ?? lsGet(…)` —
+  which is what actually closes it.
+
+  dash's own half was the UI, and it was on this branch, so #305 did not fix it
+  for us. Measured with every `localStorage` call throwing as Safari private
+  browsing does: ticking Offline left the checkbox **TICKED** while the note
+  directly beneath it read **"Network features are available"** — the checkbox
+  showing its own DOM state, the write swallowed, the note re-reading the gate.
+  `setOffline` now returns whether the preference PERSISTED and `about.ts` takes
+  that return, so the dialog says the switch holds for this tab and will be
+  forgotten on reload. Re-measured after, with a POSITIVE CONTROL because "no
+  request" proves nothing on its own: switch off → one request to
+  `bento.page/releases/dash/manifest.json`; switch on → none. Gate holds.
 
 
 - **No file write-back.** slides silently rewrites the real file every 2.5s once

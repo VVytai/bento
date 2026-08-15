@@ -474,6 +474,7 @@ export const ja: Catalog = {
   "Check for updates automatically when this file is opened": "このファイルを開いたときに自動で更新を確認する",
   "Offline mode — block every network feature (updates, live collaboration)": "オフラインモード — すべてのネットワーク機能をブロック（更新、リアルタイム共同編集）",
   "Offline mode is on: no update checks, no relay. Nothing leaves this computer. Sheets sync between tabs on this machine as before — that is not networking.": "オフラインモードが有効です。更新の確認もリレーもありません。このコンピューターから何も送信されません。同じ端末のタブ間でのシート同期は従来どおり動作します — これはネットワーク通信ではありません。",
+  "This choice could not be saved — site data is blocked or full — so it holds for this tab and will be forgotten when you reload.": "この選択は保存できませんでした（サイトデータがブロックされているか、容量がいっぱいです）。このタブでは有効ですが、再読み込みすると失われます。",
   "Network features are available: the signed update check, and live collaboration when you start it.": "ネットワーク機能が利用できます。署名付きの更新確認と、開始したときのリアルタイム共同編集です。",
   "Add a total to this column": "この列に集計を追加",
   "Click to change or remove this total": "クリックしてこの集計を変更または削除",
