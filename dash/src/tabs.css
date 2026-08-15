@@ -147,6 +147,75 @@
 /* a sheet this build cannot open: greyed, never hidden — a tab that is missing
    reads as a sheet that was deleted */
 .dx-tab-off { opacity: 0.62; cursor: default; }
+
+/* ————— THE KIND MARK —————
+   A 14px drawing at the head of every tab saying which of the two kinds this
+   sheet is (tabs.ts kindMarkSvg has the argument for a shape rather than a
+   letter or a hue, and for the size).
+
+   IT TAKES FULL INK EVEN ON AN IDLE TAB, and that is the one place it departs
+   from the tab it sits in. Painting it in `currentColor` — which is what this
+   rule used to do — made the mark --muted on every tab except the one you are
+   already on, i.e. it faded exactly where a scanning eye is working. The NAME
+   stays muted, because a strip of twenty equally-black names is a wall; the
+   mark does not, because it is the only thing on the strip saying what a sheet
+   IS. --ink is 14.51:1 light and 13.75:1 dark on the strip, and the 0.86 that
+   holds it a step behind the active tab's mark still leaves it far above the
+   3:1 a non-text indicator has to clear.
+
+   NO COLOUR IN IT, on purpose: about 8% of men could not separate two hues
+   here, and this is the whole answer to "what kind of sheet is this".
+
+   `display: flex` on the span, not `vertical-align`: the tab is a flex row, and
+   an inline svg baseline-aligns against a line box that does not exist here. */
+.dx-tab-mark {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  color: var(--ink);
+  opacity: 0.86;
+}
+.dx-tab.active .dx-tab-mark { opacity: 1; }
+.dx-tab-off .dx-tab-mark { opacity: 0.7; }
+.dx-tab-mark svg { display: block; }
+
+/* ————— THE KIND, IN WORDS, ON THE ACTIVE TAB —————
+   Only the active tab carries this (tabs.ts decides; every other tab gets the
+   same word in a `.dx-tab-sr`), so the strip's width is unchanged at twenty
+   sheets and the tab the reader is looking at names its own kind without a
+   hover. It is set as a caption — smaller, letter-spaced, muted, behind a hair
+   rule — so it reads as a label ON the tab rather than as part of the sheet's
+   name: "Pipeline" is the file's word and "DATASET" is ours, and the divider is
+   what keeps a reader from thinking they renamed something. */
+.dx-tab-word {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding-inline-start: 6px;
+  border-inline-start: 1px solid var(--line-strong);
+}
+/* the active tab is the only one that carries a second word, so it is the only
+   one that needs the room for it */
+.dx-tab.active { max-width: 260px; }
+
+/* The word the mark draws, for a reader who cannot see it. Not `display: none`
+   and not `visibility: hidden` — both remove it from the accessibility tree,
+   which is the one place it is meant to exist. */
+.dx-tab-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 .dx-tab-kind {
   flex: 0 0 auto;
   font-size: 9.5px;
@@ -238,7 +307,17 @@
 @media (max-width: 480px) {
   .dx-tabs { padding: 0 3px; gap: 2px; }
   .dx-tab-btn { padding: 4px 5px; }
-  .dx-tab { max-width: 140px; padding: 0 8px; }
+  /* the mark stays; the padding around it is what gives. It is 14px of the
+     ~90px a phone tab gets, and it is the 14px that says what the sheet is. */
+  .dx-tab { max-width: 140px; padding: 0 8px; gap: 4px; }
+  /* THE WORD GOES, and only here. On a 375px screen the strip IS the sheet
+     navigation and a 140px tab has room for a name or for a label but not for
+     both — and the name is the thing a reader is looking for. The mark still
+     answers the kind, the tooltip and the accessible name still carry the word.
+     `display: none` rather than a narrower type size: half a word, clipped, is
+     worse than no word. */
+  .dx-tab-word { display: none; }
+  .dx-tab.active { max-width: 140px; }
   /* the collapse chevron is the first thing to go: on a phone there is no
      second panel competing for the height, and one fewer target at the edge of
      a small screen is one fewer mis-tap */

@@ -6,14 +6,16 @@
    panels. */
 
 /* ————— the format preview —————
-   A value, printed the way the chosen pattern prints it. It sits where a
-   control sits (110px, right-aligned in the row) so the section keeps its
-   column, and it is monospace-tabular so switching decimals moves the digits
-   you are looking at rather than the whole string. */
+   A value, printed the way the chosen pattern prints it. It FILLS the control
+   column that panels.css lays out (`--dp-ctl`) rather than restating 110px, so
+   the section keeps its column when the panel narrows and stacks — a hard 110px
+   here was a second definition of the same measurement, and the two would drift
+   the first time either moved. Monospace-tabular, so switching decimals moves
+   the digits you are looking at rather than the whole string. */
 .dc-preview {
-  width: 110px;
-  flex: none;
+  width: 100%;
   min-width: 0;
+  min-height: var(--dp-row, 26px);
   padding: 3px 7px;
   border: 1px solid var(--line);
   border-radius: var(--radius, 7px);
@@ -21,7 +23,7 @@
   color: var(--ink);
   font-variant-numeric: tabular-nums;
   font-size: 12.5px;
-  line-height: 17px;
+  line-height: 18px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -34,16 +36,16 @@
    said by the swatch. The × is the off switch; the diagonal slash is what says
    the swatch is not in effect, since the input still paints its fallback. */
 .dc-colour {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 4px;
-  width: 110px;
-  flex: none;
+  width: 100%;                          /* the control column — see .dc-preview */
+  min-width: 0;
 }
 .dc-colour input[type='color'] {
   flex: 1 1 auto;
   min-width: 0;
-  height: 23px;
+  height: var(--dp-row, 26px);
   padding: 0 1px;
   border: 1px solid var(--line);
   border-radius: var(--radius, 7px);
@@ -64,7 +66,7 @@
 .dc-clear {
   flex: none;
   width: 20px;
-  height: 23px;
+  height: var(--dp-row, 26px);
   padding: 0;
   border: 1px solid var(--line);
   border-radius: var(--radius, 7px);
@@ -76,6 +78,9 @@
 .dc-clear:hover:not(:disabled) { color: var(--ink); border-color: var(--line-strong); }
 .dc-clear:disabled { opacity: 0.35; cursor: default; }
 
-/* the currency symbol is one or two glyphs; 110px of input for `£` reads as a
-   field that wants a sentence */
-.dp-row input.dp-narrow { width: 56px; }
+/* The currency symbol is one or two glyphs; the full control width for `£`
+   reads as a field that wants a sentence. It narrows from the START of the
+   control column, so its left edge is still the panel's one control line —
+   a narrow field that shrank from the right would break the column it is
+   trying to sit politely inside. */
+.dp-row input.dp-narrow { width: 56px; justify-self: start; }

@@ -314,6 +314,104 @@ export function describeKind(kind: string): { chip: string; why: string } {
   return { chip: kind, why: t('{kind} sheet — not editable in this build').replace('{kind}', kind) }
 }
 
+// --- WHICH KIND A TAB IS, AT A GLANCE ----------------------------------------
+//
+// A workbook holds two kinds that behave differently enough that six toolbar
+// actions apply to one and not the other — so a tab has to SAY which it is,
+// before you click it and find out. It used to say so only by omission: a
+// spreadsheet tab carried the word "SPREADSHEET" and a dataset tab carried
+// nothing, which marks the rare case and leaves the common one blank.
+//
+// WHY A DRAWN MARK RATHER THAN A LETTER. Two of the three obvious answers are
+// worse for reasons that are not obvious:
+//
+//   · A LETTER (S / D) IS AN ENGLISH WORD IN DISGUISE, and dash ships in eight
+//     languages. S/D is Spreadsheet/Dataset in English alone: German is
+//     Tabellenblatt/Datensatz, so the pair becomes T/D, and Japanese
+//     (スプレッドシート／データセット) and Chinese (表格／数据集) have no Latin
+//     initial to take at all — a translator has to invent one and no two of
+//     them will agree. It is also a WORD in a strip whose entire content is
+//     words: at twenty sheets the reader parses forty tokens to find out half
+//     of them are not sheet names. And letters COLLIDE the moment a third kind
+//     lands — dash already has `pivot`, and Spreadsheet and Story both start
+//     with S. A mark has no alphabet to run out of.
+//     (The six directions are drawn side by side, on both grounds, at 3/8/20
+//     sheets, in dist-single/tab-kinds.html.)
+//   · COLOUR ALONE is not an option at all — about 8% of men cannot separate
+//     two hues reliably, and this is the only thing on screen saying what a
+//     sheet IS. The mark is a SHAPE, drawn in the tab's own ink, so it carries
+//     no colour information whatsoever.
+//
+// THE TWO SHAPES DIFFER BY FILL, NOT BY LINE COUNT. At 12px a three-line icon
+// and a four-line icon are the same smudge. A SOLID BAND against an EMPTY
+// LATTICE survives the size: a dataset is a header row over rows (typed
+// columns, one heading each), a spreadsheet is a bare lattice of cells (no
+// header, nothing typed about it). That is also what the two kinds actually
+// are, so the mark is a diagram rather than a symbol to memorise.
+//
+// AND THE ACTIVE TAB SAYS THE WORD OUT LOUD. A mark still has to be learned
+// once, and a tooltip is a poor teacher: it asks the reader to suspect there is
+// something to hover. So the tab you are ON carries the kind in full, in the
+// reader's own language — "Pipeline · DATASET" — and every other tab carries
+// the mark alone. The named tab is the Rosetta stone for the other nineteen,
+// it is the tab the eye is already on, and the word costs its ~60px on exactly
+// ONE tab, so a twenty-sheet strip is no narrower than it was. The word is
+// translated and the mark is not language at all, which is the pair that
+// survives all eight locales.
+//
+// (The cost, stated: switching sheets re-widens one tab and shifts the tabs to
+// its right by a word. That is what a browser tab strip does, it happens on a
+// deliberate click, and it buys an answer that is on screen before it is asked
+// for. On a phone the word is dropped — see tabs.css — because there the whole
+// tab is 140px and the sheet's NAME is the thing that must survive.)
+//
+// AND IT IS NOT THE ONLY CHANNEL. Every tab that has no visible word ships a
+// visually-hidden one — the SAME word — so the tab's accessible name is
+// "Q1 actuals Spreadsheet", and the title attribute names the kind too. A
+// sighted reader gets the shape, a screen reader gets the word, and nobody
+// gets a hue they have to be able to see.
+
+/** The reader-facing word for a kind, or '' for one that has no mark. */
+export function kindWord(kind: string): string {
+  if (kind === 'table') return t('Dataset')
+  if (kind === 'canvas') return t('Spreadsheet')
+  return ''
+}
+
+/**
+ * The 14px mark for a kind — the drawing alone, for a `.dx-tab-mark` span.
+ *
+ * FOURTEEN PIXELS AND NOT TWELVE, and the marks are redrawn rather than merely
+ * scaled. At 12px with a hairline stroke the two drawings differed by one
+ * horizontal line, which is not a difference anybody reads at a glance in a
+ * strip they are scanning; compared side by side (dist-single/tab-kinds.html,
+ * direction A against B) the pair at 14px with a 1.25px stroke is the first one
+ * that separates without being looked at. The dataset mark is a SOLID header
+ * band over a divided body — typed columns, each with a heading; the
+ * spreadsheet mark is an OPEN LATTICE — cells, typed one at a time, with
+ * nothing above them. They differ by FILL, which survives the size, rather than
+ * by how many lines are inside the box, which does not.
+ *
+ * Geometry note: every edge sits on a half-pixel so a stroke lands on whole
+ * device pixels rather than two grey ones. The band is INSET from the outline
+ * rather than filling into it, because the outline is rounded and a square fill
+ * would cut its top corners off.
+ */
+export function kindMarkSvg(kind: string): string {
+  const open = '<svg viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false">'
+  const box = '<rect x="1.5" y="2.5" width="11" height="9" rx="2" fill="none"' +
+    ' stroke="currentColor" stroke-width="1.25"/>'
+  if (kind === 'table') {
+    return `${open}${box}<path d="M2.5 3.5h9v2.6h-9z" fill="currentColor"/>` +
+      '<path d="M1.5 8.6h11M5.4 6.1v5.4" stroke="currentColor" stroke-width="1.25"/></svg>'
+  }
+  if (kind === 'canvas') {
+    return `${open}${box}` +
+      '<path d="M5.2 2.5v9M9 2.5v9M1.5 5.7h11M1.5 8.6h11" stroke="currentColor" stroke-width="1.25"/></svg>'
+  }
+  return ''
+}
+
 // --- what a toolbar action can run on ------------------------------------------
 //
 // ONE TABLE, AND IT HAS TO BE ONE TABLE. Every control in the top bar answers
@@ -561,10 +659,34 @@ export function mountTabs(host: TabsHost): Tabs {
     el.setAttribute('aria-selected', String(active))
     if (active) el.classList.add('active')
 
+    // THE MARK LEADS. Every tab starts at the same place, so the marks form a
+    // column down the strip that can be scanned without reading a single name;
+    // trailing them would put each one at a different x, which is a list of
+    // marks nobody can compare.
+    const svg = kindMarkSvg(kind)
+    if (svg) {
+      const mark = document.createElement('span')
+      mark.className = 'dx-tab-mark'
+      mark.innerHTML = svg
+      el.appendChild(mark)
+    }
+
     const label = document.createElement('span')
     label.className = 'dx-tab-name'
     label.textContent = sheet.name || t('(untitled sheet)')
     el.appendChild(label)
+
+    // The word: PRINTED on the active tab, hidden on every other one. Either
+    // way it comes after the name, so the accessible name reads "Q1 actuals
+    // Spreadsheet" — the sheet first, then what it is — and a reader using a
+    // screen reader hears the same sentence on all of them, active or not.
+    const word = kindWord(kind)
+    if (svg && word) {
+      const w = document.createElement('span')
+      w.className = active ? 'dx-tab-word' : 'dx-tab-sr'
+      w.textContent = word
+      el.appendChild(w)
+    }
 
     if (!isOpenable(sheet)) {
       // HONEST, NOT HIDDEN. The sheet is really in the file; a tab that is
@@ -578,16 +700,16 @@ export function mountTabs(host: TabsHost): Tabs {
       badge.textContent = chip
       el.appendChild(badge)
     } else if (isTable(sheet)) {
-      el.title = `${sheet.name} — ${rowsOf(sheet)} × ${sheet.columns.length}`
+      // The kind is NAMED in the tooltip as well as drawn: a mark you have not
+      // met yet is a mark you can hover.
+      el.title = `${sheet.name} — ${kindWord('table')} · ${rowsOf(sheet)} × ${sheet.columns.length}`
     } else {
       // A spreadsheet has no row or column COUNT to report — it is sparse and
       // unbounded, so the only honest number is how many cells hold something.
+      // (The existing sentence already opens with the kind, so it needs no
+      // second naming.)
       const n = Object.keys((sheet as CanvasSheet).cells ?? {}).length
       el.title = `${sheet.name} — ${t('spreadsheet, {n} cell(s) used').replace('{n}', String(n))}`
-      const badge = document.createElement('span')
-      badge.className = 'dx-tab-kind'
-      badge.textContent = describeKind('canvas').chip
-      el.appendChild(badge)
     }
     return el
   }

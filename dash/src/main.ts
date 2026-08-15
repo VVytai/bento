@@ -49,19 +49,29 @@ import { t, i18nApi } from './i18n.ts'
 import {
   parseDoc, docBytes, docBudget, rowCount, DOC_BUDGET_FSA, DOC_BUDGET_DOWNLOAD,
   type DashDoc, type ParseResult, type Column, type ColumnType, type TableSheet,
-  type Sheet,
+  type Sheet, type CanvasSheet,
 } from './model.ts'
 // THE ONE TABLE that says which toolbar actions run on which sheet kind, and
 // why the others do not. It lives in tabs.ts because that is where the app
 // already keeps what a KIND is (`isTable`, `isOpenable`, `describeKind`) and
 // because a rig can import it with no DOM — main.ts boots on evaluation, so it
 // can never be imported at all. See the block above `ACTIONS` for the rest.
-import { ACTIONS, ACTION_IDS, actionReason, type ActionId } from './tabs.ts'
+import {
+  ACTIONS, ACTION_IDS, actionReason, mintSheetId, mintSheetName, type ActionId,
+} from './tabs.ts'
+// The bridge between the two kinds of sheet — pure, and tested with no DOM in
+// `scripts/test-dash-promote.ts`. Everything below is the gesture; every
+// decision (types, the header row, what happens to a cell formula) is there.
+import {
+  promoteRange, flattenToSpreadsheet, describeBox, detectHeader, trimBox, currentRegion,
+  type CellBox, type CanvasView, type PromoteFinding,
+} from './promote.ts'
+import { isFormula, recalcWorkbook, workbookSources } from './cellformula.ts'
 import { Store } from './store.ts'
 import { starterDoc } from './starter.ts'
 import { validateDoc } from './validate.ts'
 import { mountHelp } from './help.ts'
-import { keyToAction } from './select.ts'
+import { keyToAction, normalize } from './select.ts'
 import { mountComments, flatComments } from './comments.ts'
 import { mountRecovery } from './recovery.ts'
 import { mountDropOpen } from './dropopen.ts'
@@ -286,6 +296,13 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     `<div class="dx-formula"><span class="dx-ref">A1</span>` +
     `<span class="dx-fx-mark">fx</span>` +
     `<input class="dx-fx-input" spellcheck="false" placeholder="${t('value or = formula')}">` +
+    // THE BRIDGE, and it lives here rather than in the top bar for two reasons.
+    // It is about the SELECTION, which is what this row is already about — and
+    // the toolbar's `data-act` namespace is a closed table in tabs.ts that says
+    // which actions run on which kind, while this control is the one thing that
+    // is available on BOTH kinds and means something different on each. Its
+    // label says which (`syncBridge`).
+    `<button class="dx-btn dx-bridge" data-cmd="bridge" hidden style="flex:0 0 auto;margin-inline-start:8px"></button>` +
     `</div>` +
     `<div class="dx-findings" hidden></div>` +
     `<div class="dx-body"><div class="dx-grid"></div>` +
@@ -388,11 +405,191 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     }
   }
 
+  // --- THE BRIDGE between the two kinds -------------------------------------
+  //
+  // Six toolbar buttons are greyed on a spreadsheet, and every one of their
+  // tooltips ends in the same sentence: charts, pivots, filters and SQL bind
+  // typed COLUMNS. Without a way across, that sentence is a dead end rather
+  // than an explanation — which is why docs/dash-sheet-kinds.md calls the
+  // conversion, not the second kind, the actual product.
+  //
+  // The gesture is here; every DECISION is in promote.ts and rigged with no
+  // DOM. What this code owns is the three things a pure function must not do:
+  // ASK (the header row is offered, never assumed), COMMIT (one `setSheet`
+  // patch, so one promotion is one press of ⌘Z), and SAY (the findings land in
+  // the same banner an import's do — including the one that says the range was
+  // copied and not moved).
+  const bridgeBtn = app.querySelector<HTMLButtonElement>('.dx-bridge')!
+
+  // Cached per document change, because the LABEL needs it: a spreadsheet cell
+  // holding a formula stores no value, so without the computed map a block of
+  // formulas reads as blank and `currentRegion` would stop at its edge.
+  let cvValues: { id: string; values: ReadonlyMap<string, unknown> } | null = null
+  const canvasView = (cv: CanvasSheet): CanvasView => {
+    if (cvValues?.id !== cv.id) {
+      // GUARDED ON THIS SHEET HAVING A FORMULA AT ALL, exactly as
+      // `Grid.cvRefresh` is guarded, and for a sharper reason here: this runs
+      // on every keystroke, and `workbookSources` scans a DATASET sheet rows ×
+      // columns for its cell formulas. A workbook with a 100k-row dataset in it
+      // would pay that scan to re-letter a label.
+      const live = Object.keys(cv.cells).some((k) => isFormula(cv.cells[k]?.f))
+      cvValues = !live ? { id: cv.id, values: new Map() } : {
+        id: cv.id,
+        values: recalcWorkbook(
+          // The dataset on screen supplies its computed columns, so
+          // `=Sales!C2` into a calculated column promotes as its number. The
+          // other sheets' are a cache this build does not have — the same gap
+          // `Grid.cvRefresh` documents, and the same one call site.
+          workbookSources(store.doc, (tb) => (tb.id === grid.showingId() ? grid.computed : undefined)),
+          store.doc.modified,
+        ).get(cv.id)?.values ?? new Map(),
+      }
+    }
+    return { cells: cv.cells, computed: cvValues.values }
+  }
+
+  /**
+   * The range a promotion would take.
+   *
+   * A DRAGGED RANGE IS OBEYED; a single cell asks for the block it is standing
+   * in (`currentRegion`), because clicking in a table and asking for the table
+   * is the gesture people make and dragging over four hundred rows is not.
+   */
+  const bridgeBox = (cv: CanvasSheet): CellBox => {
+    const b = normalize(grid.sel.active)
+    if (b.top !== b.bottom || b.left !== b.right) return b
+    return currentRegion(canvasView(cv), { row: b.top, col: b.left })
+  }
+
+  /** What the button says, which is different on each kind and hidden on the rest. */
+  const syncBridge = (): void => {
+    const sheet = shownSheet()
+    if (sheet?.kind === 'canvas') {
+      bridgeBtn.hidden = false
+      bridgeBtn.textContent = t('Make {range} a dataset')
+        .replace('{range}', describeBox(bridgeBox(sheet as CanvasSheet)))
+      bridgeBtn.title = t('Infer a type for each column and add a dataset sheet. The spreadsheet keeps these cells — the dataset is a copy of them.')
+      return
+    }
+    if (sheet?.kind === 'table') {
+      bridgeBtn.hidden = false
+      bridgeBtn.textContent = t('Open as a spreadsheet')
+      bridgeBtn.title = t('A flat, cell-by-cell COPY, for the one calculation a column cannot express. The dataset stays the live one.')
+      return
+    }
+    // A pivot or a view is derived from a dataset already; there is nothing for
+    // this control to mean, so it goes rather than lying about being available.
+    bridgeBtn.hidden = true
+  }
+  bridgeBtn.addEventListener('click', () => {
+    const sheet = shownSheet()
+    const r = bridgeBtn.getBoundingClientRect()
+    if (sheet?.kind === 'canvas') openPromote(sheet as CanvasSheet, r.left, r.bottom + 6)
+    else if (sheet?.kind === 'table') openFlatten(sheet, r.left, r.bottom + 6)
+  })
+
+  /** Add a sheet after the one it came from, in ONE patch: one promotion, one undo. */
+  const addSheet = (after: string, sheet: Sheet, findings: PromoteFinding[]): void => {
+    const at = store.doc.sheets.findIndex((s) => s.id === after) + 1
+    store.commit({ op: 'setSheet', id: sheet.id, sheet, at })
+    grid.setSheet(sheet.id)
+    // WHAT COULD BE WRONG GOES FIRST. Every line in this banner looks the same,
+    // and a promotion emits both kinds: "3 values could not be read as number"
+    // needs a decision, "the range is still on the spreadsheet" is reassurance.
+    // Printed in emission order the reassurance sits on top and the reader
+    // stops there. Stable within each group, so the order promote.ts chose —
+    // which is column order — survives.
+    showFindings(findingsEl, [
+      ...findings.filter((f) => f.severity === 'suspicious'),
+      ...findings.filter((f) => f.severity !== 'suspicious'),
+    ])
+  }
+
+  /**
+   * The header question, in front of the reader with the answer already filled
+   * in and the reasoning beside it.
+   *
+   * `detectHeader` is only sure when something CHANGES between the first row
+   * and the rest, and a block that is text all the way down is exactly where a
+   * silent guess names a column "12400" or eats a row of data. So the guess is
+   * shown, it says why, and it is one click to disagree with.
+   */
+  function openPromote(cv: CanvasSheet, x: number, y: number): void {
+    if (refuseWrite(findingsEl, store)) return
+    const v = canvasView(cv)
+    const box = bridgeBox(cv)
+    const trimmed = trimBox(v, box) ?? box
+    const guess = detectHeader(v, trimmed)
+    const el = popover(x, y, [
+      `<div style="padding:6px 10px;font-weight:600">${esc(t('Make {range} a dataset').replace('{range}', describeBox(trimmed)))}</div>`,
+      `<label style="display:flex;gap:8px;align-items:flex-start;padding:4px 10px 8px;cursor:pointer">`,
+      `<input type="checkbox" class="dx-hdr"${guess.header ? ' checked' : ''} style="margin-top:3px">`,
+      `<span><span>${esc(t('The first row holds the column names'))}</span>`,
+      `<span style="display:block;opacity:.7;font-size:11px;margin-top:2px">${esc(guess.why)}</span></span></label>`,
+      `<div style="padding:0 10px 8px;opacity:.7;font-size:11px;max-width:260px">`,
+      `${esc(t('The spreadsheet keeps these cells. Formulas pointing into the range still work, and the dataset is a copy taken now.'))}</div>`,
+      `<button class="dx-go">${esc(t('Make dataset'))}</button>`,
+    ].join(''))
+    el.querySelector<HTMLElement>('.dx-go')!.onclick = () => {
+      const header = el.querySelector<HTMLInputElement>('.dx-hdr')!.checked
+      el.remove()
+      const id = mintSheetId(store.doc)
+      const r = promoteRange(v, box, {
+        sheetId: id,
+        name: mintSheetName(store.doc, t('{name} dataset').replace('{name}', cv.name)),
+        header, from: cv.name, at: new Date().toISOString(),
+      })
+      // A REFUSAL IS A SENTENCE, never a silence and never a throw: an empty
+      // selection and a one-row block read as a header both come back here.
+      if (!r.ok) { showFindings(findingsEl, [{ message: r.message }, ...r.findings]); return }
+      addSheet(cv.id, r.sheet, r.findings)
+    }
+  }
+
+  /**
+   * The other direction, and the reason the round trip is the product: a
+   * dataset cannot express "one weird number in the corner", and reaching for
+   * Excel to get it is how people stop using the tool that has their data.
+   *
+   * IT IS A COPY AND THE POPOVER SAYS SO BEFORE IT IS MADE, not only in the
+   * findings afterwards. A link back that silently went stale would be worse
+   * than a copy that is honest about being one — the same reasoning promotion
+   * makes in the other direction.
+   */
+  function openFlatten(sheet: TableSheet, x: number, y: number): void {
+    if (refuseWrite(findingsEl, store)) return
+    const el = popover(x, y, [
+      `<div style="padding:6px 10px;font-weight:600">${esc(t('Open "{name}" as a spreadsheet').replace('{name}', sheet.name))}</div>`,
+      `<label style="display:flex;gap:8px;align-items:center;padding:4px 10px 8px;cursor:pointer">`,
+      `<input type="checkbox" class="dx-hdr" checked>`,
+      `<span>${esc(t('Write the column names into row 1'))}</span></label>`,
+      `<div style="padding:0 10px 8px;opacity:.7;font-size:11px;max-width:260px">`,
+      `${esc(t('A COPY, as the dataset is right now. Editing it does not change the dataset, and the dataset does not update it.'))}</div>`,
+      `<button class="dx-go">${esc(t('Make spreadsheet copy'))}</button>`,
+    ].join(''))
+    el.querySelector<HTMLElement>('.dx-go')!.onclick = () => {
+      const header = el.querySelector<HTMLInputElement>('.dx-hdr')!.checked
+      el.remove()
+      const id = mintSheetId(store.doc)
+      const r = flattenToSpreadsheet(sheet, {
+        sheetId: id,
+        name: mintSheetName(store.doc, t('{name} copy').replace('{name}', sheet.name)),
+        // A calculated column stores no values — without this the copy is a
+        // column of blanks under a header that promises numbers.
+        computed: sheet.id === grid.showingId() ? grid.computed : undefined,
+        header,
+      })
+      addSheet(sheet.id, r.sheet, r.findings)
+    }
+  }
+
   // --- the formula bar and the status bar, both driven by the selection
   grid.onSelectionChange = (summary, ref, value) => {
     refEl.textContent = ref
     if (document.activeElement !== fxEl) fxEl.value = value
     sumEl.textContent = summary
+    // The label names the RANGE, so it is wrong the moment the selection moves.
+    syncBridge()
   }
   fxEl.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return
@@ -670,6 +867,13 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   // the common case — a keystroke in a cell — costs one string comparison.
   store.on('doc', () => gateActions())
   gateActions(true)
+  // The bridge follows the same two events for the same reason, plus one of its
+  // own: the computed map it reads is only true of the document that produced
+  // it, so an edit anywhere invalidates it. Dropping the cache rather than
+  // recomputing keeps a keystroke costing nothing — the next selection change
+  // rebuilds it, and until then the label is not on screen to be wrong.
+  store.on('doc', () => { cvValues = null; syncBridge() })
+  syncBridge()
 
 
   app.querySelector('[data-act="import-xlsx"]')!.addEventListener('click', () => {
@@ -983,8 +1187,15 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     if (!mod) return
     const k = e.key.toLowerCase()
     if (k === 's') { e.preventDefault(); void doSave() }
-    else if (k === 'z' && !e.shiftKey) { e.preventDefault(); store.undo() }
-    else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); store.redo() }
+    // ⌘Z AND ⌘⇧Z ARE NOT HANDLED HERE, and removing them from this listener is
+    // a fix, not a tidy-up. The grid's own document listener (above) already
+    // routes them through `keyToAction` → `Grid.handleKey` → `store.undo`, and
+    // `preventDefault` does not stop propagation — so every ⌘Z ran BOTH and
+    // undid TWO steps. Found while checking that one promotion is one undo:
+    // pressing ⌘Z after it removed the new sheet AND the edit before it.
+    // The grid's path is the right one to keep: it is the single key map
+    // (select.ts) and it stands down inside a text input, so ⌘Z in the title
+    // field is the browser's own text undo again rather than a document undo.
     // ⌘D / ⌘Enter fill down. THE MAP decides which keys mean fill; a fill
     // WRITES CELLS, which the selection model cannot do, so the verb lands here.
     else if (keyToAction(e)?.kind === 'fill') { e.preventDefault(); grid.fillDownSelection() }

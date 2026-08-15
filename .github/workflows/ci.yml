@@ -498,6 +498,16 @@ jobs:
         # skipped: that gesture is why the kind exists.
         run: node scripts/test-dash-canvas.ts
 
+      - name: dash promote/flatten rig
+        # The bridge between the two sheet kinds. The checks that matter are
+        # the ones about NOT destroying the source: promotion leaves the range
+        # alone, because a formula under the block and a cross-sheet reference
+        # into it both point by POSITION and emptying the cells would blank
+        # them silently. Also that a lifted column formula actually EVALUATES —
+        # Column.formula is a bare expression, and an "=" in front of it ships
+        # a column of #VALUE!.
+        run: node scripts/test-dash-promote.ts
+
       - name: dash fill rig
         # ⌘D and the fill handle. This guards a DATA LOSS bug that shipped:
         # seeding from the computed value wrote error OBJECTS into stored
