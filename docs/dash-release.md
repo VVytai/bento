@@ -68,12 +68,20 @@ Still true, and worth knowing before cutting `dash-v0.3.0`:
 - **OFFLINE MODE DOES NOT FULLY HOLD** — dash's share of the privately reported
   advisory that slides PR #305 fixes (GHSA-5c3x-xqp6-g94r). Verified against
   dash today, not inferred:
-  - **The switch lies when storage is unavailable.** `offlineEnabled()` is
-    `try { lsGet(...) === 'on' } catch { return false }` (kernel/src/update.ts),
-    so in Safari private browsing or a `file://` context that blocks site data,
-    a reader who turns Offline ON gets a checkbox that shows enabled and a gate
-    that answers ONLINE. Measured: with `getItem` throwing, the gate returns
-    false while `bento-offline` is `'on'`.
+  - **The switch lies when storage is unavailable, and the dialog contradicts
+    itself while it happens.** `offlineEnabled()` reads
+    `try { lsGet('bento-offline') === 'on' } catch { return false }` — but its
+    catch is DEAD CODE: `lsGet` (kernel/src/storage.ts) has its own try/catch
+    returning `null`, so it never throws. The gate answers online because
+    `null === 'on'` is false, which is a different mechanism from the one this
+    entry first claimed and matters because the fix is different too. Corrected
+    after the bento/type session checked the same line.
+    Measured live in dash, with every `localStorage` call throwing as Safari
+    private browsing does: ticking Offline leaves the checkbox **TICKED** while
+    the note directly under it reads **"Network features are available"**. The
+    checkbox shows its own DOM state (it is seeded once from `offlineEnabled()`
+    at build time), the write is swallowed, and the note re-reads the gate — so
+    the two disagree on screen and the gate is the one telling the truth.
   - **Another tab's decision is not honoured.** Nothing in dash or the kernel
     listens for `storage`, so turning Offline on in one tab leaves a second
     tab's relay socket open.
