@@ -65,6 +65,34 @@ Still true, and worth knowing before cutting `dash-v0.3.0`:
 
 ## 1 · Loses or misstates data
 
+- **OFFLINE MODE DOES NOT FULLY HOLD** — dash's share of the privately reported
+  advisory that slides PR #305 fixes (GHSA-5c3x-xqp6-g94r). Verified against
+  dash today, not inferred:
+  - **The switch lies when storage is unavailable.** `offlineEnabled()` is
+    `try { lsGet(...) === 'on' } catch { return false }` (kernel/src/update.ts),
+    so in Safari private browsing or a `file://` context that blocks site data,
+    a reader who turns Offline ON gets a checkbox that shows enabled and a gate
+    that answers ONLINE. Measured: with `getItem` throwing, the gate returns
+    false while `bento-offline` is `'on'`.
+  - **Another tab's decision is not honoured.** Nothing in dash or the kernel
+    listens for `storage`, so turning Offline on in one tab leaves a second
+    tab's relay socket open.
+  - **Nothing can be aborted.** There is no `AbortController` anywhere, so a
+    request already in flight when the switch is thrown completes.
+  Two of the six claims do NOT apply to dash for structural reasons: it has no
+  media element (no remote `src` to strip) and no pack channel (`packs: false`).
+  The manual *Check for updates* IS gated (about.ts) — but at the CALL SITE,
+  which is the shape the advisory says is the actual cause.
+
+  **Do not fix this in dash.** The fix is one chokepoint, `kernel/src/net.ts`,
+  landing in PR #305 with a CI rig that bans `fetch`/`WebSocket`/
+  `XMLHttpRequest`/`sendBeacon`/`EventSource` outside it. A second chokepoint
+  here would fork the exact thing that PR exists to centralise. dash's whole
+  exposure is ONE call — `new WebSocket` in `sync/online.ts` — which becomes
+  `netWebSocket` when net.ts exists, and dash comes into scope of that rig
+  automatically. Track #305; do not pre-empt it.
+
+
 - **No file write-back.** slides silently rewrites the real file every 2.5s once
   it holds a handle. dash writes an IndexedDB snapshot and never touches the
   file, so everything since the last manual ⌘S depends on recovery. *(The
