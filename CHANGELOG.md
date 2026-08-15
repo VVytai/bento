@@ -11,6 +11,32 @@ pre-1.0.
 
 ## [Unreleased]
 
+- **Security: offline mode did not block everything it promised.** The switch
+  says "nothing leaves this computer", and five things still went out with it
+  on: a manual *Check for updates* called the release server, *Manage
+  languages…* downloaded the pack index and any pack you added, a deck's video
+  or image pointing at a web address still loaded from it, requests already
+  running were left to finish, and a second tab that was already in a live
+  session kept syncing edits.
+
+  The last two matter most. A remote image or video in a document is the
+  cheapest tracking beacon there is — it tells whoever hosts it that you opened
+  the file, and when — and offline mode is exactly what you would turn on
+  before opening a deck you did not write. The second tab was worse: real
+  document content kept moving.
+
+  Separately, where a browser blocks site data — a private window, or a
+  locked-down setup — the checkbox showed the switch on while nothing had been
+  stored, so it did nothing at all. It now holds for the session regardless and
+  says plainly that it will not survive a reload.
+
+  Offline mode now covers all of it: the network is reachable from exactly one
+  place in the code, flipping the switch cuts requests and connections that are
+  already open rather than only the next one, and a deck's remote images and
+  video are left unloaded. Reported privately, with a reproduction — and found
+  by watching real traffic after reading the code twice suggested there was
+  nothing wrong.
+
 - **Updating a file no longer interrupts you.** With Bento Tray installed and a
   folder granted, "Update this file" now finishes without a single dialog. The
   backup it leaves behind is saved **beside your document** instead of being
