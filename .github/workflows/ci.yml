@@ -214,6 +214,71 @@ jobs:
         # file carrying a script tag.
         run: node scripts/test-preview.ts
 
+      - name: Offline-mode rig
+        # Offline mode promises "nothing leaves this computer" and was broken
+        # five ways at once (GHSA-5c3x-xqp6-g94r): a manual update check, a
+        # language-pack download, a deck's remote <video>, in-flight requests
+        # that kept running, and a second tab's socket that kept syncing.
+        #
+        # It stayed hidden because it reads as correct: an agent asked to audit
+        # it said "secure" from the docs AND from the code. So the rig does not
+        # check the call sites — it enforces the POLICY that no file outside
+        # kernel/src/net.ts may touch a network primitive at all, which is what
+        # stops the NEXT call site being wrong, plus the chokepoint's own
+        # behaviour (refusal, aborting what is already in flight, cross-tab).
+        run: node scripts/test-offline.ts
+
+      - name: Untrusted-markup sanitizer rig
+        # Every deck is untrusted input somebody may open, paste or receive over
+        # collab, and script in that page owns the collab keys, the plaintext
+        # autosave store and the write handle to the file on disk. An audit
+        # measured `<svg onload>`, a rect `onclick`, `<img onerror>` in a
+        # foreignObject and `<form action="javascript:">` all executing.
+        #
+        # The sanitizer is an ALLOWLIST, so what this pins is the DEFAULT: the
+        # first version was a denylist that passed 40 checks with the critical
+        # still open, because the rig tested call sites with source regexes
+        # instead of the policy. These checks drive the real walk, and the
+        # browser half needs Chrome — it self-skips where there is none, so the
+        # node half still gates.
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-sanitize.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-sanitize.mjs"
+          node "$RUNNER_TEMP/test-sanitize.mjs"
+
+      - name: Export-secrets rig
+        # "Copy document JSON" shipped the room's owner private key while the
+        # tooltip recommended pasting it into an AI chat, and "Save as
+        # template…" wrote plaintext out of a password-protected deck. Both are
+        # invisible in the product: the file looks right. This scans the source
+        # for the two shapes — an export that forgets to strip collab secrets,
+        # and a user-facing path that reaches serializeFile instead of
+        # serializeAuto — so a NEW export path cannot reintroduce either.
+        run: node scripts/test-export-secrets.ts
+
+      - name: Blob content-address rig
+        # Encrypted assets are fetched by content address from a relay the
+        # threat model treats as untrusted. Nothing verified that what came
+        # back matched what was asked for, and the substitution was cached to
+        # disk, so one poisoned response persisted.
+        run: node scripts/test-blobs.ts
+
+      - name: tray/ios bridge rig
+        # The iOS host opens ANY self-contained HTML document and treats those
+        # documents as mutually untrusted, so a page-supplied filename reaching
+        # appendingPathComponent was an arbitrary write inside the container —
+        # including over another deck the user would later open and trust.
+        # Source-shape checks; the Swift half self-skips without a toolchain.
+        run: node scripts/test-tray-bridge.ts
+
+      - name: WebExtension package rig
+        # Validates the store package without writing it: every file the
+        # manifest names exists, every icon is the size it claims, no unexpected
+        # file is about to ship (probe/ is four capability probes — harmless to
+        # us, alarming to a reviewer), and no permission is declared but unused.
+        # A listing rejected for a missing 128px icon costs days of review.
+        run: node scripts/pack-webext.mjs --check
+
       - name: WebExtension background rig
         # The half that WRITES, and previously the untested half. Two properties
         # it must hold: the target file comes from sender.url (browser-stamped)
@@ -558,6 +623,14 @@ jobs:
         # diffed against slides' :root so the two cannot drift one grey at a
         # time again.
         run: node scripts/test-dash-theme.ts
+      - name: Theme token gate
+        # Every failure this catches is INVISIBLE in the light theme, which is
+        # the one the author is looking at. A chrome surface pinned to white
+        # keeps its light background in dark and puts light text on it — the
+        # properties panel measured 1.21:1 against a 4.5 floor before this gate
+        # existed. It also stops a document token being themed (which would
+        # invert the deck) and the light palette forking from spaces and type.
+        run: node scripts/test-slides-theme.mjs
 
       - name: Built-in layout geometry rig
         # The built-ins are drawn against 1600x900 while the model default is
@@ -590,9 +663,31 @@ jobs:
         # the step above and silently splits every bento/slides file in the
         # field. This step asserts byte-identity instead.
         #
-        # IT PASSES TRIVIALLY TODAY — there is one engine, so the candidate
-        # import resolves to the baseline module and the run announces itself
-        # as a NO-OP. The signal in a NO-OP run is the self-test: four
-        # perturbed-but-convergent engines that this rig must catch. It goes
-        # live the moment sync parameterization repoints one import.
-        run: SEEDS=200 STEPS=60 ACTORS=4 node scripts/test-sync-equiv.ts
+        # The baseline is a FROZEN copy of the engine as shipped
+        # (scripts/lib/sync-baseline-frozen.ts), so this run is live from here
+        # on: it compares the working engine against the bytes every file in
+        # the field was written by. REQUIRE_LIVE=1 fails the build if the
+        # candidate is ever repointed at something that resolves back to the
+        # baseline — the quiet way a gate stops gating.
+        run: REQUIRE_LIVE=1 SEEDS=200 STEPS=60 ACTORS=4 node scripts/test-sync-equiv.ts
+
+      - name: CRDT document-shape seam
+        # The equivalence rig proves a NEGATIVE — that the parameterized engine
+        # still mints the bytes shipped files were written with — and a
+        # parameterization that quietly did nothing would pass it. This proves
+        # the positive: a second shape (pages→blocks) produces an engine that
+        # actually works, keys nodes on the composite pageId+blockId, and
+        # restores as itself. Also pins the constructor contract: the shape has
+        # no default, because a default is how a spaces call site silently ends
+        # up holding slides' shape.
+        run: node scripts/test-sync-shape.ts
+
+      - name: bento/spaces under the shared engine
+        # Convergence for the pages/blocks binding, AND a report on whether
+        # what the replicas converge on is a legal bento/spaces document.
+        # Those are different questions: page.blocks is flat and in pre-order,
+        # while the engine merges `parent` as an ordinary register and order as
+        # a position key — two independent domains describing one tree. The
+        # format half is REPORTED, not asserted, because the fix is a decision
+        # nobody has taken yet; STRICT=1 turns it into a gate the day it is.
+        run: SEEDS=250 STEPS=80 ACTORS=4 node scripts/test-sync-spaces.ts

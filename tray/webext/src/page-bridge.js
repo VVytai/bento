@@ -81,10 +81,12 @@
    */
   /**
    * The release that first sent a distinct picker `id` per purpose (#213).
-   * A deck whose embedded runtime predates it sends `bento-doc` for EVERY save
-   * — including "Save a copy…" — so the id carries no information there and
-   * this bridge must not act on it. If #213 ships under a different number,
-   * this constant is the one thing to change.
+   *
+   * CONFIRMED: `pickerIdFor` is absent from v1.0.14 and present in v1.0.15, so
+   * 1.0.15 is the floor. A deck whose embedded runtime predates it sends
+   * `bento-doc` for EVERY save — including "Save a copy…" — so the id carries
+   * no information there and this bridge must not act on it. Those decks get
+   * the browser's own picker, exactly as they do with no extension installed.
    */
   const ID_SINCE = [1, 0, 15]
 
@@ -101,6 +103,31 @@
   }
 
   const wantsOpenFile = (opts) => opts?.id === 'bento-doc' && runtimeAtLeast(ID_SINCE)
+
+  /**
+   * A backup, which is a NEW file beside the open one — so `wantsOpenFile` is
+   * the wrong question and its version gate does not apply. `bento-backup` did
+   * not exist before the runtime that sends it, so unlike `bento-doc` the id
+   * cannot arrive from a deck that meant something else by it.
+   */
+  const wantsBackup = (opts) => opts?.id === 'bento-backup'
+
+  /**
+   * Tell the document what this host can do.
+   *
+   * `showSaveFilePicker` alone says nothing: it exists in Chrome anyway, and a
+   * host that declines is indistinguishable from a host that is absent, since
+   * both end at the native dialog. So the kernel reads this before choosing a
+   * path it can only take with help — today just the backup (`save.ts hostCan`).
+   *
+   * Capabilities, not a version number. A deck can be years older or newer than
+   * the extension it meets, and asking "can you do X" survives that in both
+   * directions where "are you at least version N" does not.
+   */
+  Object.defineProperty(window, '__bentoHost', {
+    value: Object.freeze({ name: 'tray/webext', ops: Object.freeze(['claim', 'write', 'backup']) }),
+    writable: false, configurable: false, enumerable: false,
+  })
 
   /**
    * Options safe to hand to the NATIVE picker.
@@ -124,7 +151,41 @@
     return out
   }
 
+  /** The handle shape save.ts needs, over one round trip at close(). */
+  const handleOver = (name, op, extra = {}) => ({
+    name,
+    kind: 'file',
+    createWritable: async () => {
+      const chunks = []
+      return {
+        async write(data) { chunks.push(data) },
+        async close() {
+          const blob = chunks.length === 1 && chunks[0] instanceof Blob ? chunks[0] : new Blob(chunks)
+          const text = await blob.text()
+          const res = await ask(op, { text, ...extra })
+          if (!res?.ok) throw new DOMException(res?.reason || 'write failed', 'NotAllowedError')
+          console.info('[bento-tray]', op, res.name ?? name, `(${res.bytes} bytes)`)
+        },
+      }
+    },
+    // save.ts re-queries permission on a retained handle; a host-backed handle
+    // is granted for as long as the folder grant stands.
+    queryPermission: async () => 'granted',
+    requestPermission: async () => 'granted',
+    isSameEntry: async () => false,
+  })
+
   window.showSaveFilePicker = async (opts = {}) => {
+    if (wantsBackup(opts)) {
+      // No `claim` round trip: the backup does not exist yet, so there is
+      // nothing to resolve until the write itself. The extension validates the
+      // name against the sender's own file at that point.
+      //
+      // And NO native fallback here. Falling through would open a picker for a
+      // file the author never asked to save — the exact interruption this path
+      // exists to remove. `save.ts` catches the throw and downloads instead.
+      return handleOver(opts.suggestedName, 'backup', { name: opts.suggestedName })
+    }
     if (!wantsOpenFile(opts)) {
       if (native) return native(forNative(opts))
       throw new DOMException('No file picker available', 'AbortError')
@@ -148,29 +209,6 @@
       if (native) return native(forNative(opts))
       throw new DOMException('No writable location', 'AbortError')
     }
-    return {
-      name: claim.name,
-      kind: 'file',
-      createWritable: async () => {
-        const chunks = []
-        return {
-          async write(data) { chunks.push(data) },
-          async close() {
-            const blob = chunks.length === 1 && chunks[0] instanceof Blob
-              ? chunks[0]
-              : new Blob(chunks)
-            const text = await blob.text()
-            const res = await ask('write', { text })
-            if (!res?.ok) throw new DOMException(res?.reason || 'write failed', 'NotAllowedError')
-            console.info('[bento-tray] wrote', claim.name, `(${res.bytes} bytes) in place`)
-          },
-        }
-      },
-      // save.ts re-queries permission on a retained handle; a host-backed handle
-      // is granted for as long as the folder grant stands.
-      queryPermission: async () => 'granted',
-      requestPermission: async () => 'granted',
-      isSameEntry: async () => false,
-    }
+    return handleOver(claim.name, 'write')
   }
 })()

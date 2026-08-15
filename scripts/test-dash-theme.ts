@@ -106,12 +106,29 @@ console.log('every var() a dash stylesheet reads is declared by one of them')
 
 // ============================================================ 2 · the suite's palette
 
-/** Parse a `:root { … }` block into name → raw value. */
+/**
+ * Parse the LIGHT `:root` blocks into name → raw value.
+ *
+ * The selector is a LIST, not a bare `:root` — slides gained an explicit dark
+ * theme (#285) and now opens with `:root, :root[data-theme="light"] {`, which
+ * a `/:root\s*\{/` pattern does not match. That is worth spelling out because
+ * of how it failed: the rig did not error, it parsed ZERO variables and then
+ * reported nine separate "slides declares --ink (has it been renamed?)"
+ * failures — a broken parser wearing the costume of nine real findings.
+ * `slides.size > 5` below is the check that tells the two apart, and it is why
+ * it exists.
+ *
+ * The dark block is deliberately EXCLUDED. This rig diffs one light palette
+ * against the other; letting `[data-theme="dark"]` in would silently overwrite
+ * every light value with its dark counterpart and compare the wrong halves.
+ */
 function rootVars(text: string): Map<string, string> {
   const out = new Map<string, string>()
-  // every :root block in the file, not just the first — find.css adds two.
-  for (const block of text.matchAll(/:root\s*\{([\s\S]*?)\n\}/g)) {
-    const body = block[1].replace(/\/\*[\s\S]*?\*\//g, '')
+  // every light :root block in the file, not just the first — find.css adds two.
+  for (const block of text.matchAll(/(^|\})\s*([^{}]*:root[^{}]*)\{([\s\S]*?)\n\}/gm)) {
+    const selector = block[2]
+    if (/\[data-theme\s*=\s*["']?dark/.test(selector)) continue
+    const body = block[3].replace(/\/\*[\s\S]*?\*\//g, '')
     for (const m of body.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)) out.set(m[1], m[2].trim())
   }
   return out

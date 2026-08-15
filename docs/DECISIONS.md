@@ -14,6 +14,210 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-06 — The tree is DERIVED at read time, in one function, and it cannot cycle
+
+**Decision.** `model.ts effectiveParents(page)` is the only answer to "what is
+this block nested under": `b.parent` iff that block is in the SAME page and
+appears STRICTLY EARLIER. Anything else — absent, itself, later — resolves to
+the root. `descendantsOf(page, id)` is built on it. Every consumer delegates.
+
+This implements the rule settled on 2026-08-03, which until now existed as a
+paragraph and four disagreeing implementations: positional in `render.ts`, a
+hop-capped graph walk in `blocks.ts mdLayout`, a fixed-point sweep in
+`agent.ts descendants` ("rather than trusting the order"), and an id lookup in
+`editor.indent`. They agreed only because the editor keeps the array in
+pre-order — which is exactly the invariant collaboration breaks.
+
+**DERIVE, NEVER REPAIR.** Normalising the array instead would mint `ord` ops and
+two replicas can ping-pong over them forever. A read-time function mutates
+nothing, so two replicas that agree on the array agree on the tree without
+exchanging one extra op.
+
+**Acyclic by construction, which is the point.** A parent must be earlier, so no
+document — authored, hand-edited, imported or merged — can produce a loop. That
+removes a whole class of defence: no visited set, no hop cap of 32, no
+fixed-point sweep. `blocks.ts` capped at 32 because the graph could cycle, and a
+markdown export that silently truncated at depth 32 is a quiet wrong answer
+rather than an error.
+
+**The failure it prevents.** On a merged `parent` cycle the old sweep returned
+the whole connected component INCLUDING the node itself, so `planRemoveBlocks`
+deleted blocks the caller never named.
+
+**Verified against documents the merge actually produced**, not hand-built ones:
+250 merged documents, 1,695 blocks, 24.4% of them violating flat pre-order —
+zero rule failures, no cycles, no self-parents, no subtree containing its own
+root. `scripts/test-sync-spaces.ts` now asserts this on every merged document
+forever, and the negative control (reverting to a raw graph walk) fails 13
+blocks out of 405.
+
+**`Store.tree()` gains a visited set, and surfaces what a cycle orphans.**
+`buildIndex` bins pages by `parent` with no position test, so two concurrent
+sidebar drags converge on A.parent=B, B.parent=A. Neither is reachable from the
+root, so both pages vanished from the sidebar AND from the Markdown export while
+still sitting in the file, with nothing saying so; a subtree call from inside
+the cycle recursed until the stack gave out. Orphaned pages are now listed at
+the root — pages you can see and re-home beat pages that quietly stopped
+existing.
+
+**Still a page-level graph sweep in `planRemovePage`**, deliberately: it
+terminates, and cascading a cyclic pair is what a caller asking for descendants
+gets. Named here so the next reader knows it was considered rather than missed.
+
+## 2026-08-06 — bento/spaces will not stamp the text token history, and that is only safe if everyone is lean
+
+**Decision.** `toJSON({ text: false })` omits `txt` from a stamped state.
+bento/slides keeps stamping it — every file in the field was written that way,
+and the equivalence gate compares those bytes. bento/spaces will not.
+
+**The measurement.** The token history is one entry per character, each ~26
+bytes with an id, and a deletion cannot remove one — a tombstone is how
+"delete" reaches a replica that has not caught up, so the history only grows.
+An emptied paragraph still carries everything ever typed into it (measured:
+"hello" → 159 B; type " world" → 297 B; delete it again → **333 B**; empty the
+paragraph → **363 B**).
+
+**But the cost is EDITING, not text**, which was not obvious and changes where
+it matters. Identical prose, two ways of arriving:
+
+| | stamped state | ratio |
+|---|---|---|
+| pasted / imported / written by an agent | 2,978 B | ×0.2 |
+| typed in ~40-character runs | 479,825 B | ×25.8 |
+
+161× apart for byte-identical content. Text that arrives as one write never
+engages the RGA at all. Slides survives this because slide text is titles and
+bullets; a space IS typed prose, and the state would outweigh the document
+inside the plaintext `#bento-doc` block, re-serialized on every save,
+re-parsed on every open, and written to IndexedDB every 2.5s.
+
+**Why not garbage-collect the tombstones instead** (what Yjs does by default,
+and it is worth being accurate that dropping the history is NOT the industry
+norm — Yjs GCs, Automerge keeps everything and pays for it with a binary
+encoding). GC needs to know every replica has seen the delete. A file people
+mail to each other has no closed set of peers and no moment when that becomes
+true — a copy can come back out of a mailbox a year later. The causal cutoff
+that makes GC safe never arrives here.
+
+**THE PRECONDITION, and it is not a detail.** A restored state with no token
+history does not fall back to whole-value sets, as first assumed: the differ
+RE-SEEDS a generation from the current content, and the seed is derived from
+that content plus the register stamp. Two replicas that both re-seed derive the
+SAME seed and still merge per character — measured on one shared paragraph,
+"Friday"→"Monday" from one side and an appended sentence from the other, both
+kept, byte-identical on both sides, from a stamp 10.9× smaller.
+
+A replica that re-seeds meeting a peer that still holds the ORIGINAL generation
+is a different story. The generations duel as units and the loser's edit
+disappears — measured: **the two documents do not converge.** A live session
+keeps the tokens in memory, so "save, close, reopen, rejoin a room that is still
+live" is exactly that case.
+
+So a lean stamp is safe only when EVERY participant is lean. **The session layer
+must treat "restored without `txt`" as needs-a-snapshot, not as resume** — rejoin
+by taking a peer's snapshot through `mergeSnapshot` rather than replaying from
+where the file left off. That rule does not exist yet because spaces has no
+session; `scripts/test-sync-shape.ts` carries the evidence and the note so it
+cannot be written without it.
+
+## 2026-08-06 — One CRDT engine, two document shapes, and the shape is never on the wire
+
+**Decision.** `kernel/src/sync/crdt.ts` takes a `DocShape` at construction: two
+property names — the doc key holding the parent array, the parent key holding
+the child array — plus a derived set of doc keys it must never sync.
+`slides/src/sync/crdt.ts` is a facade binding `SLIDES_SHAPE` and exporting
+`SyncState`; bento/spaces binds `('pages','blocks')` the same way. The engine
+knows nothing else about any app's content.
+
+**Bound at construction, never serialized, never on the wire.** A room is
+single-app by construction — the room id is minted per file — so no frame has
+to say which shape it came from, and a shape tag in `SyncStateJSON` would
+change the bytes of every bento/slides file already on a disk.
+
+**NO DEFAULT on the shape argument.** A default is how a spaces call site
+silently ends up holding slides' shape, and a room minted that way cannot be
+repaired: the files are on other people's disks.
+
+**`skipDoc` is DERIVED, not authored.** It must contain the container key: the
+container is synced structurally, per node with its own position key, so
+listing it as an ordinary doc property would collapse the whole document into
+ONE last-writer-wins register. Measured — a shape omitting its own container
+fails six checks in `scripts/test-sync-shape.ts`.
+
+**THE WIRE VOCABULARY IS FROZEN FOR EVERY APP.** Ops keep saying
+`kind:'slide'|'element'` and carrying `sl`/`el` regardless of shape. Renaming
+per app buys prettier debug output and costs a second binding on the
+highest-consequence bytes in the system. Settle it before spaces collab reaches
+a user; after that, spaces files carry the choice permanently.
+
+**Parameterize, THEN move.** The engine was parameterized in place and moved to
+the kernel second. Moving first would have parked `doc.slides` and
+`sl.elements` inside `kernel/src/` for a PR, against kernel/README.md's own
+rule that the kernel never sees an app's content shape.
+
+**What guards it.** `scripts/test-sync-equiv.ts` proves the NEGATIVE (the
+engine still mints the bytes the field was written with) against a FROZEN copy
+of the engine as shipped; `scripts/test-sync-shape.ts` proves the POSITIVE (a
+second shape produces an engine that works and restores as itself). Neither
+suffices alone: a parameterization that quietly did nothing passes the first, a
+broken one passes the second.
+
+## 2026-08-06 — bento/spaces converges under the shared engine, and converges on documents the format calls illegal
+
+**Measured, not argued.** `scripts/test-sync-spaces.ts`, 400 seeds × 100 steps
+× 4 actors, 17,227 ops, the kernel engine bound to `('pages','blocks')`:
+
+- **Convergence is perfect.** Every replica agrees, every seed. The engine
+  serves spaces as a CRDT with no change to its algebra.
+- **52.4% of merged documents violate the spaces format** (209 of 399 seeds
+  whose solo document was provably legal). Worst case in one document: 5 page
+  cycles, 5 dangling page parents, 3 dangling block parents, 3 pages out of
+  pre-order, 1 block out of pre-order, 1 duplicated block id.
+
+The CONTROL matters as much as the result: each seed also runs a lone replica
+through the same edits, receiving nothing, and a seed whose solo document is
+already illegal is EXCLUDED rather than counted. Without it every number above
+could have been the generator's fault. It caught three generator bugs while
+this was being written — a cross-page move that orphaned children, a page
+re-parent that inserted before its new parent, a subtree walk that missed
+grandchildren — and the first draft of this entry overstated the finding by 36
+points.
+
+**Why it happens, and why it is nobody's bug.** `page.blocks` is flat and in
+pre-order — "a child always follows its parent, so one forward pass rebuilds
+the tree" — while the engine stores order as fractional position keys and
+`parent` as an ordinary LWW register. Two independent merge domains describe
+one visual tree. You indent a block, I move one; both edits are legal, both
+apply, every replica agrees, and no forward pass can rebuild the result.
+`render.ts renderBlocks` does not crash on it — it silently renders the block
+at root, un-nested.
+
+**Three things that must be settled before a spaces file carries collab
+state**, because none can be corrected once files exist on other disks:
+
+1. **Pre-order vs `parent`.** Derive the tree at render time and tolerate any
+   array order, or repair after apply. A repair that COMMITS mints `ord` ops
+   and can ping-pong between replicas forever — so if it repairs, it must
+   derive, not commit. The effective-parent rule (2026-08-03) is the right
+   rule and is implemented in exactly one consumer (`render.ts`), while
+   `blocks.ts mdLayout`, `agent.ts descendants` and `editor.indent` use graph
+   semantics. One exported function, invariant asserted.
+2. **Page cycles.** `Store.tree()` recurses from the root with no visited set,
+   so a merged cycle makes pages vanish from the sidebar AND the markdown
+   export while still being in the file. `editor.reparentPage` refuses cycles
+   locally, which two concurrent drags defeat by construction.
+3. **Duplicate block ids.** The engine duplicates a node on concurrent moves to
+   two parents BY DESIGN (docs/collab-design.md) — in slides that is the morph
+   idiom and it is correct. In spaces, block ids are unique document-wide,
+   `buildIndex` keys blocks by bare id, and `#p/<page>/<block>` anchors assume
+   it. Same behaviour, opposite verdict.
+
+**Status of the rig.** It asserts convergence and the control, and REPORTS the
+format violations: failing the build on them would assert an answer nobody has
+chosen. `STRICT=1` turns every one into an assertion — flip it in CI the day
+the three decisions land, and the rig becomes their enforcement rather than
+their evidence.
+
 ## 2026-08-03 — Sync parameterization is gated on BYTE equivalence, not convergence
 
 Making `slides/src/sync/` serve spaces (`doc.pages[] → page.blocks[]`) by
@@ -2193,3 +2397,65 @@ So the decision stands and the model change is nil: `table` is the dataset,
 `canvas` is the spreadsheet, and the work is implementation, not format. Adding
 a third kind would have left two half-built spreadsheet kinds. "Canvas" stays
 the wire word; the label a reader sees is "Spreadsheet".
+---
+
+## 2026-08-14 — a self-update must not be the one save that interrupts
+
+**Reported against 1.0.16**, with tray/webext installed and a folder granted:
+⌘S saved with no dialog, and then "Update this file" put up a macOS save panel
+for `Tray_Test.v1.0.16-backup.bento.html` into ~/Downloads.
+
+The update itself was fine — it had rewritten the file in place, silently,
+through the extension. The dialog was the ROLLBACK COPY, which `applyUpdateInPlace`
+handed to `downloadFile`, and downloads prompt for anyone with Chrome's *"ask
+where to save each file"* enabled. So the flow's only interruption was for a
+file the author never asked for, in the middle of the one operation whose whole
+selling point is that it does not interrupt.
+
+Two things were wrong, and only the first was visible.
+
+**A backup belongs beside what it backs up.** Even silent, ~/Downloads is the
+wrong place: detached from the document, one per update, and a rollback you have
+to go hunting for is a poor rollback. With a host, it now goes in the folder
+already granted, next to the original. Without one it is still a download —
+the alternative there is a picker, which is strictly worse than the status quo
+for the majority case, and the majority case is no extension at all.
+
+**The no-handle path was declaring the wrong intent.** `writeUpdatedFileAs`
+hard-coded `share`, so a document opened by double-clicking — no handle, the
+ordinary case — told every host "a new file the author will choose" about a save
+that is overwriting the document on screen. The host correctly declined and the
+author got a picker. Same class as the 2026-08-02 finding that produced
+`pickerIdFor`: intent has to be explicit in the call, because it cannot be
+recovered from anything else in it. `applyUpdateInPlace` now sends `in-place`,
+and `canUpdateInPlace` stops meaning "we hold a handle" — a host needs none.
+
+**Hosts announce capabilities, not presence** (`window.__bentoHost.ops`,
+`save.ts hostCan`). Presence is not a useful question: `showSaveFilePicker`
+exists in Chrome regardless, and a host that declines looks exactly like one
+that is absent. A host that announced itself but did not know `bento-backup`
+would have passed the request to the native picker — producing the very dialog
+this removes, and only for the people who installed the thing meant to remove
+it. Decks and hosts version independently in both directions.
+
+**The new op is the only one that creates a file**, so it is the only place the
+page contributes to a name. Held down from both ends: the name must be visibly
+derived from the sender's own (`backupNameFor` — no separator survives, and it
+may not equal the original), and an existing file is never overwritten. The
+directory comes from the sender's resolved path, never the payload. Worst case
+for a hostile document is one predictably-named copy of ITSELF inside a granted
+folder.
+
+**Guards.** `scripts/test-savepurpose.ts` pins the update path's purpose (both
+new assertions verified to FAIL against the previous commit — a gate never seen
+failing is not a gate). `scripts/test-webext-background.ts` covers the name
+rules, create-only, the nested-directory case, and that every refusal applying
+to a write applies to a backup. `scripts/test-webext-bridge.ts` covers the
+announcement, that a page cannot forge it, and that a backup never reaches the
+native picker.
+
+*Found while fixing this:* the bridge rig stubbed `Blob` as `class {}`, which
+satisfied the `instanceof` branch but has no `.text()` — so every `close()`
+rejected and the half of the bridge that actually sends bytes had never been
+exercised, across 24 green checks. Mocks shaped to make a test pass test the
+mock.
