@@ -816,10 +816,20 @@ html, body {
 /* THE FOOTER CELL IS A CONTROL, and it has to look like one before it is
    clicked — a total nobody knows they can click is the state this replaces.
    The hover is the same `--hover` every other menu row in the app uses.
-   `.dg-tot-add` is the invitation under a numeric column with no total yet:
-   quiet enough that eight of them across a wide sheet do not read as data
-   (they are not data), legible enough to be found by someone looking for a
-   way to add one. */
+
+   `.dg-tot-add` is the invitation under a numeric column with no total yet, and
+   it is REVEALED BY THE ROW rather than standing permanently. It used to sit at
+   0.55 opacity on every numeric column at once, and the claim in this comment
+   was that eight of them "do not read as data". Three of them read as TOTAL
+   TOTAL TOTAL — a chant across the bottom of the sheet, louder than the one
+   real total beside it, and competing with the numbers it is meant to help
+   somebody add.
+
+   Hovering ANY footer cell brings up every invitation in the row, so the whole
+   affordance is still discovered in one gesture rather than one column at a
+   time, and `:focus-within` does the same for a keyboard. At rest the footer
+   shows totals and nothing else. Opacity, never `display`, so nothing moves
+   when they appear. */
 .dg-foot-row .dg-cell.dg-tot { cursor: pointer; }
 .dg-foot-row .dg-cell.dg-tot:hover { background: var(--hover); }
 .dg-agg-add {
@@ -828,9 +838,18 @@ html, body {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  opacity: 0.55;
+  opacity: 0;
+  transition: opacity 0.12s ease;
 }
-.dg-foot-row .dg-cell.dg-tot-add:hover .dg-agg-add { opacity: 1; color: var(--accent-ink, var(--ink)); }
+.dg-foot-row:hover .dg-agg-add,
+.dg-foot-row:focus-within .dg-agg-add { opacity: 0.55; }
+.dg-foot-row .dg-cell.dg-tot-add:hover .dg-agg-add,
+.dg-foot-row .dg-cell.dg-tot-add:focus-visible .dg-agg-add {
+  opacity: 1;
+  color: var(--accent-ink);
+}
+/* the app kills chrome motion globally; this fade is chrome */
+@media (prefers-reduced-motion: reduce) { .dg-agg-add { transition: none; } }
 
 /* BOTH AXES. The grid drew vertical rules only and separated rows with a zebra
    stripe — the arrangement of a web table, not of a spreadsheet, and the single
