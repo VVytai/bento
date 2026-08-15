@@ -26,34 +26,22 @@ import {
   hasFileHandle, writeUpdatedFile, writeUpdatedFileAs, writeBackupBeside, hostCan,
 } from './save.ts'
 import { lsDel, lsGet, lsSet } from './storage.ts'
+import { netFetch } from './net.ts'
 
 declare const __APP_VERSION__: string
 
 /** Version of the running app shell (baked in at build from package.json). */
 export const APP_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.0.0'
 
-/** Per-browser preference: check for updates automatically at launch. */
 /**
- * Offline mode: a hard, viewer-side switch that blocks EVERY network touch —
- * update checks and online collaboration alike. Same-machine tab sync
- * (BroadcastChannel) is not networking and stays on. The guarantee this
- * buys: with the switch on, nothing about you or a document ever leaves
- * this computer.
+ * The offline switch and every network primitive now live in net.ts — one
+ * chokepoint, so a call site cannot forget to consult the switch (that is
+ * exactly how GHSA-5c3x-xqp6-g94r happened: the gate below used to sit on the
+ * auto-check CALL SITE while checkForUpdates() fetched unconditionally).
+ * Re-exported here because this has been update.ts's public surface since
+ * 0.9.x and shipped code imports it from here.
  */
-export const offlineEnabled = (): boolean => {
-  try {
-    return lsGet('bento-offline') === 'on'
-  } catch {
-    return false
-  }
-}
-export const setOffline = (on: boolean): void => {
-  try {
-    lsSet('bento-offline', on ? 'on' : 'off')
-  } catch {
-    /* storage unavailable */
-  }
-}
+export { offlineEnabled, setOffline, OfflineError, startNetGuard } from './net.ts'
 
 export const autoCheckEnabled = (): boolean => lsGet('bento-auto-check') !== 'off'
 export const setAutoCheck = (on: boolean): void => {
@@ -188,7 +176,7 @@ export async function fetchPinned(url: string, sha256: string): Promise<ArrayBuf
   if (!/^[0-9a-f]{64}$/i.test(sha256 ?? '')) return null
   let bytes: ArrayBuffer
   try {
-    const res = await fetch(url, { cache: 'no-store' })
+    const res = await netFetch(url, { cache: 'no-store' })
     if (!res.ok) return null
     bytes = await res.arrayBuffer()
   } catch {
@@ -217,7 +205,7 @@ async function verifyManifest(raw: string): Promise<ReleaseInfo> {
 export async function checkForUpdates(manifestUrl?: string): Promise<UpdateCheck> {
   const url = manifestUrl ?? lsGet('bento-update-url') ?? updateManifestUrl()
   try {
-    const res = await fetch(url, { cache: 'no-store' })
+    const res = await netFetch(url, { cache: 'no-store' })
     if (!res.ok) throw new Error(`release server answered ${res.status}`)
     const release = await verifyManifest(await res.text())
     if (compareVersions(release.version, APP_VERSION) <= 0)
@@ -248,7 +236,7 @@ export function registerUpdatePrepare(fn: (version: string) => Promise<void>): v
 }
 
 export async function buildUpdatedFile(release: ReleaseInfo, doc: KernelDoc): Promise<string> {
-  const res = await fetch(release.url, { cache: 'no-store' })
+  const res = await netFetch(release.url, { cache: 'no-store' })
   if (!res.ok) throw new Error(`downloading the update failed (${res.status})`)
   const bytes = await res.arrayBuffer()
   // Same pin as fetchPinned, spelled out here because THIS path distinguishes

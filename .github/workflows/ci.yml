@@ -202,6 +202,20 @@ jobs:
         # file carrying a script tag.
         run: node scripts/test-preview.ts
 
+      - name: Offline-mode rig
+        # Offline mode promises "nothing leaves this computer" and was broken
+        # five ways at once (GHSA-5c3x-xqp6-g94r): a manual update check, a
+        # language-pack download, a deck's remote <video>, in-flight requests
+        # that kept running, and a second tab's socket that kept syncing.
+        #
+        # It stayed hidden because it reads as correct: an agent asked to audit
+        # it said "secure" from the docs AND from the code. So the rig does not
+        # check the call sites — it enforces the POLICY that no file outside
+        # kernel/src/net.ts may touch a network primitive at all, which is what
+        # stops the NEXT call site being wrong, plus the chokepoint's own
+        # behaviour (refusal, aborting what is already in flight, cross-tab).
+        run: node scripts/test-offline.ts
+
       - name: Untrusted-markup sanitizer rig
         # Every deck is untrusted input somebody may open, paste or receive over
         # collab, and script in that page owns the collab keys, the plaintext

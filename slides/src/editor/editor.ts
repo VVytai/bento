@@ -2967,7 +2967,11 @@ export class Editor {
     offCb.type = 'checkbox'
     offCb.checked = offlineEnabled()
     offCb.addEventListener('change', () => {
-      setOffline(offCb.checked)
+      // setOffline reports whether the preference PERSISTED. It holds for this
+      // session either way (net.ts keeps it in memory), but a switch that
+      // silently forgets itself on reload has to say so — it used to show
+      // "on" over a setting that had never been stored.
+      const stuck = setOffline(offCb.checked)
       if (offCb.checked) {
         if (this.session) disconnectOnline(this.session)
       } else {
@@ -2975,9 +2979,11 @@ export class Editor {
       }
       this.wireOnlineStatus()
       this.toast(
-        offCb.checked
-          ? t('Offline mode on — nothing leaves this computer')
-          : t('Offline mode off — online features re-enabled'),
+        !stuck
+          ? t('Offline mode is on for this tab, but could not be saved — this browser is blocking site data, so it will not survive a reload')
+          : offCb.checked
+            ? t('Offline mode on — nothing leaves this computer')
+            : t('Offline mode off — online features re-enabled'),
       )
     })
     offRow.append(offCb, document.createTextNode(' ' + t('Offline mode — block all network features (updates, online collaboration)')))
