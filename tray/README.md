@@ -476,12 +476,28 @@ here rather than discovered later.
 | `<a download>` lands | app's Documents folder, silently | wherever the author picks | platform-forced |
 | write access to an opened document | always | **may be read-only** | platform-forced |
 | status bar while editing | hidden on iPad | always shown | **known gap** |
+| finding a document by its contents | — | — | **gap on both**, see below |
 
-The last row is the only real gap. iOS hides the status bar on iPad because
-nothing else keeps the page off the whole screen there; the Android equivalent
-would be to hide it on tablets (`smallestScreenWidthDp >= 600`). Not done,
-because it cannot be tested without a tablet target, and shipping an untested
-behaviour is worse than naming an untested one.
+Two gaps, both named rather than quietly left out.
+
+**The status bar.** iOS hides it on iPad because nothing else keeps the page off
+the whole screen there; the Android equivalent would be to hide it on tablets
+(`smallestScreenWidthDp >= 600`). Not done, because it cannot be tested without a
+tablet target, and shipping an untested behaviour is worse than naming an
+untested one.
+
+**Search — and note this table compares the two NATIVE hosts to each other,
+which flatters both.** Against `tray/webext` there is a third axis neither has:
+the extension scans every granted folder and searches **the document's own
+prose**, so a deck is findable by a phrase on a slide. iOS gets only the system
+document browser's search field, and the app contributes nothing to it (no
+CoreSpotlight, no `NSUserActivity`); Android has no search at all. Both platforms
+*could* support it — `ACTION_OPEN_DOCUMENT_TREE` on Android, the folder-mode
+document picker on iOS — so this is "not built", not "can't". The direction is
+settled in `docs/DECISIONS.md` (2026-08-16): native list UI on each host, the
+extraction ported per platform and pinned against one shared fixture, rather than
+a shared HTML library screen in a WebView — which was measured at ~0.5s of extra
+cold start and would cost iOS its system document browser.
 
 ### What is genuinely different
 
