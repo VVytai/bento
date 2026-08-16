@@ -14,6 +14,9 @@ import type { Op, SyncStateJSON } from './crdt.ts'
 import type { Frame, HostStore, RefusalCode, SyncDoc, SyncSession, Transport } from './session.ts'
 import { lsGet, lsSet } from '../storage.ts'
 import { offlineEnabled } from '../update.ts'
+// Every request in the app goes through the one chokepoint (kernel/src/net.ts)
+// so the offline switch cannot be forgotten — see GHSA-5c3x-xqp6-g94r.
+import { netWebSocket } from '../net.ts'
 
 /** the app's store, structurally — see session.ts HostStore */
 type Store = HostStore
@@ -316,7 +319,7 @@ export class OnlineTransport implements Transport {
     this.setStatus('connecting')
     let ws: WebSocket
     try {
-      ws = new WebSocket(`${this.url}&since=${this.lastSeq()}`)
+      ws = netWebSocket(`${this.url}&since=${this.lastSeq()}`)
     } catch {
       this.retry()
       return
