@@ -18,6 +18,7 @@
 
 import { CACHE, get, put, prefixes } from './db.js'
 import { getGrants } from './status.js'
+import { verifyManifest, fetchPinned } from './release.js'
 
 /** How deep to look, and how many documents to show. A folder of documents is
  *  not a filesystem; someone who granted a home directory should get a useful
@@ -272,6 +273,11 @@ function extractText(html) {
  * instead means a document created here is the same version everyone else has,
  * the same day.
  *
+ * Bundling is settled policy across all three hosts now (2026-08-16), which
+ * makes this the ONLY way any of them creates a document — so the download is
+ * verified, not trusted: signature, then digest, then the file handle. See
+ * `release.js` for the chain and why it is mirrored from the kernel.
+ *
  * Create-only, and the name is derived here rather than taken from anywhere —
  * the same rule as `backup`. Nothing existing is ever replaced.
  */
@@ -287,12 +293,18 @@ function extractText(html) {
  * Adding an app here is the whole integration; nothing else in the extension
  * asks which app it is looking at.
  */
+// `appId` is the name the app calls ITSELF inside its signed manifest
+// (scripts/apps.mjs, and the shell's own `configureApp({appId})`), and it is
+// checked against the payload — the channels are sibling paths on one origin,
+// so without that check a genuine manifest served from the wrong path hands
+// somebody the wrong application. It is spelled out rather than derived from
+// `id` so that adding an app cannot silently opt out of the check.
 export const APPS = [
-  { id: 'slides', name: 'Slides', blurb: 'Presentations',
+  { id: 'slides', name: 'Slides', blurb: 'Presentations', appId: 'bento-slides',
     manifest: 'https://bento.page/releases/slides/manifest.json' },
-  { id: 'spaces', name: 'Spaces', blurb: 'Notes and pages',
+  { id: 'spaces', name: 'Spaces', blurb: 'Notes and pages', appId: 'bento-spaces',
     manifest: 'https://bento.page/releases/spaces/manifest.json' },
-  { id: 'dash', name: 'Dash', blurb: 'Data and sheets',
+  { id: 'dash', name: 'Dash', blurb: 'Data and sheets', appId: 'bento-dash',
     manifest: 'https://bento.page/releases/dash/manifest.json' },
 ]
 
@@ -371,20 +383,33 @@ export async function rename(doc, wantedBase) {
 export async function newDocument(dir, wantedBase = 'Untitled', deps = {}) {
   const net = deps.fetch ?? fetch
   const app = APPS.find((a) => a.id === deps.app) ?? APPS[0]
-  const res = await net(app.manifest, { cache: 'no-store' })
-  if (!res.ok) throw new Error(`could not reach the ${app.name} release server (${res.status})`)
-  const manifest = await res.json()
-  const url = manifest?.url
-  if (!url) throw new Error('the release server did not offer a build')
 
-  const shell = await net(url, { cache: 'no-store' })
-  if (!shell.ok) throw new Error(`could not download the app (${shell.status})`)
-  const html = await shell.text()
+  // The manifest is a SIGNED ENVELOPE — `{payload, sig}`, the fields inside the
+  // payload STRING — and it is read as text for that reason: the bytes the
+  // signature covers are the bytes that arrived, so anything that parses and
+  // re-serialises on the way past has verified something else.
+  //
+  // This was the bug, and it is worth naming because it was invisible. The code
+  // here read `manifest.url` off the ENVELOPE, where there is no `url`, so every
+  // attempt threw "the release server did not offer a build" — the `+` button
+  // had never once worked. The rig agreed with it, because the fixture was
+  // hand-written to the shape the code expected rather than to the shape the
+  // server sends. It is checked against a real captured manifest now
+  // (scripts/test-webext-release.ts).
+  const res = await net(app.manifest, { cache: 'no-store' })
+  if (res.status === 404)
+    throw new Error(`no ${app.name} release has been published yet`)
+  if (!res.ok) throw new Error(`could not reach the ${app.name} release server (${res.status})`)
+  const release = await verifyManifest(await res.text(), app.appId, deps.jwk)
+
+  // Signature over the pin, pin over the bytes. Both, or the shell being written
+  // to somebody's disk is whatever the network felt like returning.
+  const bytes = await fetchPinned(net, release.url, release.sha256)
 
   const { name, base } = await freeName(dir, wantedBase)
   const handle = await dir.getFileHandle(name, { create: true })
   const w = await handle.createWritable()
-  await w.write(html)
+  await w.write(bytes)
   await w.close()
-  return { name, base, version: manifest.version, app: app.name }
+  return { name, base, version: release.version, app: app.name }
 }

@@ -14,6 +14,51 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-16 — Creating a document: every host VERIFIES the release it downloads
+
+**Decision.** Starter shells are bundled in no host (settled separately the same
+day: they change too often, and there are three apps with more coming), so
+fetch-from-the-release-channel is the ONLY way any tray host creates a document.
+That path must therefore verify, in this order, in every host:
+
+1. fetch the manifest **as text** — it is a signed envelope, `{payload, sig}`,
+   and the fields (`app`, `version`, `sha256`, `url`) are inside the payload
+   STRING; there is nothing useful at the top level;
+2. verify the ECDSA P-256 / SHA-256 signature over the payload's **exact UTF-8
+   bytes** (no canonicalisation) against the release public key;
+3. check the payload's `app` matches the channel being read — the channels are
+   sibling paths on one origin, so a genuine manifest from the wrong path hands
+   somebody a different application;
+4. download the shell and check its sha256 against the payload's pin;
+5. only then touch a file handle. A refusal writes **nothing**.
+
+**Why.** The shell is executable HTML written to the user's own disk, which they
+subsequently double-click and trust. Without the chain, whoever can answer for
+the release origin — compromised host, bad CDN edge, hostile-network proxy —
+chooses what code the user creates. Signature over the pin, pin over the bytes;
+neither half is worth anything alone.
+
+**Status.** `tray/webext` done (`src/release.js`, used by `library.js
+newDocument`); `tray/android` in progress; `tray/ios` asked to follow.
+
+**Pointers.** `kernel/src/update.ts` is the reference implementation
+(`verifySigned` / `fetchPinned` / `verifyManifest`) and hosts should reuse it
+where they can import it. The extension **cannot** — it ships as unbundled ES
+modules Chrome loads from disk, and adding a bundler would mean the shipped
+package is no longer the reviewed source — so `tray/webext/src/release.js` is a
+deliberate line-by-line mirror, with the resulting obligation stated in the
+file: *if the key or the envelope format moves in the kernel, it moves here
+too.* `scripts/test-webext-release.ts` pins both ends against a REAL captured
+manifest (`scripts/fixtures/release-manifest-slides.json`).
+
+**The failure this came out of, because it generalises.** `newDocument` read
+`manifest.url` off the envelope's top level, where there is no `url`, and so
+threw on every invocation: the `+` button had never worked in any version. Its
+rig passed, because the fixture was written to the shape the CODE expected
+rather than the shape the SERVER sends. A fixture that is not the real shape
+proves only that the code agrees with itself — hence the captured manifest, and
+hence the same warning for android and ios.
+
 ## 2026-08-16 — Document search: the list stays native, the indexer is shared by FIXTURE
 
 **Decision.** When the native hosts grow a document library, each keeps its own
