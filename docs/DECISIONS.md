@@ -14,6 +14,59 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-16 — bento/tray gets an Android host (PR #87, rearchitected)
+
+**Decision.** `tray/android/` is a document host, written against the same two
+decisions as `tray/ios`: the document is served through an origin we control,
+and the app ships **file access only** — no bundled runtime, no OTA channel of
+its own.
+
+It lands as **PR #87** (savrum, opened 2026-07-26), which asked the right
+question first: Android needs a native host for the same reason iOS does. The
+branch keeps that original commit and builds on it. Its `native/ios` half is
+superseded by `tray/ios`, which arrived in the meantime; its Gradle and keystore
+scaffolding is the shape used here; and the `isElementFullscreenEnabled` flag
+`tray/ios` briefly used was found there.
+
+What did NOT survive is the **architecture**, which is the one tray deliberately
+rejected:
+
+- it BUNDLES a deck and OTA-fetches a newer one from the GitHub releases API on
+  every launch. tray's whole thesis is the opposite (`tray/README.md`, "What it
+  is, and what it deliberately is not"), and an unsigned OTA — which the PR's own
+  README flags — contradicts `docs/PLATFORM.md` §1 as well as the signed-update
+  invariant.
+- every save calls `ACTION_CREATE_DOCUMENT`, so Bento's 2.5s autosave write-back
+  would open a file picker on a loop. It has no in-place path at all.
+- the page is loaded from `file://` (opaque origin: unreliable `localStorage`
+  and IndexedDB) and the shim is injected from `onPageStarted`, which races the
+  boot-time capability check.
+
+**Three Android-specific findings worth not rediscovering.**
+
+1. **Write access is not implied by receiving a document.** `ACTION_VIEW` from a
+   file manager grants READ ONLY; only the app's own `ACTION_OPEN_DOCUMENT`
+   yields a persistable read+write grant. Checked per document
+   (`canWriteInPlace`), and when false every save becomes a Save-As — the
+   "when in doubt, prompt" rule the whole project already follows.
+2. **`androidx.webkit` is a required dependency, not a convenience.**
+   `addDocumentStartJavaScript` is the only true `.atDocumentStart` equivalent,
+   and `addWebMessageListener` is **origin-scoped** where `addJavascriptInterface`
+   is injected into every frame — a remote iframe in an untrusted document would
+   otherwise be handed a channel that writes the user's file.
+3. **`fitsSystemWindows = true` REPLACES a view's padding, it does not add to
+   it** — and from targetSdk 35 edge-to-edge is mandatory, so insets must be
+   applied by hand. Same for `enableOnBackInvokedCallback`: it stops
+   `onBackPressed` being called at all on API 33+, so an override alone compiles,
+   runs, and silently does nothing.
+
+**`tray/bridge.js` is now SHARED** by both native hosts (was
+`tray/ios/Resources/bridge.js`). The transport is ~15 lines at the top; the rest
+is `FileSystemWritableFileStream` semantics whose comments record the bug that
+wrote documents out as zero bytes. Forking that file forks that bug.
+
+Details and verification state: `tray/README.md` § Android.
+
 ## 2026-08-06 — The tree is DERIVED at read time, in one function, and it cannot cycle
 
 **Decision.** `model.ts effectiveParents(page)` is the only answer to "what is
