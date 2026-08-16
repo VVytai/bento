@@ -476,7 +476,7 @@ here rather than discovered later.
 | `<a download>` lands | app's Documents folder, silently | wherever the author picks | platform-forced |
 | write access to an opened document | always | **may be read-only** | platform-forced |
 | status bar while editing | hidden on iPad | always shown | **known gap** |
-| finding a document by its contents | — | — | **gap on both**, see below |
+| finding a document by its contents | not built | folder grants + index | **iOS gap**, see below |
 
 Two gaps, both named rather than quietly left out.
 
@@ -486,18 +486,20 @@ the whole screen there; the Android equivalent would be to hide it on tablets
 tablet target, and shipping an untested behaviour is worse than naming an
 untested one.
 
-**Search — and note this table compares the two NATIVE hosts to each other,
-which flatters both.** Against `tray/webext` there is a third axis neither has:
-the extension scans every granted folder and searches **the document's own
-prose**, so a deck is findable by a phrase on a slide. iOS gets only the system
-document browser's search field, and the app contributes nothing to it (no
-CoreSpotlight, no `NSUserActivity`); Android has no search at all. Both platforms
-*could* support it — `ACTION_OPEN_DOCUMENT_TREE` on Android, the folder-mode
-document picker on iOS — so this is "not built", not "can't". The direction is
-settled in `docs/DECISIONS.md` (2026-08-16): native list UI on each host, the
-extraction ported per platform and pinned against one shared fixture, rather than
-a shared HTML library screen in a WebView — which was measured at ~0.5s of extra
-cold start and would cost iOS its system document browser.
+**Search.** Android now has it; iOS does not yet. Grant a folder once
+(`ACTION_OPEN_DOCUMENT_TREE`) and the app indexes every Bento document inside it,
+so a deck is findable by **a phrase on one of its slides** rather than only by
+what somebody called the file — matching what `tray/webext` has always had. iOS
+gets only the system document browser's search field, and contributes nothing to
+it (no CoreSpotlight, no `NSUserActivity`); the folder-mode document picker is
+the equivalent hook, so this is "not built", not "can't".
+
+The shape is settled in `docs/DECISIONS.md` (2026-08-16) and is the reason this
+was cheap to do twice: **native list UI on each host, the extraction ported per
+platform, all of them pinned against one shared fixture corpus**
+(`tray/fixtures/`) rather than a shared HTML library screen in a WebView — which
+was measured at ~0.5s of extra cold start and would cost iOS its system document
+browser. See "Document search" below.
 
 ### What is genuinely different
 
@@ -592,6 +594,39 @@ At 72 it exactly filled the visible area, so every launcher mask cut its corners
 off and the navy frame that makes the mark read was never drawn at all.
 
 
+### Document search
+
+Grant a folder once and every Bento document inside it is indexed, so a deck is
+findable by **a phrase on one of its slides**. This is what `tray/webext` has
+always had and what neither native host did.
+
+- **The grant** is `ACTION_OPEN_DOCUMENT_TREE` plus a persistable permission —
+  the analogue of the extension's `showDirectoryPicker`. Note that Android
+  refuses to grant some directories outright (the root of shared storage, and
+  `Download` on current versions): the picker says "Can't use this folder" and
+  the user has to pick a subfolder. That is the platform's rule, not ours.
+- **Nothing is copied.** The index holds extracted text and the first-page
+  preview; the documents stay where the user put them.
+- **A rescan is nearly free.** Rows are keyed by size and timestamp, so an
+  unchanged folder costs one directory listing per folder and no reads at all —
+  the expensive step was never the walk, it is pulling 40KB of prose out of a
+  megabyte of document.
+- **The name is not the test.** Any `.html` is opened and the marker inside it
+  decides, so a deck renamed to `deck.html` to email it is still found — and a
+  stray web page that merely contains the word you searched for is not.
+- **SQLite, not a JSON file**, because the prose budget is 40KB *each*: a few
+  hundred documents is megabytes, which is fine on disk and ruinous to parse
+  into memory on every launch.
+- **Encrypted documents are indexed as encrypted and nothing more** — no text,
+  no preview. A privacy rule, not an optimisation.
+- `MAX_FILES` (5000) bounds a scan, and hitting it is **reported**: a library
+  that quietly stops at N is a library that lies about what it holds.
+
+**No thumbnails yet, deliberately.** The preview block is HTML, so showing it in
+a native list means a WebView per row — which is the cost the whole decision
+avoided. It is stored in the index anyway, because it comes out of a read that
+already happened, so thumbnails can be added later without a rescan.
+
 ### State: the document cycle works, on an emulator only
 
 Verified end to end on a Pixel 7 / Android 16 emulator, driven through the real
@@ -607,6 +642,11 @@ UI rather than a harness:
   present, well-formed from `<!DOCTYPE html>` to `</body></html>`, `docId` minted
 - the document reopens from the recents list on its persisted grant
 - the adaptive icon renders correctly under a circular launcher mask
+- **document search works end to end**: a granted folder indexed 2 decks and
+  excluded a decoy `.html` that contains the search word but carries no
+  `#bento-doc` marker; typing `software` — a word in no filename — returns both
+  decks by their own title, `Notes` returns one by file name, and a nonsense
+  query returns none
 
 Not yet verified:
 
