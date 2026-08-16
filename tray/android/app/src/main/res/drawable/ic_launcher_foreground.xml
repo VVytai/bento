@@ -1,21 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The bento/tray mark, from tray/assets/tray-icon.svg.
+  GENERATED from tray/assets/tray-icon.svg by tray/assets/make-icons.mjs.
+  Do not edit: run `node tray/assets/make-icons.mjs` instead.
 
-  The navy frame is the BACKGROUND layer and the cream tray is the foreground.
-  That split is what an adaptive icon wants — the system parallaxes the two
-  layers against each other, and a frame drawn into the foreground would slide
-  away from its own edge.
-
-  The tray is 56 wide on the 108 canvas, not the full 72 safe zone. At 72 it
-  exactly filled the visible area, so every launcher mask cut its corners off and
-  the navy frame — the thing that makes the mark read as bento — was never drawn
-  at all. At 56 the frame survives a circle mask, which is the tightest one in
-  use, and the tray still sits inside the 66dp guaranteed-visible circle apart
-  from its own rounded corners.
-
-  Rounded rects are paths because Android vector drawables have no <rect>.
-  Regenerate rather than editing the numbers — the snippet is in tray/README.md.
+  The navy frame is the BACKGROUND layer (@color/tray_navy) and the cream tray is
+  the foreground. That split is what an adaptive icon wants: the system
+  parallaxes the two against each other, and a frame drawn into the foreground
+  would slide away from its own edge.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"

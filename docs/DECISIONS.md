@@ -60,6 +60,32 @@ rejected:
    `onBackPressed` being called at all on API 33+, so an override alone compiles,
    runs, and silently does nothing.
 
+**A host must implement the page-dialog delegate, and BOTH lacked it.** Building
+the Android host surfaced a bug that had been shipping in `tray/ios` too. Neither
+`WKWebView` nor Android's `WebView` shows `alert`/`confirm`/`prompt` on its own,
+and without the delegate they do not merely skip them — they answer wrongly and
+say nothing: `alert()` is a no-op and **`confirm()` returns `false`**. Every one
+of the runtime's seven uses is shaped `if (!confirm(…)) return`, so delete a
+slide, remove a collaborator, reset access, replace all slides and embed an
+oversized file all silently did nothing when tapped. Fixed on both
+(`WKUIDelegate`, `TrayChromeClient`) and verified on both: iOS through
+"Start from scratch…", Android over CDP (`true` on OK, `false` on Cancel).
+Android additionally needs `onShowFileChooser` or `<input type="file">` cannot
+open at all, which is how images, media and fonts get into a deck — restored
+from #87's `native/android`, which had it.
+
+**Parity is written down, not assumed.** `tray/README.md` § Android carries a
+row-per-behaviour table of iOS against Android, marking each as the same, a
+platform-forced difference, or a gap. The one gap is the status bar (iOS hides it
+on iPad; Android does not on tablets), left undone because it cannot be tested
+without a tablet target.
+
+**The launcher icon is GENERATED from the shared mark**
+(`tray/assets/make-icons.mjs`, with `--check` for CI). Android vector drawables
+have no `<rect>`, so every rounded rectangle has to be re-expressed as path data
+— four opaque `M…A…V…Z` strings nobody would ever diff against the SVG, so a
+change to the mark would land on iOS and silently miss Android.
+
 **`tray/bridge.js` is now SHARED** by both native hosts (was
 `tray/ios/Resources/bridge.js`). The transport is ~15 lines at the top; the rest
 is `FileSystemWritableFileStream` semantics whose comments record the bug that

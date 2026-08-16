@@ -448,6 +448,41 @@ measurement sent it the other way. The architecture changed — a host that
 bundles a deck and updates itself over the air is the thing tray exists not to
 be — but the question it asked was the right one, and it was asked first.
 
+### Parity with the iOS host
+
+The two hosts are meant to behave identically from inside the document. Where
+they cannot, it is because the platform forces it — and that is written down
+here rather than discovered later.
+
+| behaviour | `tray/ios` | `tray/android` | |
+|---|---|---|---|
+| FSA polyfill | `tray/bridge.js` | `tray/bridge.js` | **one shared file** |
+| per-document origin | `bento-tray://<sha24>` custom scheme | `https://<sha24>.bento-tray.invalid`, intercepted | same |
+| document served from memory, never parsed | ✓ | ✓ | same |
+| bridge injected at document start | `WKUserScript(.atDocumentStart)` | `addDocumentStartJavaScript` | same |
+| bridge reachable only from the document | `forMainFrameOnly` | `allowedOriginRules` + `isMainFrame` | same |
+| first `begin` = open document, later = export | ✓ | ✓ | same |
+| an export can never address the open file | `exportName` + `targetsOpenDocument` | identical logic | same |
+| page-supplied filenames sanitised | `safeFileName` | `safeFileName` | same |
+| in-place write | `UIDocument.save(.forOverwriting)` | `openOutputStream(uri, "wt")` | same |
+| export destination chosen by the author | `UIDocumentPickerViewController` | `ACTION_CREATE_DOCUMENT` | same |
+| `alert` / `confirm` / `prompt` | `WKUIDelegate` | `WebChromeClient` | same |
+| `<input type="file">` | native | `onShowFileChooser` | same |
+| element fullscreen | declined | declined | same |
+| safe-area insets, natively + `--tray-safe-*` | ✓ | ✓ | same |
+| new document from the bundled seed | ✓ | ✓ | same |
+| way back out | floating exit, fades when idle | system back gesture | platform-forced |
+| root screen | `UIDocumentBrowserViewController` | own recents list over SAF | platform-forced |
+| `<a download>` lands | app's Documents folder, silently | wherever the author picks | platform-forced |
+| write access to an opened document | always | **may be read-only** | platform-forced |
+| status bar while editing | hidden on iPad | always shown | **known gap** |
+
+The last row is the only real gap. iOS hides the status bar on iPad because
+nothing else keeps the page off the whole screen there; the Android equivalent
+would be to hide it on tablets (`smallestScreenWidthDp >= 600`). Not done,
+because it cannot be tested without a tablet target, and shipping an untested
+behaviour is worse than naming an untested one.
+
 ### What is genuinely different
 
 Three things, and none of them are stylistic.
@@ -524,14 +559,22 @@ The starter shell and `bridge.js` are staged into assets by the build
 587KB binary in git would churn on every release, and the seed ages harmlessly
 because a new deck self-updates through the normal signed channel.
 
-The launcher icon is generated from the same mark as iOS. The tray is **56 units
-of the 108 canvas, not the full 72 safe zone** — at 72 it exactly filled the
-visible area, so every launcher mask cut its corners off and the navy frame that
-makes the mark read was never drawn. Regenerate the path data with:
+The launcher icon is **generated from the same mark as iOS**, not redrawn.
+`tray/assets/tray-icon.svg` is the source for both; Android needs the rounded
+rectangles re-expressed as path data because vector drawables have no `<rect>`,
+and doing that by hand produces four opaque `M…A…V…Z` strings nobody will ever
+diff against the SVG — so a change to the mark would land on iOS and silently
+miss Android.
 
 ```sh
-node -e 'const f=n=>+n.toFixed(2),rr=(x,y,w,h,r)=>`M${f(x+r)},${f(y)} H${f(x+w-r)} A${f(r)},${f(r)} 0 0 1 ${f(x+w)},${f(y+r)} V${f(y+h-r)} A${f(r)},${f(r)} 0 0 1 ${f(x+w-r)},${f(y+h)} H${f(x+r)} A${f(r)},${f(r)} 0 0 1 ${f(x)},${f(y+h-r)} V${f(y+r)} A${f(r)},${f(r)} 0 0 1 ${f(x+r)},${f(y)} Z`,S=56/23.6,O=26,m=v=>O+(v-4.2)*S;console.log(rr(O,O,56,56,4.8*S));console.log(rr(m(6.8),m(6.8),5.855*S,18.4*S,2.091*S));console.log(rr(m(14.327),m(6.8),10.873*S,8.364*S,2.091*S));console.log(rr(m(14.327),m(16.836),10.873*S,8.364*S,2.091*S))'
+node tray/assets/make-icons.mjs           # regenerate the Android drawables
+node tray/assets/make-icons.mjs --check   # fail if they drifted (for CI)
 ```
+
+The tray is drawn at **56 units of the 108 canvas, not the full 72 safe zone**.
+At 72 it exactly filled the visible area, so every launcher mask cut its corners
+off and the navy frame that makes the mark read was never drawn at all.
+
 
 ### State: the document cycle works, on an emulator only
 

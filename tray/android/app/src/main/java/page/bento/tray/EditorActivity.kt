@@ -6,6 +6,7 @@ package page.bento.tray
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -16,8 +17,13 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.window.OnBackInvokedDispatcher
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -65,6 +71,7 @@ class EditorActivity : Activity() {
         const val EXTRA_URI = "page.bento.tray.URI"
         private const val TAG = "BentoTray"
         private const val REQ_EXPORT = 1
+        private const val REQ_FILE_CHOOSER = 2
 
         /** Reduce a page-supplied filename to ONE plain component, or refuse it.
          *
@@ -171,6 +178,15 @@ class EditorActivity : Activity() {
     }
 
     private fun startWebView() {
+        // Debug builds only: makes the document inspectable from
+        // chrome://inspect, which is the only way to see what a hosted page is
+        // actually doing. Gated on the manifest flag rather than BuildConfig so a
+        // release build cannot expose a user's document no matter how it was
+        // assembled.
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
+
         web = WebView(this)
 
         // The web view lives in a container whose PADDING carries the system
@@ -256,6 +272,8 @@ class EditorActivity : Activity() {
             }
         }
 
+        web.webChromeClient = TrayChromeClient()
+
         installBridge()
 
         // `<a download>` and blob: saves — the older, commoner idiom that is not
@@ -309,6 +327,114 @@ class EditorActivity : Activity() {
         val src = assets.open("bridge.js").use { it.readBytes().toString(Charsets.UTF_8) }
         WebViewCompat.addDocumentStartJavaScript(web, src, rules)
     }
+
+    /**
+     * The things a WebView does NOT do on its own, and fails at silently.
+     *
+     * Without a `WebChromeClient` a WebView does not merely skip these — it
+     * answers them wrongly and says nothing:
+     *
+     *  - `alert()` is a no-op, so a warning the document meant to show is
+     *    swallowed.
+     *  - **`confirm()` returns `false`**, immediately, with no dialog. Every one
+     *    of the runtime's seven uses is shaped `if (!confirm(…)) return`, so the
+     *    whole feature behind it — delete this slide, remove a collaborator,
+     *    reset access, embed a large file — just does nothing when tapped. There
+     *    is no error and nothing in the log.
+     *  - **`<input type="file">` cannot open at all**, which is how images,
+     *    video, audio and fonts get into a deck.
+     *
+     * `tray/ios` had the same hole (`WKUIDelegate` is required there for the
+     * dialogs; WKWebView does handle file inputs itself) and was fixed in the
+     * same change.
+     *
+     * NOTE the omission: `onShowCustomView` is deliberately NOT implemented, so
+     * element fullscreen is declined — the same answer `tray/ios` gives, for the
+     * same reasons. A page refused fullscreen falls back to filling its view,
+     * which is the well-trodden mobile path, and the host has already handed it
+     * the whole screen anyway.
+     */
+    private inner class TrayChromeClient : WebChromeClient() {
+
+        override fun onJsAlert(
+            view: WebView?, url: String?, message: String?, result: JsResult
+        ): Boolean {
+            AlertDialog.Builder(this@EditorActivity)
+                .setMessage(message ?: "")
+                .setCancelable(false)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm() }
+                .setOnDismissListener { result.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onJsConfirm(
+            view: WebView?, url: String?, message: String?, result: JsResult
+        ): Boolean {
+            AlertDialog.Builder(this@EditorActivity)
+                .setMessage(message ?: "")
+                .setCancelable(false)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm() }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result.cancel() }
+                .setOnDismissListener { result.cancel() }
+                .show()
+            return true
+        }
+
+        override fun onJsPrompt(
+            view: WebView?, url: String?, message: String?, defaultValue: String?,
+            result: JsPromptResult
+        ): Boolean {
+            val field = EditText(this@EditorActivity).apply { setText(defaultValue ?: "") }
+            AlertDialog.Builder(this@EditorActivity)
+                .setMessage(message ?: "")
+                .setView(field)
+                .setCancelable(false)
+                .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm(field.text.toString()) }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> result.cancel() }
+                .setOnDismissListener { result.cancel() }
+                .show()
+            return true
+        }
+
+        /** `beforeunload` — the document is served from memory and never
+         *  navigates away, so this can only fire on a reload. Confirm it rather
+         *  than leaving the page blocked forever waiting for an answer. */
+        override fun onJsBeforeUnload(
+            view: WebView?, url: String?, message: String?, result: JsResult
+        ): Boolean {
+            result.confirm()
+            return true
+        }
+
+        /**
+         * `<input type="file">`. Restored from #87's `native/android`, which had
+         * this and was right to.
+         *
+         * The callback MUST be answered exactly once. Dropping it leaves the
+         * page's file input permanently dead — not for that attempt, for the rest
+         * of the session — so a superseded chooser is cancelled here, and
+         * [onActivityResult] answers every outcome including a cancel.
+         */
+        override fun onShowFileChooser(
+            view: WebView, callback: ValueCallback<Array<Uri>>,
+            params: FileChooserParams
+        ): Boolean {
+            pendingFileChooser?.onReceiveValue(null)
+            pendingFileChooser = callback
+            return try {
+                startActivityForResult(params.createIntent(), REQ_FILE_CHOOSER)
+                true
+            } catch (e: Exception) {
+                Log.w(TAG, "no file chooser available", e)
+                pendingFileChooser = null
+                callback.onReceiveValue(null)
+                false
+            }
+        }
+    }
+
+    private var pendingFileChooser: ValueCallback<Array<Uri>>? = null
 
     /**
      * Hand the real insets to the page as CSS custom properties.
@@ -466,6 +592,18 @@ class EditorActivity : Activity() {
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == REQ_FILE_CHOOSER) {
+            val cb = pendingFileChooser
+            pendingFileChooser = null
+            // Answered on EVERY path, cancel included: an unanswered callback
+            // leaves the page's file input dead for the rest of the session.
+            cb?.onReceiveValue(
+                if (resultCode == RESULT_OK)
+                    WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+                else null
+            )
+            return
+        }
         if (requestCode != REQ_EXPORT) return super.onActivityResult(requestCode, resultCode, data)
         val p = pendingExport
         pendingExport = null
@@ -597,6 +735,11 @@ class EditorActivity : Activity() {
     }
 
     override fun onDestroy() {
+        // Never strand a file-chooser callback: the WebView may outlive this
+        // activity briefly, and an unanswered one is a leak with a visible
+        // symptom.
+        pendingFileChooser?.onReceiveValue(null)
+        pendingFileChooser = null
         // A WebView outlives its activity if anything still references it, and
         // it holds the whole document. Detach and destroy explicitly.
         if (this::web.isInitialized) {
