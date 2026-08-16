@@ -271,6 +271,16 @@ jobs:
         # Source-shape checks; the Swift half self-skips without a toolchain.
         run: node scripts/test-tray-bridge.ts
 
+      - name: tray/ios index rig
+        # The iOS text extractor is a PORT of tray/webext's, and the two are held
+        # together by nothing but agreement — so this diffs them, driving the
+        # real library.js against the compiled Swift over generated edge cases
+        # and every document in the tree. A divergence means a deck is findable
+        # by a phrase on one host and not the other, which nothing else notices.
+        # Needs a Swift toolchain; self-skips loudly on the Linux runner, so a
+        # Mac has to run it before either side changes.
+        run: node scripts/test-tray-index.mjs
+
       - name: WebExtension package rig
         # Validates the store package without writing it: every file the
         # manifest names exists, every icon is the size it claims, no unexpected
