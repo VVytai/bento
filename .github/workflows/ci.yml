@@ -17,11 +17,21 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  # Cancel superseded runs on PR branches — only the tip matters there. NOT on
-  # main: every merge commit is a distinct state, and the post-merge run is the
-  # safety net for interaction bugs between PRs merged close together. Four
-  # merges in a few minutes once left two merge commits only partly verified.
+  # PR branches share one group per ref, so a new push collapses onto the tip —
+  # only the tip matters there. Pushes to main get a group PER COMMIT, because
+  # every merge commit is a distinct state and the post-merge run is the safety
+  # net for interaction bugs between PRs merged close together.
+  #
+  # Per-commit, NOT merely cancel-in-progress:false — that setting alone does
+  # not queue every run. GitHub keeps at most ONE pending run per group, so a
+  # third push cancels the PENDING one instead of lining up behind it; it
+  # protects the run in progress, not the queue. Merging 19 PRs in a row that
+  # way cancelled 17 runs on main and left those merge commits unbuilt, and the
+  # "four merges in a few minutes" incident this setting was meant to fix was
+  # the same failure. A unique group per commit is what actually guarantees it.
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.sha) || '' }}
+  # Moot on main now — each commit is alone in its group — but kept truthful:
+  # superseded PR-branch runs still collapse.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
@@ -40,10 +50,32 @@ jobs:
           cache-dependency-path: |
             slides/package-lock.json
             spaces/package-lock.json
+            dash/package-lock.json
 
       - name: Install
         working-directory: slides
         run: npm ci
+
+      - name: i18n packed table is current
+        # The per-locale catalogs are the source of truth; slides/src/i18n/
+        # packed.ts is generated from them and is what actually ships. A stale
+        # packed.ts would silently ship yesterday's translations.
+        run: node scripts/build-i18n.mjs --check
+
+      - name: Language coverage
+        # Core catalogs ship inside every saved file and cannot be corrected
+        # without a release, so they must be complete. Packs are downloadable
+        # and re-publishable on their own, so they get a floor and a report.
+        run: node scripts/test-i18n-coverage.mjs
+
+      - name: Language packs build and index cleanly
+        # Emits every pack and builds the index payload WITHOUT signing (--dry
+        # writes nothing and needs no key — signing stays local, see the header).
+        # Catches a malformed pack catalog (missing label, duplicate language,
+        # wrong app) here rather than mid-release.
+        run: |
+          node scripts/build-i18n.mjs --packs "$RUNNER_TEMP/packs"
+          node scripts/sign-packs.mjs "$RUNNER_TEMP/packs" --dry
 
       - name: Typecheck
         working-directory: slides
@@ -78,6 +110,479 @@ jobs:
       - name: Splice conformance gate (spaces)
         run: node scripts/shell-gate.mjs spaces/dist-single/Bento_Spaces.bento.html
 
+      - name: Spaces i18n packed table is current
+        # The per-locale catalogs are the source of truth; packed.ts is
+        # generated and is what ships inside every saved file. A core catalog
+        # cannot be corrected without a release, so an incomplete one fails the
+        # build rather than shipping a half-translated interface.
+        run: node scripts/build-spaces-i18n.mjs --check
+
+      - name: Spaces undo rig
+        # Every checkpoint used to stringify the WHOLE document: measured on a
+        # 200-page, 2.5 MB handbook, fifty edits left an undo depth of NINE,
+        # because nine snapshots exhaust the 24 MB budget. A typing run now
+        # records only its PAGE. That is fast and deep — and it is only correct
+        # while the mutation touched nothing else, so `doc` stays the default
+        # and this rig covers the cases where a wrong scope silently loses
+        # work: mixed scopes, interleaved undo/redo, and two pages edited in
+        # turn. (Bundled: store.ts imports './model' extensionless.)
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-spaces-undo.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-spaces-undo.mjs"
+          node "$RUNNER_TEMP/test-spaces-undo.mjs"
+
+      - name: Spaces agent-surface rig
+        # agent.ts is ~900 lines and shipped with no coverage at all: two of the
+        # five defects an adversarial review found in round 2 lived here,
+        # including a walk over author-supplied parent links that never
+        # returned. What this pins is what makes the surface trustworthy —
+        # validate() SILENT on documents that are correct but unusual (a false
+        # positive teaches an agent to ignore warnings), every write verb
+        # refusing what it cannot honour, no verb producing a document the app
+        # itself could not produce, and every walk terminating. The termination
+        # probes run in child processes with timeouts, because a hang cannot be
+        # reported by the process it hangs.
+        run: node scripts/test-spaces-agent.ts
+
+      - name: Magic notes evaluator (several timezones)
+        # Two failure modes, and the second is what would make the feature worse
+        # than not having it: a WRONG answer (silent, confident, in somebody's
+        # notes), and an answer where there should be none — "Meet Ana at 3" is
+        # a sentence. The parser must consume the whole line or return nothing.
+        # Dates run in several timezones for the reasons journal.ts records.
+        run: |
+          for tz in UTC Europe/Berlin America/Los_Angeles Pacific/Kiritimati; do
+            echo "--- $tz"
+            TZ=$tz node scripts/test-spaces-calc.ts
+          done
+
+      - name: Spaces shell size ceiling
+        # A budget nobody measures is a wish. DECISIONS.md set a 100KB ceiling,
+        # the round finished at 108KB, and the same entry claimed the ceiling
+        # was "checked per feature from here" while shipping no mechanism — so
+        # the breach was found by a reviewer reading the number rather than by
+        # the build that caused it. Raising the ceiling is fine and expected;
+        # raising it SILENTLY is what this stops.
+        run: node scripts/test-spaces-size.mjs
+
+      - name: Spaces model rig
+        # Properties that fail SILENTLY, and that a shipped file cannot be
+        # talked out of once it exists:
+        #   · the load contract — an unreadable document must never be replaced
+        #     by an empty one;
+        #   · format additivity, and id repair derived from the BYTES, so two
+        #     readers of one file agree on every id (links key on them);
+        #   · untrusted html is parsed INERT — a detached div still loads what
+        #     it creates, which made the sanitizer its own vector on the OPEN
+        #     path;
+        #   · opening a document touches no network, so a mailed space cannot
+        #     carry a tracking pixel;
+        #   · an encrypted space is never snapshotted to IndexedDB in the clear;
+        #   · find and replace quote ONE number — what is counted is what
+        #     changes.
+        # The last four are source assertions: the behaviour needs a DOM, a
+        # failing request, IndexedDB and a clock, but every one of those
+        # mistakes is made in the source.
+        run: node scripts/test-spaces-model.ts
+
+      # dash: the data app — same pipeline, same gate.
+      - name: Install (dash)
+        working-directory: dash
+        run: npm ci
+
+      - name: Typecheck (dash)
+        working-directory: dash
+        run: node_modules/.bin/tsc -b
+
+      - name: Build single-file shell (dash)
+        working-directory: dash
+        run: npm run build:single
+
+      - name: Splice conformance gate (dash)
+        run: node scripts/shell-gate.mjs dash/dist-single/Bento_Dash.bento.html
+
+      - name: Language pack verification rig
+        # Packs come off the network, so the signature + hash-pin chain is the
+        # only thing between a hostile channel and the strings in the UI.
+        # Tampered pack, tampered index, unsigned index — each must be refused.
+        run: node scripts/test-packs.ts
+
+      - name: First-page preview rig
+        # Every save writes a static render of page one for file-manager
+        # thumbnails. Two decisions in that path fail silently: an encrypted
+        # deck must never carry one, and author content must never reach the
+        # file carrying a script tag.
+        run: node scripts/test-preview.ts
+
+      - name: Offline-mode rig
+        # Offline mode promises "nothing leaves this computer" and was broken
+        # five ways at once (GHSA-5c3x-xqp6-g94r): a manual update check, a
+        # language-pack download, a deck's remote <video>, in-flight requests
+        # that kept running, and a second tab's socket that kept syncing.
+        #
+        # It stayed hidden because it reads as correct: an agent asked to audit
+        # it said "secure" from the docs AND from the code. So the rig does not
+        # check the call sites — it enforces the POLICY that no file outside
+        # kernel/src/net.ts may touch a network primitive at all, which is what
+        # stops the NEXT call site being wrong, plus the chokepoint's own
+        # behaviour (refusal, aborting what is already in flight, cross-tab).
+        run: node scripts/test-offline.ts
+
+      - name: Untrusted-markup sanitizer rig
+        # Every deck is untrusted input somebody may open, paste or receive over
+        # collab, and script in that page owns the collab keys, the plaintext
+        # autosave store and the write handle to the file on disk. An audit
+        # measured `<svg onload>`, a rect `onclick`, `<img onerror>` in a
+        # foreignObject and `<form action="javascript:">` all executing.
+        #
+        # The sanitizer is an ALLOWLIST, so what this pins is the DEFAULT: the
+        # first version was a denylist that passed 40 checks with the critical
+        # still open, because the rig tested call sites with source regexes
+        # instead of the policy. These checks drive the real walk, and the
+        # browser half needs Chrome — it self-skips where there is none, so the
+        # node half still gates.
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-sanitize.ts --bundle --platform=node --format=esm \
+            --outfile="$RUNNER_TEMP/test-sanitize.mjs"
+          node "$RUNNER_TEMP/test-sanitize.mjs"
+
+      - name: Export-secrets rig
+        # "Copy document JSON" shipped the room's owner private key while the
+        # tooltip recommended pasting it into an AI chat, and "Save as
+        # template…" wrote plaintext out of a password-protected deck. Both are
+        # invisible in the product: the file looks right. This scans the source
+        # for the two shapes — an export that forgets to strip collab secrets,
+        # and a user-facing path that reaches serializeFile instead of
+        # serializeAuto — so a NEW export path cannot reintroduce either.
+        run: node scripts/test-export-secrets.ts
+
+      - name: Blob content-address rig
+        # Encrypted assets are fetched by content address from a relay the
+        # threat model treats as untrusted. Nothing verified that what came
+        # back matched what was asked for, and the substitution was cached to
+        # disk, so one poisoned response persisted.
+        run: node scripts/test-blobs.ts
+
+      - name: tray/ios bridge rig
+        # The iOS host opens ANY self-contained HTML document and treats those
+        # documents as mutually untrusted, so a page-supplied filename reaching
+        # appendingPathComponent was an arbitrary write inside the container —
+        # including over another deck the user would later open and trust.
+        # Source-shape checks; the Swift half self-skips without a toolchain.
+        run: node scripts/test-tray-bridge.ts
+
+      - name: WebExtension package rig
+        # Validates the store package without writing it: every file the
+        # manifest names exists, every icon is the size it claims, no unexpected
+        # file is about to ship (probe/ is four capability probes — harmless to
+        # us, alarming to a reviewer), and no permission is declared but unused.
+        # A listing rejected for a missing 128px icon costs days of review.
+        run: node scripts/pack-webext.mjs --check
+
+      - name: WebExtension background rig
+        # The half that WRITES, and previously the untested half. Two properties
+        # it must hold: the target file comes from sender.url (browser-stamped)
+        # and never from the page, and nothing is carried between messages,
+        # because an MV3 service worker is evicted mid-save and state across that
+        # gap fails intermittently on nobody's machine but the user's.
+        run: node scripts/test-webext-background.ts
+
+      - name: WebExtension bridge rig
+        # tray/webext decides, per save, whether to write in place or hand back
+        # to the browser's own picker. Wrong in the permissive direction it
+        # overwrites the open document with no dialog — which it did once. The
+        # decision is pure logic over an options bag, so it is checkable here
+        # rather than by reloading an extension and pressing Cmd-S.
+        run: node scripts/test-webext-bridge.ts
+
+      - name: WebExtension route rig
+        # Turning an absolute path into "where this granted folder lives", from
+        # paths the extension did not choose — browser history, for files that
+        # may have moved or never been in a grant at all. Getting it wrong does
+        # not produce a broken link; it records a folder at the wrong place and
+        # every document in it silently opens something else. So it must prove,
+        # never guess: the route resolves inside the grant AND dir.resolve()
+        # agrees with the path's own tail.
+        run: node scripts/test-webext-route.ts
+
+      - name: WebExtension document-library rig
+        # The popup is a document browser, and everything in it is DERIVED from
+        # files on disk: the title out of the document block, the thumbnail out
+        # of the preview block, the openable path out of a learned prefix. Each
+        # is a parse against a format that moves, and each fails quietly — a row
+        # showing a filename instead of a title, or a blank square. Nothing
+        # throws, so nothing reports it.
+        #
+        # Runs AFTER the slides build on purpose: it reads the real shell, and
+        # with a document spliced in at the real offset. Hand-written fixtures
+        # would have passed the bug this replaces, where a metadata reader hunted
+        # for the document block's CLOSING tag and so found nothing in any
+        # document carrying an image.
+        run: node scripts/test-webext-library.ts
+
+      - name: WebExtension update-notice rig
+        # Store installs update themselves; one loaded unpacked never will, and
+        # Chrome ignores update_url for a development install. So the GitHub
+        # route has to be told — and told in exactly one direction: a store user
+        # must never see a notice they cannot act on, and must not even cost a
+        # request. Every failure mode here is silent by nature.
+        run: node scripts/test-webext-update.ts
+
+      - name: WebExtension localisation rig
+        # Every failure mode of a message catalogue is silent: a key the code
+        # uses but English lacks renders as the key name, a locale missing a key
+        # falls back so a German page carries English sentences, and a dropped
+        # $1 leaves a hole in a translated sentence. All of them are visible
+        # only to someone who reads that language.
+        run: node scripts/test-webext-i18n.ts
+
+      - name: Save-intent rig
+        # A host polyfilling showSaveFilePicker sees only the options bag, and
+        # must tell "overwrite the open document" from "make a second file" from
+        # that alone. It could not, and a browser extension overwrote a deck.
+        # `id` is the signal; if the three purposes ever collapse to one value
+        # every host silently loses the distinction.
+        run: node scripts/test-savepurpose.ts
+
+      - name: Guarded storage rig
+        # localStorage's absence is hostile: reading the PROPERTY throws, so
+        # `if (localStorage)` is itself the crash and one bare read at module
+        # scope takes the whole file down before it paints. Measured in a
+        # sandboxed iframe. The rig simulates each failure mode and pins the
+        # regression: importing a module that reads storage on load must not
+        # throw when storage does.
+        run: node scripts/test-storage.ts
+
+      - name: App registry rig
+        # scripts/apps.mjs drives what a release builds, stages and signs. A
+        # release SIGNS, and the key never reaches CI, so the pipeline itself
+        # cannot be tested here — but the registry drifting from the tree can,
+        # and a wrong appId is silent: shipped shells verify it against their
+        # own configureApp() id and just stop updating.
+        run: node scripts/test-release-apps.mjs
+
+      - name: Autosave per-app database rig
+        # Every app shared one IndexedDB database AND one DB_VERSION, so spaces
+        # has been writing into slides' store, and a version bump by any new app
+        # would make every SHIPPED shell of every other app throw VersionError
+        # and lose autosave. Renaming without carrying the data over would empty
+        # a visible feature, so the migration is tested in both directions.
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-autosave.ts --bundle --platform=node --format=esm \
+            --alias:fake-indexeddb/auto=./slides/node_modules/fake-indexeddb/auto/index.js \
+            --outfile="$RUNNER_TEMP/test-autosave.mjs"
+          BENTO_TEST_APP=bento-slides node "$RUNNER_TEMP/test-autosave.mjs"
+          BENTO_TEST_APP=bento-spaces node "$RUNNER_TEMP/test-autosave.mjs"
+
+      - name: Publish deletion-gate rig
+        # A publish assembles site/ for ONE app and mirrors it authoritatively.
+        # Measured: a spaces-shaped site/ deleted 47 live files — the signed
+        # shell, the manifest, all 22 packs — with every other gate green,
+        # because those gates are `if (existsSync(...))` and skip when the
+        # artifact is missing. Shipped files cannot recover from that.
+        run: node scripts/test-publish-gate.mjs
+
+      - name: Model key tables match the format
+        # slides/src/modelkeys.generated.ts is derived from model.ts and drives
+        # validate()'s unknown-key check. A stale copy would report real
+        # properties as unknown, and an agent acting on that deletes working
+        # configuration — so the generated file is committed and pinned here.
+        run: node scripts/build-modelkeys.mjs --check
+
+      - name: Document validation rig
+        # validate() is only useful if it is trusted: the rig proves the starter
+        # deck and a realistic chart stay silent, and that a deliberately broken
+        # deck trips every check.
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-validate.ts --bundle --platform=node --format=esm --outfile="$RUNNER_TEMP/test-validate.mjs"
+          node "$RUNNER_TEMP/test-validate.mjs"
+
+      - name: bento/dash model rig
+        # The format is permanent — additive forever, no server to migrate a
+        # single file. Two failures are unrecoverable once files exist: dropping
+        # a field this build does not recognise, and letting anything but an
+        # ABSENT block reach the starter document (which then overwrites live
+        # data on the first save). Both are asserted from both sides.
+        run: node scripts/test-dash-model.ts
+
+      - name: bento/dash store + undo rig
+        # Undo is a patch log rather than document snapshots, which buys history
+        # that costs what the EDIT costs — and risks a failure a snapshot cannot
+        # have: an inverse that does not restore what it displaced. Every op is
+        # checked apply → undo → identical, because that failure is silent.
+        run: node scripts/test-dash-store.ts
+
+      - name: bento/dash import rig
+        # Import is where a data tool does its damage, because every mistake is
+        # SILENT: the file opens, the grid fills, the totals compute, and the
+        # numbers are wrong. Two guards matter most and are checked from both
+        # sides — an undecidable date order is REFUSED rather than guessed, and
+        # the decimal convention is decided per COLUMN from the whole column.
+        run: node scripts/test-dash-import.ts
+
+      - name: bento/dash formula rig
+        # A wrong number is the worst failure a spreadsheet has, and the
+        # dangerous ones are plausible rather than loud: an error that becomes a
+        # zero, a cycle that resolves to something, a column computed before the
+        # column it depends on. All three are asserted, each with a control.
+        run: node scripts/test-dash-formula.ts
+
+      - name: bento/dash chart rig
+        # A tile names columns and derives its series at render, so the whole
+        # surface worth testing is the derivation. The failure that matters most
+        # is a missing value drawn as a zero — "we sold nothing" instead of "we
+        # do not know".
+        run: node scripts/test-dash-chart.ts
+
+      # ── the rest of bento/dash. Each of these asserts a way a spreadsheet can
+      # be CONFIDENTLY WRONG, which is the failure that matters here: nobody
+      # re-derives a number by hand, so a wrong one is not caught by the person
+      # relying on it. Each rig argues its own case in its header; the lines
+      # below say why it gates a merge.
+      - name: bento/dash function pack
+        # Lookups, multi-criteria, finance, statistics — including the three
+        # places we deliberately depart from Excel because Excel's default is a
+        # trap: an approximate VLOOKUP on unsorted data, an IRR that converges
+        # on nothing, a PERCENTILE that clamps instead of refusing.
+        run: node scripts/test-dash-functions.ts
+
+      - name: bento/dash cell formulas
+        # Evaluation ORDER. A cell computed before the cell it reads writes a
+        # stale number into the document, looking authoritative.
+        run: node scripts/test-dash-cellformula.ts
+
+      - name: bento/dash A1 references
+        # `$` pins against a COPY and not against structure, and a reference
+        # into a deleted row is #REF! rather than whatever slid up into it.
+        run: node scripts/test-dash-a1.ts
+
+      - name: bento/dash pivot
+        # Subtotals are COMPUTED, not summed: an average of averages is a
+        # different number, and a distinct count does not add up.
+        run: node scripts/test-dash-pivot.ts
+
+      - name: bento/dash dashboard
+        # Cross-filter selections compose, and the categories of a column
+        # PARTITION the sheet — no row dropped, none counted twice.
+        run: node scripts/test-dash-dashboard.ts
+
+      - name: bento/dash data story
+        # A gap tweens as a gap. Interpolating an absent quarter through zero is
+        # the animation telling a lie about the data.
+        run: node scripts/test-dash-story.ts
+
+      - name: bento/dash filter and sort
+        run: node scripts/test-dash-filter.ts
+
+      - name: bento/dash rows and columns
+        # Structure, and the rid watermark — a rid must never be minted twice,
+        # which is collaboration's correctness precondition.
+        run: node scripts/test-dash-rowcol.ts
+
+      - name: bento/dash selection and clipboard
+        run: node scripts/test-dash-select.ts
+
+      - name: bento/dash conditional formatting
+        run: node scripts/test-dash-condfmt.ts
+
+      - name: bento/dash side panels
+        run: node scripts/test-dash-panels.ts
+
+      - name: bento/dash About dialog
+        run: node scripts/test-dash-about.ts
+
+      - name: bento/dash thumbnail preview
+        # An encrypted workbook NEVER gets a preview — a plaintext title beside
+        # the ciphertext is the leak the password exists to prevent.
+        run: node scripts/test-dash-preview.ts
+
+      - name: bento/dash zip
+        # Verified against real unzip implementations, not only our own reader:
+        # a reader and a writer that share a bug agree with each other perfectly.
+        run: node scripts/test-dash-zip.ts
+
+      - name: bento/dash xlsx
+        # Both 1900 date epochs, including the leap-year bug — getting it wrong
+        # shifts every date by four years, silently.
+        run: node scripts/test-dash-xlsx.ts
+
+      - name: bento/dash WebGL
+        run: node scripts/test-dash-gl.ts
+
+      - name: bento/dash 3D scenes
+        run: node scripts/test-dash-viz3d.ts
+
+      - name: bento/dash CRDT convergence
+        # The big one: randomised concurrent edits across N replicas, asserted
+        # to converge. It has caught every ordering bug in the engine, and the
+        # two it did not catch were found by widening it.
+        run: node scripts/test-dash-sync.ts
+
+      - name: Theme token gate
+        # Every failure this catches is INVISIBLE in the light theme, which is
+        # the one the author is looking at. A chrome surface pinned to white
+        # keeps its light background in dark and puts light text on it — the
+        # properties panel measured 1.21:1 against a 4.5 floor before this gate
+        # existed. It also stops a document token being themed (which would
+        # invert the deck) and the light palette forking from spaces and type.
+        run: node scripts/test-slides-theme.mjs
+
+      - name: Built-in layout geometry rig
+        # The built-ins are drawn against 1600x900 while the model default is
+        # 1280x720, so they used to hang 200px off the right edge of a default
+        # deck. Nothing structural could see it — the fix is arithmetic, and so
+        # is the regression.
+        run: node scripts/test-layouts.ts
+
+      - name: Clipboard embedded-font rig
+        run: |
+          slides/node_modules/.bin/esbuild scripts/test-clipboard.ts --bundle --platform=node --format=esm --outfile="$RUNNER_TEMP/test-clipboard.mjs"
+          node "$RUNNER_TEMP/test-clipboard.mjs"
+
+      - name: CRDT property-removal rig
+        # Removing a property travels as a `set` op with `v` ABSENT, and the
+        # receiving replica threw on it: JSON.stringify(undefined) is undefined,
+        # and a debug line sliced it. Live in shipped files. The convergence rig
+        # missed it through 300 seeds because its generator assigns properties
+        # and never removes one — a property-based rig only explores the
+        # mutations it was taught.
+        run: node scripts/test-crdt-delprop.ts
+
       - name: CRDT convergence rig
         # 40 seeds locally; deeper on CI where the seconds are free.
         run: SEEDS=300 node scripts/test-sync.ts
+
+      - name: CRDT equivalence rig (baseline vs candidate, byte for byte)
+        # Convergence is the weaker property: an engine that converges with
+        # ITSELF while minting different bytes than the shipped engine passes
+        # the step above and silently splits every bento/slides file in the
+        # field. This step asserts byte-identity instead.
+        #
+        # The baseline is a FROZEN copy of the engine as shipped
+        # (scripts/lib/sync-baseline-frozen.ts), so this run is live from here
+        # on: it compares the working engine against the bytes every file in
+        # the field was written by. REQUIRE_LIVE=1 fails the build if the
+        # candidate is ever repointed at something that resolves back to the
+        # baseline — the quiet way a gate stops gating.
+        run: REQUIRE_LIVE=1 SEEDS=200 STEPS=60 ACTORS=4 node scripts/test-sync-equiv.ts
+
+      - name: CRDT document-shape seam
+        # The equivalence rig proves a NEGATIVE — that the parameterized engine
+        # still mints the bytes shipped files were written with — and a
+        # parameterization that quietly did nothing would pass it. This proves
+        # the positive: a second shape (pages→blocks) produces an engine that
+        # actually works, keys nodes on the composite pageId+blockId, and
+        # restores as itself. Also pins the constructor contract: the shape has
+        # no default, because a default is how a spaces call site silently ends
+        # up holding slides' shape.
+        run: node scripts/test-sync-shape.ts
+
+      - name: bento/spaces under the shared engine
+        # Convergence for the pages/blocks binding, AND a report on whether
+        # what the replicas converge on is a legal bento/spaces document.
+        # Those are different questions: page.blocks is flat and in pre-order,
+        # while the engine merges `parent` as an ordinary register and order as
+        # a position key — two independent domains describing one tree. The
+        # format half is REPORTED, not asserted, because the fix is a decision
+        # nobody has taken yet; STRICT=1 turns it into a gate the day it is.
+        run: SEEDS=250 STEPS=80 ACTORS=4 node scripts/test-sync-spaces.ts

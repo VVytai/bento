@@ -34,12 +34,24 @@ export class SlideCanvas {
   private zoom = 1
   private zoomLabel: HTMLElement | null = null
   private editing: HTMLElement | null = null
+  /** Slide identity captured when an inline edit begins. Element ids may be
+   *  shared across duplicated slides, so resolving through store.slide at
+   *  commit time can write into the wrong slide after navigation or a remote
+   *  deletion. */
+  private editingSlideId: string | null = null
+  /** startTextEdit swapped the rendered form for raw source (a field or a
+   *  formula), so commit must re-render even if the text is unchanged. */
+  private editingShowedRaw = false
   /** when editing a table cell, which cell (else null → text element edit) */
   private editingCell: { r: number; c: number } | null = null
   /** a repaint arrived (e.g. a remote collab op) while an inline edit was in
    *  progress and was deferred so it wouldn't tear the edited node out from
    *  under the caret; flushed when the edit commits. */
   private pendingRender = false
+  /** space is down and the canvas is armed to pan (see the keydown handler) */
+  private spaceHeld = false
+  /** a pan drag is in flight — keeps the grabbing cursor through a space release */
+  private panning = false
   private pathEditor!: PathEditor
   private lineEditor!: LineEditor
   private bezierEditor!: BezierEditor
@@ -84,6 +96,54 @@ export class SlideCanvas {
       this.wheelNavCooldown = now + 400
       this.onSlideNav(dir)
     }, { passive: false })
+
+    // Middle-button drag pans. Until now the scrollbars were the only way to
+    // move a zoomed slide, which puts the control at the edge of the screen
+    // while the work is in the middle of it. Middle-drag is what design tools
+    // do, and unlike space-drag it cannot collide with typing a space.
+    //
+    // Capture phase, because Selecto is bound to this same scroller and would
+    // otherwise read the press as the start of a marquee.
+    this.scroller.addEventListener('mousedown', (ev) => {
+      // Middle button, or left button while space is held — the two gestures
+      // every canvas tool offers. Space is the one most hands already know;
+      // middle-drag is the one that works when a hand is on the mouse, and the
+      // one #166 asked for. Neither exists on an Apple trackpad, which is why
+      // a plain two-finger scroll still pans once the slide is zoomed past fit.
+      // canGrabSpace is re-checked HERE, not just when space armed the pan: a
+      // keyup can be missed (a native dialog, focus leaving mid-hold), and a
+      // canvas stuck in pan mode would swallow the click that starts a text
+      // edit. The press itself is the last honest moment to ask.
+      if (ev.button !== 1 && !(ev.button === 0 && this.spaceHeld && this.canGrabSpace())) return
+      ev.preventDefault() // suppress the OS autoscroll widget
+      ev.stopPropagation()
+      this.startPan(ev)
+    }, true)
+    // X11 pastes the selection on middle-click release; the drag consumed it
+    this.scroller.addEventListener('auxclick', (ev) => {
+      if (ev.button === 1) ev.preventDefault()
+    })
+
+    // Space arms the pan. It is unbound in the editor otherwise, but it DOES
+    // page a scroll container by default, so the keydown has to be swallowed
+    // while we own it. Never while text is being edited or a panel field has
+    // focus — there a space is a space.
+    window.addEventListener('keydown', (ev) => {
+      if (ev.key !== ' ' || ev.repeat || this.spaceHeld || !this.canGrabSpace()) return
+      ev.preventDefault()
+      this.spaceHeld = true
+      this.scroller.style.cursor = 'grab'
+    })
+    window.addEventListener('keyup', (ev) => {
+      if (ev.key !== ' ' || !this.spaceHeld) return
+      this.spaceHeld = false
+      if (!this.panning) this.scroller.style.cursor = ''
+    })
+    // Losing the window with space down would otherwise leave it stuck armed
+    window.addEventListener('blur', () => {
+      this.spaceHeld = false
+      if (!this.panning) this.scroller.style.cursor = ''
+    })
 
     // Control box lives INSIDE the scaled host with rootContainer at body:
     // Moveable then works in slide-local coordinates (e.left/e.top are model
@@ -208,6 +268,52 @@ export class SlideCanvas {
     this.render()
   }
 
+  // --- panning ----------------------------------------------------------------
+
+  /**
+   * Is space free to mean "pan" right now? Not while any text is being edited
+   * on the canvas, and not while a panel field, the title or any other input
+   * has focus — in all of those a space is a character the user typed.
+   */
+  private canGrabSpace(): boolean {
+    if (this.editing || this.editingCell || this.isPathEditing) return false
+    const el = document.activeElement as HTMLElement | null
+    if (!el) return true
+    if (el.isContentEditable) return false
+    const tag = el.tagName
+    return tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT'
+  }
+
+  /**
+   * Drag the canvas from wherever it is now. Shared by both gestures so they
+   * cannot drift apart.
+   *
+   * The move/up listeners live on `window`: a pan that stops the moment the
+   * pointer crosses the panel edge would be useless precisely when panning
+   * matters, which is when the slide is bigger than the viewport.
+   */
+  private startPan(ev: MouseEvent) {
+    const fromX = ev.clientX
+    const fromY = ev.clientY
+    const atLeft = this.scroller.scrollLeft
+    const atTop = this.scroller.scrollTop
+    this.panning = true
+    this.scroller.style.cursor = 'grabbing'
+    const move = (m: MouseEvent) => {
+      this.scroller.scrollLeft = atLeft - (m.clientX - fromX)
+      this.scroller.scrollTop = atTop - (m.clientY - fromY)
+    }
+    const up = () => {
+      window.removeEventListener('mousemove', move, true)
+      window.removeEventListener('mouseup', up, true)
+      this.panning = false
+      // still armed if space is down, so keep the open hand rather than reset
+      this.scroller.style.cursor = this.spaceHeld ? 'grab' : ''
+    }
+    window.addEventListener('mousemove', move, true)
+    window.addEventListener('mouseup', up, true)
+  }
+
   // --- layout & rendering ---------------------------------------------------
 
   relayout() {
@@ -219,6 +325,31 @@ export class SlideCanvas {
     this.scale = this.fitScale * this.zoom
     this.stage.style.width = `${width * this.scale}px`
     this.stage.style.height = `${height * this.scale}px`
+    // Pan room. Scrolling used to stop dead at the slide's edges, so at high
+    // zoom a corner element could never be moved off the corner of the screen
+    // to be worked on. Half a viewport of padding once the stage outgrows the
+    // window is exactly enough for any point on the slide to reach the middle.
+    //
+    // None at all while the whole slide fits: padding there would put
+    // scrollbars on a view that needs none, and — because the plain-wheel
+    // slide-nav stands down whenever the canvas is pannable — would silently
+    // cost the wheel gesture that walks slides. clientWidth is the padding
+    // box, so writing padding here cannot disturb the fitScale computed above.
+    const padX = width * this.scale > availW ? Math.round(this.scroller.clientWidth / 2) : 0
+    const padY = height * this.scale > availH ? Math.round(this.scroller.clientHeight / 2) : 0
+    // Changing the pan room moves the stage within the scroll canvas by exactly
+    // that much, so changing it without compensating TELEPORTS the view. The
+    // first relayout that turns padding on leaves the scroll at 0 — which is now
+    // half a viewport of empty canvas, with the slide shoved off to the side and
+    // clipped. setZoom re-centres afterwards and hid this; every OTHER route in
+    // (opening a deck whose stage already overflows, a window resize, toggling a
+    // panel) does not. Reported on a 1600x900 deck, whose stage outgrows the
+    // canvas at ordinary zooms where the 1280x720 default still fits.
+    const wasX = parseFloat(this.scroller.style.paddingLeft) || 0
+    const wasY = parseFloat(this.scroller.style.paddingTop) || 0
+    this.scroller.style.padding = padX || padY ? `${padY}px ${padX}px` : ''
+    if (padX !== wasX) this.scroller.scrollLeft += padX - wasX
+    if (padY !== wasY) this.scroller.scrollTop += padY - wasY
     this.scaleHost.style.transform = `scale(${this.scale})`
     this.moveable.zoom = 1 / this.scale
     this.moveable.updateRect()
@@ -449,6 +580,10 @@ export class SlideCanvas {
   }
 
   render() {
+    // A slide switch is a hard boundary for an inline edit. Commit against
+    // the slide where editing began (or discard if that slide was remotely
+    // deleted) before replacing the canvas DOM.
+    if (this.editing && this.editingSlideId !== this.store.slide?.id) this.commitTextEdit()
     // Don't repaint out from under an in-progress inline edit. A remote collab
     // op landing must NOT tear down the text/cell node you're typing in — that
     // steals focus and resets the caret (the #1 rough edge reported at launch).
@@ -914,13 +1049,26 @@ export class SlideCanvas {
     this.commitTextEdit()
     const inner = node.querySelector<HTMLElement>('.bento-text-inner')
     if (!inner) return
-    // fields ({{page}} etc.) render resolved; while editing, show the RAW token
-    // so the author edits the field, not the computed value
+    // fields ({{page}} etc.) and math ($…$) render RESOLVED; while editing,
+    // show the raw source so the author edits the token, not the computed value
     const model = this.store.element(node.dataset.elId ?? '')
-    if (model?.type === 'text' && typeof model.html === 'string' && model.html.includes('{{')) {
-      inner.innerHTML = model.html
+    // Remember that we swapped: on commit the resolved view has to be put back
+    // even when the text did NOT change, and only a re-render can do that.
+    this.editingShowedRaw = false
+    if (model?.type === 'text' && typeof model.html === 'string' && /\{\{|\$/.test(model.html)) {
+      // SANITIZED, even though the point of the swap is to show what the model
+      // holds. This is the only place raw model html reaches the live canvas —
+      // the render path has always cleaned it — so without this, double-
+      // clicking a text box in a deck someone sent you ran its script, and the
+      // `{{`-or-`$` gate is no barrier at all: one literal dollar sign opens it.
+      // Nothing is lost: the sanitizer unwraps tags and strips attributes, so a
+      // {{page:2}} token and `$E=mc^2$` TeX source are plain text to it and
+      // survive verbatim, which is the entire purpose of showing the raw html.
+      inner.innerHTML = sanitizeHtml(model.html)
+      this.editingShowedRaw = true
     }
     this.editing = node
+    this.editingSlideId = this.store.slide.id
     node.classList.add('bento-editing')
     inner.contentEditable = 'true'
     inner.focus()
@@ -973,7 +1121,9 @@ export class SlideCanvas {
     const node = this.editing
     if (!node) return
     if (this.editingCell) { this.commitCellEdit(node); return }
+    const slideId = this.editingSlideId
     this.editing = null
+    this.editingSlideId = null
     this.onTextEditChange?.(undefined)
     const inner = node.querySelector<HTMLElement>('.bento-text-inner')
     const id = node.dataset.elId
@@ -983,12 +1133,23 @@ export class SlideCanvas {
     // drop the zero-width caret spacers autoformat leaves behind
     const html = sanitizeHtml(inner.innerHTML.replace(/\u200B/g, '').replace(/\\([*_~`-])/g, '$1'))
     const grownH = Math.max(parseFloat(node.style.height) || 0, inner.scrollHeight)
-    const el = this.store.element(id)
+    const el = this.store.doc.slides
+      .find((slide) => slide.id === slideId)
+      ?.elements.find((element) => element.id === id)
     if (el && el.type === 'text' && (el.html !== html || grownH > el.h)) {
       this.store.commit(() => {
         el.html = html
         if (grownH > el.h) el.h = Math.ceil(grownH)
       })
+    } else if (this.editingShowedRaw) {
+      // Nothing changed, so there is no commit to re-render off the back of —
+      // but startTextEdit replaced the rendered formula (or {{page}} field)
+      // with its raw source, and that raw source is still on screen. Editing a
+      // formula and changing nothing left `$$x = \\frac{…}$$` sitting on the
+      // slide until some unrelated event happened to repaint. Put the resolved
+      // view back.
+      this.editingShowedRaw = false
+      this.render()
     } else {
       this.syncTargets()
     }
@@ -1023,6 +1184,7 @@ export class SlideCanvas {
     const inner = td.querySelector<HTMLElement>('.bento-cell-inner')
     if (!node || !inner) return
     this.editing = node
+    this.editingSlideId = this.store.slide.id
     this.editingCell = { r, c }
     node.classList.add('bento-editing')
     inner.contentEditable = 'true'
@@ -1055,7 +1217,9 @@ export class SlideCanvas {
   private commitCellEdit(node: HTMLElement) {
     const cell = this.editingCell!
     const id = node.dataset.elId
+    const slideId = this.editingSlideId
     this.editing = null
+    this.editingSlideId = null
     this.editingCell = null
     this.onTextEditChange?.(undefined)
     node.classList.remove('bento-editing')
@@ -1064,10 +1228,12 @@ export class SlideCanvas {
     if (!inner || !id) return
     inner.contentEditable = 'false'
     const html = sanitizeHtml(inner.innerHTML.replace(/\u200B/g, '').replace(/\\([*_~`-])/g, '$1'))
-    const el = this.store.element(id)
+    const el = this.store.doc.slides
+      .find((slide) => slide.id === slideId)
+      ?.elements.find((element) => element.id === id)
     if (el && el.type === 'table' && el.rows[cell.r]?.cells[cell.c] && el.rows[cell.r].cells[cell.c].html !== html) {
       this.store.commit(() => {
-        const tb = this.store.element(id) as TableElement
+        const tb = el as TableElement
         if (tb.rows[cell.r]?.cells[cell.c]) tb.rows[cell.r].cells[cell.c].html = html
       })
     } else {

@@ -15,6 +15,8 @@ import type { BentoDoc } from '../model'
 import type { Op, SyncStateJSON } from './crdt'
 import type { Frame, RefusalCode, SyncSession, Transport } from './session'
 import { offlineEnabled } from '../update'
+import { netWebSocket } from '../../../kernel/src/net.ts'
+import { lsGet, lsSet } from '../../../kernel/src/storage.ts'
 
 export const DEFAULT_SYNC_HOST = 'wss://sync.bento.page'
 const SNAP_EVERY = 200 // ops between encrypted snapshot uploads
@@ -86,11 +88,11 @@ export async function mintInvite(ownerPrivB64: string, role: 'writer' | 'comment
 export async function deviceIdentity(docId: string): Promise<{ pub: string; priv: string }> {
   const k = `bento-member-${docId}`
   try {
-    const saved = localStorage.getItem(k)
+    const saved = lsGet(k)
     if (saved) return JSON.parse(saved)
   } catch { /* storage unavailable → ephemeral identity */ }
   const id = await mintKeypair()
-  try { localStorage.setItem(k, JSON.stringify(id)) } catch { /* ephemeral */ }
+  lsSet(k, JSON.stringify(id))
   return id
 }
 
@@ -142,7 +144,7 @@ export async function mintCollab(): Promise<CollabCreds> {
 /** dev override for the relay host (e.g. ws://localhost:8787) */
 export function syncHost(): string {
   try {
-    return localStorage.getItem('bento-sync-url') || DEFAULT_SYNC_HOST
+    return lsGet('bento-sync-url') || DEFAULT_SYNC_HOST
   } catch {
     return DEFAULT_SYNC_HOST
   }
@@ -314,9 +316,11 @@ export class OnlineTransport implements Transport {
     this.setStatus('connecting')
     let ws: WebSocket
     try {
-      ws = new WebSocket(`${this.url}&since=${this.lastSeq()}`)
+      ws = netWebSocket(`${this.url}&since=${this.lastSeq()}`)
     } catch {
-      this.retry()
+      // Offline is a decision, not an outage: retrying would spin until the
+      // switch flips, and net.ts has closed anything already open anyway.
+      if (!offlineEnabled()) this.retry()
       return
     }
     this.ws = ws

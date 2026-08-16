@@ -8,26 +8,46 @@ import {
   FORMAT_VERSION,
   MEDIA_EMBED_BUDGET,
   applyChartPalette, applyLayout, builtinLayouts, defaultChart, defaultImage, defaultMedia, defaultShape, defaultTable, defaultText,
-  instantiateLayout, isLightBg, layoutElementIds, newDocId, readableInk, syncLinkedChart, uid,
-  type ChartElement, type ShapeKind, type Slide, type SlideElement, type TableElement,
-} from '../model'
-import { APP_VERSION, applyUpdate, applyUpdateInPlace, autoCheckEnabled, canUpdateInPlace, checkForUpdates, offlineEnabled, setAutoCheck, setOffline } from '../update'
+  instantiateLayout, isLightBg, layoutElementIds, newDocId, parseDoc, readableInk, syncLinkedChart, uid,
+  paginates, inLinearFlow,
+  type ChartElement, type ShapeKind, type Slide, type SlideElement, type TableElement } from '../model'
+import { THEME_CHOICES, setTheme, themeChoice } from '../../../kernel/src/theme.ts'
+import type { InPlaceOutcome } from '../update'
+import { APP_VERSION, applyUpdate, applyUpdateInPlace, autoCheckEnabled, canUpdateInPlace, checkForUpdates, compareVersions, offlineEnabled, setAutoCheck, setOffline } from '../update'
 import { CHART_PRESETS } from '../charts'
 import { renderSlide, renderThumbnail } from '../render'
 import { SlideCanvas } from './canvas'
 import { PropsPanel } from './panels'
 import { startPresentation } from '../present'
-import { hasFileHandle, isEncryptionActive, saveFile, serializeAuto, serializeFile, setEncryptionPassword, writeUpdatedFile, writeUpdatedFileAs } from '../save'
+// serializeFile (plain output) is deliberately NOT imported here: every path
+// in this file writes a real file for a person, so all of them must inherit an
+// active password. serializeAuto is the only encryption-aware serializer.
+import { adoptFileHandle, canWriteInPlace, currentFileName, fileBase, hasFileHandle, isEncryptionActive, openedFileName, saveFile, serializeAuto, setEncryptionPassword, writeUpdatedFile, writeUpdatedFileAs } from '../save'
 import { addVersion, clearRecovery, clearVersions, docContentKey, getRecovery, listVersions, pruneOld, putRecovery, type Snapshot } from '../autosave'
 import { insertElements, insertSlides, parseClip, serializeElements, serializeSlides } from './clipboard'
 import { openSpeakerWindow, speakerIdleBody } from '../screens'
 import { borderPoint, boxCenter, lineEndpoints, setLineEndpoints, sideMidpoint } from './lineedit'
 import { ICONS } from '../icons'
-import { t, setLocale, locale, LOCALE_CHOICES } from '../i18n'
+import { t, setLocale, locale, localeChoices, LOCALE_CHOICES, applyDirection, isRtl } from '../i18n'
+import { availablePacks, fetchPack, markFileSaved, packCoverage, packsInFile, stageForFile, unstageFromFile } from '../packs'
+import { injectFonts } from '../fonts'
 import { appConfig } from '../../../kernel/src/app.ts'
 import { disconnectOnline, joinFromDoc, mintCollab, mintInvite, onlineTransport, rotateKeys, sharingOn, startSharing, stopSharing } from '../sync/online'
+import { lsGet, lsJson, lsSet } from '../../../kernel/src/storage.ts'
 
 const i18nT = t
+
+/** Per-BROWSER, not per-deck: whether the "this browser can't rewrite files"
+ *  notice has been acknowledged. It is a property of the browser. */
+const SAVE_NOTICE_KEY = 'bento-save-notice'
+
+/** sessionStorage: set just before the post-update reload, read once by the
+ *  version that boots next. Deliberately NOT localStorage — see
+ *  noticeIfJustUpdated. */
+const JUST_UPDATED_KEY = 'bento-just-updated'
+
+/** Show the language search once the available list outgrows a glance. */
+const SEARCH_FROM = 8
 
 const SHAPE_MENU: Array<{ kind: ShapeKind; label: string; icon: string; draw?: 'line' | 'path' | 'connector' | 'free' | 'poly'; tip: string }> = [
   { kind: 'rect', label: 'Rectangle', icon: ICONS.rect, tip: 'A rectangle — rounded corners, fills, gradients and shadows in the panel' },
@@ -47,6 +67,9 @@ export class Editor {
   private sidebar!: HTMLElement
   private props!: HTMLElement
   private dirtyDot!: HTMLElement
+  private fileChip?: HTMLElement
+  /** Name of a deck opened by DROP when no writable handle came with it. */
+  private openedAs?: string
   private thumbTimer = 0
   private presenting = false
   private updatesB!: HTMLElement
@@ -211,17 +234,31 @@ export class Editor {
     title.spellcheck = false
     title.addEventListener('change', () => {
       this.store.commit(() => { this.store.doc.title = title.value || 'Untitled' })
-      document.title = `${this.store.doc.title} — ${appConfig().appName}`
+      this.syncWindowTitle()
     })
     // remote/programmatic title changes reflect live (unless being typed in)
     this.store.on('doc', () => {
       if (document.activeElement !== title && title.value !== this.store.doc.title) {
         title.value = this.store.doc.title
-        document.title = `${this.store.doc.title} — ${appConfig().appName}`
+        this.syncWindowTitle()
       }
     })
+
+    // The FILE this deck is open as — deliberately separate from the deck
+    // title above, because the two drift apart constantly (rename the deck and
+    // the file on disk keeps its old name) and only one of them answers "what
+    // does ⌘S overwrite?". Absent until the answer is knowable: a never-saved
+    // deck has no file, and saying so would be noise.
+    this.fileChip = div('ed-filechip')
+    this.fileChip.hidden = true
     this.dirtyDot = div('ed-dirty')
-    this.dirtyDot.title = t('Unsaved changes — ⌘S saves this file in place')
+    // Capability-aware: on Safari/Firefox (and every iOS browser) there is no
+    // File System Access API, so ⌘S CANNOT rewrite this file — it hands back a
+    // copy. Promising in-place saving and retracting it in a toast after the
+    // first save is worse than saying the true thing before any work is lost.
+    this.dirtyDot.title = canWriteInPlace()
+      ? t('Unsaved changes — ⌘S saves this file in place')
+      : t('Unsaved changes — ⌘S downloads an updated copy (this browser can’t rewrite the file)')
 
     const insert = div('ed-group ed-insert')
     insert.append(
@@ -262,7 +299,9 @@ export class Editor {
     }, 1500)
     const undoB = btn(ICONS.undo, '', () => this.store.undo(), t('Undo (⌘Z)'))
     const redoB = btn(ICONS.redo, '', () => this.store.redo(), t('Redo (⇧⌘Z)'))
-    const saveB = btn(ICONS.save, t('Save'), () => this.save(false), t('Save — rewrite this file in place (⌘S)'))
+    const saveB = btn(ICONS.save, t('Save'), () => this.save(false), canWriteInPlace()
+      ? t('Save — rewrite this file in place (⌘S)')
+      : t('Save — download an updated copy (⌘S). This browser can’t rewrite the open file.'))
     saveB.appendChild(this.dirtyDot) // the amber unsaved-changes dot lives ON Save
     const pdfB = btn(ICONS.pdf, '', () => this.exportPdf(), t('Export PDF (print)'))
     const helpB = btn('<b class="ed-help-q">?</b>', '', () => this.openHelp(), t('Shortcuts & tips (?)'))
@@ -275,8 +314,45 @@ export class Editor {
     history.append(undoB, redoB)
     const saveGroup = div('ed-split')
     saveGroup.append(saveB, this.saveDropdown())
-    actions.append(pdfB, this.avatarsBox, this.shareDropdown(), saveGroup, this.languageDropdown(), helpB)
-    bar.append(logo, this.updatesB, title, history, insert, actions)
+    const shareD = this.shareDropdown()
+    const langD = this.languageDropdown()
+    actions.append(pdfB, this.avatarsBox, shareD, saveGroup, langD, helpB)
+
+    // Phone chrome: two menus that stay EMPTY on a wide screen. Nothing is
+    // duplicated — applyPhoneChrome moves the real buttons in and out, so every
+    // listener, tooltip and live reference (dirtyDot, updatesB, the comment
+    // button's armed state) keeps working wherever the button currently sits.
+    const insertMenu = div('ed-menu')
+    const insertD = div('ed-dropdown ed-phone-only')
+    insertD.append(
+      btn(ICONS.plus, t('Insert'), () => insertD.classList.toggle('open'), t('Insert — text, shapes, images, media, tables, charts')),
+      insertMenu)
+    const moreMenu = div('ed-menu')
+    const moreD = div('ed-dropdown ed-phone-only')
+    moreD.append(
+      btn('<b>⋯</b>', t('More'), () => {
+        // Fill BEFORE opening: the save-as list reflects live state (is this
+        // file encrypted?) and must be current the moment it becomes visible.
+        if (!moreD.classList.contains('open')) this.fillPhoneSaveAs(moreMenu, moreD)
+        moreD.classList.toggle('open')
+      }, t('More actions')),
+      moreMenu)
+    const slidesB = btn(ICONS.panelLeft, t('Slides'), () => this.togglePanel('left'), t('Slides — show or hide the slide list'))
+    slidesB.classList.add('ed-phone-only')
+    const formatB = btn(ICONS.panelRight, t('Format'), () => this.togglePanel('right'), t('Format — show or hide the properties panel'))
+    formatB.classList.add('ed-phone-only')
+
+    this.syncWindowTitle()
+
+    this.phoneChrome = {
+      insertD, insertMenu, moreD, moreMenu, slidesB, formatB, insert, actions, history,
+      // order matters: this is the order they appear in the ⋯ menu
+      demote: [redoB, commentB, pdfB, shareD, langD, helpB],
+      // filled in once the bar is fully assembled (formatB lands last)
+      authored: new Map(), homeOf: new Map(),
+    }
+
+    bar.append(logo, this.updatesB, title, this.fileChip, slidesB, insertD, history, insert, actions, moreD)
 
     // main area
     const main = div('ed-main')
@@ -294,7 +370,7 @@ export class Editor {
     // hint merely plays — so it keeps nudging until it's used). Hover replays it
     // any time (CSS :hover). When the laps finish fading, just drop the class so
     // hover takes over cleanly (a lingering class would replay on mouse-out).
-    try { if (!localStorage.getItem('bento-slideshow-started')) pill.classList.add('ed-hint-pulse') } catch { /* storage off */ }
+    if (!lsGet('bento-slideshow-started')) pill.classList.add('ed-hint-pulse')
     pill.addEventListener('animationend', (e) => {
       if ((e as AnimationEvent).animationName !== 'ed-runner-fade') return
       pill.classList.remove('ed-hint-pulse')
@@ -334,6 +410,51 @@ export class Editor {
       this.props.classList.add('ed-collapsed')
     }
 
+    actions.insertBefore(formatB, saveGroup)
+
+    // The authored desktop layout, captured once the bar is fully assembled.
+    // Unfolding REPLAYS this instead of guessing where each button belongs.
+    // Guessing is what the old restore did — everything except demote[0] went
+    // back to `actions` immediately before formatB — and it could not be right:
+    // Comment is authored into the INSERT group, so it changed groups entirely,
+    // and pdf/share/lang/help landed in a row after Save instead of interleaved
+    // with the avatars strip, leaving Save sitting after Help.
+    for (const g of [history, insert, actions]) {
+      this.phoneChrome.authored.set(g, [...g.children] as HTMLElement[])
+    }
+    for (const [g, kids] of this.phoneChrome.authored) {
+      for (const k of kids) this.phoneChrome.homeOf.set(k, g)
+    }
+
+    // drive it now and whenever the bar's size or content changes.
+    // build() has just re-authored the bar, so whatever folding state a PREVIOUS
+    // bar was in no longer describes this DOM. Without this reset a rebuild on a
+    // phone (switching language, say) would early-return on `true === true` and
+    // leave the freshly authored DESKTOP bar in place — overflowing, with Save
+    // off-screen again.
+    this.phoneChromeOn = null
+    this.topbar = bar
+    this.fitTopbar()
+    // A ResizeObserver on the bar itself is the primary width signal. It fires
+    // for every viewport change (matchMedia change events do not fire at all
+    // under CDP-driven viewport changes, and a phone ROTATING is exactly this
+    // path); the plain resize listener is belt and braces on top. fitTopbar
+    // is idempotent, so the overlap costs a few reads.
+    this.barRO?.disconnect()
+    this.barRO = new ResizeObserver(() => this.fitTopbar())
+    this.barRO.observe(bar)
+    window.addEventListener('resize', () => this.fitTopbar())
+    // The bar's CONTENT changes width too, at a constant viewport (avatars
+    // join, the update chip appears, the file chip fills in, the "Saved" tag
+    // flashes), and each of these used to clip the end of the bar. fitTopbar
+    // drops the records its own mutations queue, so this cannot loop.
+    this.barMO?.disconnect()
+    this.barMO = new MutationObserver(() => this.fitTopbar())
+    this.barMO.observe(bar, {
+      childList: true, subtree: true, characterData: true,
+      attributes: true, attributeFilter: ['style', 'hidden'],
+    })
+
     this.restorePanelWidths()
     this.canvas = new SlideCanvas(canvasWrap, this.store)
     this.canvas.onCommentModeChange = (on) => commentB.classList.toggle('ed-btn-armed', on)
@@ -360,7 +481,7 @@ export class Editor {
 
   private restorePanelWidths() {
     try {
-      const saved = JSON.parse(localStorage.getItem('bento-ed-panels') ?? '{}')
+      const saved = lsJson<Record<string, number>>('bento-ed-panels', {})
       for (const side of ['left', 'right'] as const) {
         const [min, max] = Editor.PANEL_BOUNDS[side]
         if (typeof saved[side] === 'number') this.panelW[side] = Math.min(max, Math.max(min, saved[side]))
@@ -379,8 +500,11 @@ export class Editor {
   private updatePanelChevrons() {
     const glyph = (side: 'left' | 'right') => {
       const collapsed = (side === 'left' ? this.sidebar : this.props).classList.contains('ed-collapsed')
-      // chevron points where clicking will move the boundary
-      return side === 'left' ? (collapsed ? '›' : '‹') : (collapsed ? '‹' : '›')
+      // chevron points where clicking will move the boundary. 'left'/'right'
+      // name the DOM order, not the screen: under an RTL chrome the slide list
+      // sits on the right, so the arrow that means "open me" turns around too.
+      const g = side === 'left' ? (collapsed ? '›' : '‹') : (collapsed ? '‹' : '›')
+      return isRtl() ? (g === '›' ? '‹' : '›') : g
     }
     for (const side of ['left', 'right'] as const) {
       const b = this.panelToggles[side]
@@ -407,7 +531,7 @@ export class Editor {
     handle.appendChild(toggle)
     queueMicrotask(() => this.updatePanelChevrons())
     const commit = () => {
-      localStorage.setItem('bento-ed-panels', JSON.stringify(this.panelW))
+      lsSet('bento-ed-panels', JSON.stringify(this.panelW))
       // thumbnails render at a width derived from the sidebar — refit them
       if (side === 'left') this.rebuildSidebar()
     }
@@ -423,7 +547,10 @@ export class Editor {
       document.body.classList.add('ed-col-resizing')
       const move = (ev: MouseEvent) => {
         const dx = ev.clientX - startX
-        this.panelW[side] = Math.min(max, Math.max(min, startW + (side === 'left' ? dx : -dx)))
+        // clientX is physical; which way widens the panel depends on which
+        // screen edge it is docked to, and RTL swaps the two panels over.
+        const widens = (side === 'left') !== isRtl() ? dx : -dx
+        this.panelW[side] = Math.min(max, Math.max(min, startW + widens))
         this.applyPanelWidths()
       }
       const up = () => {
@@ -445,6 +572,146 @@ export class Editor {
   }
 
   /** Collapse/expand the slide list or the properties panel. */
+  private phoneChrome: {
+    insertD: HTMLElement; insertMenu: HTMLElement
+    moreD: HTMLElement; moreMenu: HTMLElement
+    slidesB: HTMLElement; formatB: HTMLElement
+    insert: HTMLElement; actions: HTMLElement; history: HTMLElement
+    demote: HTMLElement[]
+    /** each group's children in authored desktop order — replayed on unfold */
+    authored: Map<HTMLElement, HTMLElement[]>
+    /** which group each button was authored into */
+    homeOf: Map<HTMLElement, HTMLElement>
+  } | null = null
+
+  /**
+   * Fold the topbar into menus, and unfold it again when there is room.
+   * Driven by fitTopbar (every phone, plus any window where even the icon
+   * tier overflows). REPARENTS the existing buttons rather than building
+   * phone copies: a duplicate would need its own listeners and would desync
+   * from live state (the dirty dot lives ON the save button; the comment
+   * button carries an armed class). Moving a node keeps all of that by
+   * construction.
+   */
+  private applyPhoneChrome(on: boolean) {
+    const p = this.phoneChrome
+    if (!p || this.phoneChromeOn === on) return
+    // A FRESH bar is already in its authored desktop order, so there is nothing
+    // to put back — and running the restore below anyway does not just waste
+    // work, it REORDERS: every demoted button lands before formatB regardless
+    // of where it started, so Comment and Export PDF jumped groups and Save
+    // ended up after Help. Switching language then *fixed* it, because build()
+    // re-authors the bar and this call early-returns second time around, which
+    // is why the bug read as "the order changes when I switch language" when it
+    // was the first load that was wrong.
+    const fresh = this.phoneChromeOn === null
+    this.phoneChromeOn = on
+    if (on) {
+      // the six insert tools + comment go under ＋
+      while (p.insert.firstChild) p.insertMenu.appendChild(p.insert.firstChild)
+      for (const b of p.demote) {
+        if (!b.parentElement) continue
+        // Undo/redo/PDF are icon-only BY DESIGN in the bar (no <span> at all),
+        // so the menu's label rule has nothing to reveal and they would sit in
+        // ⋯ as mystery glyphs. Borrow the tooltip, minus its shortcut: "Redo
+        // (⇧⌘Z)" -> "Redo". No new strings, and desktop is untouched.
+        // A demoted DROPDOWN is a wrapper, so label its TRIGGER and ask the
+        // trigger alone whether it already has one. Asking the wrapper always
+        // answers yes — it contains the menu it hides, and that menu is full of
+        // spans. Language lost its label to exactly that: it sat in ⋯ as a bare
+        // globe while everything around it was captioned.
+        const face = b.classList.contains('ed-dropdown')
+          ? (b.firstElementChild as HTMLElement | null)
+          : b
+        if (face && !face.querySelector('span') && face.title) {
+          const lab = document.createElement('span')
+          lab.dataset.phoneLabel = '1'
+          // "Redo (⇧⌘Z)" -> "Redo"; "Not sharing yet — click…" -> "Not sharing yet"
+          lab.textContent = face.title.split('(')[0].split('—')[0].trim()
+          face.appendChild(lab)
+        }
+        p.moreMenu.appendChild(b)
+      }
+    } else if (!fresh) {
+      while (p.insertMenu.firstChild) p.insert.appendChild(p.insertMenu.firstChild)
+      for (const lab of p.moreMenu.querySelectorAll('[data-phone-label]')) lab.remove()
+      // The save-as rows are a phone-only copy; on a wide screen the split
+      // button's caret is back and owns that list again.
+      for (const row of p.moreMenu.querySelectorAll('[data-phone-saveas]')) row.remove()
+      // Back to their authored homes, in their authored order.
+      //
+      // Both halves matter. Sending each button to the group it was authored
+      // into is what keeps Comment in the INSERT group instead of migrating it
+      // to actions; replaying the captured order is what stops pdf/share/lang/
+      // help from landing in a row and pushing Save past Help. Re-appending in
+      // order is deliberately not "insert before the sibling I remember" —
+      // that sibling may itself be demoted and not back yet.
+      for (const b of p.demote) p.homeOf.get(b)?.appendChild(b)
+      for (const [group, order] of p.authored) {
+        for (const child of order) {
+          if (child.parentElement === group) group.appendChild(child)
+        }
+      }
+      p.moreD.classList.remove('open')
+      p.insertD.classList.remove('open')
+    }
+  }
+
+  private phoneChromeOn: boolean | null = null
+  private topbar: HTMLElement | null = null
+  private barRO: ResizeObserver | null = null
+  private barMO: MutationObserver | null = null
+
+  /**
+   * Size the topbar by MEASURING it, not by width breakpoints. Breakpoints
+   * in px were wrong here: browser zoom, OS text scaling, wider translations
+   * and live content (avatars, the update chip) all change how much room the
+   * same buttons need at the same viewport width, and each of those cases
+   * used to clip the end of the bar. Instead, start from the widest layout
+   * and step down a tier while the bar still overflows its own box. First
+   * ed-bar-compact hides the button labels, then ed-bar-tight drops the
+   * wordmark, then ed-bar-fold moves buttons into menus (applyPhoneChrome).
+   */
+  private fitTopbar() {
+    const bar = this.topbar
+    if (!bar || !bar.isConnected) return
+    const tiers = ['ed-bar-compact', 'ed-bar-tight', 'ed-bar-fold']
+    // Phones fold unconditionally. The 700px media query is also what turns
+    // the panels into overlay drawers, and the folded bar belongs with it.
+    if (window.innerWidth <= 700) {
+      bar.classList.add(...tiers)
+      this.applyPhoneChrome(true)
+      this.barMO?.takeRecords()
+      return
+    }
+    // Re-fitting starts by unfolding, which reparents buttons and would slam
+    // shut a dropdown the user is reading. Skip while one is open; the next
+    // resize or content change runs this again.
+    if (bar.querySelector('.ed-dropdown.open')) return
+    // scrollWidth counts content that sticks out of the padding box even with
+    // overflow visible, so "scrollWidth > clientWidth" IS the clipped-buttons
+    // condition (ed-root clips whatever leaks). The 1px slack absorbs
+    // subpixel rounding at fractional zoom levels.
+    const overflow = () => bar.scrollWidth - bar.clientWidth > 1
+    // The title input is the bar's only shrinkable item, so flexbox crushes
+    // it toward its 48px floor before anything overflows. Waiting for hard
+    // overflow would mean full button labels beside an unusable title, so
+    // step down while the title is squeezed badly, not only on true overflow.
+    const title = bar.querySelector<HTMLElement>('.ed-title')
+    const cramped = () => overflow() || (!!title && title.getBoundingClientRect().width < 120)
+    bar.classList.remove(...tiers)
+    this.applyPhoneChrome(false)
+    if (cramped()) bar.classList.add('ed-bar-compact')
+    if (cramped()) bar.classList.add('ed-bar-tight')
+    if (overflow()) {
+      bar.classList.add('ed-bar-fold')
+      this.applyPhoneChrome(true)
+    }
+    // the class flips and reparenting above queued mutation records of their
+    // own; drop them, or the observer re-runs this forever
+    this.barMO?.takeRecords()
+  }
+
   togglePanel(side: 'left' | 'right') {
     const el = side === 'left' ? this.sidebar : this.props
     el.classList.toggle('ed-collapsed')
@@ -462,6 +729,34 @@ export class Editor {
       if (wrap.classList.contains('open')) rebuild()
     }, t('Save as… — copy, new deck, password'))
     trigger.classList.add('ed-split-caret')
+    const rebuild = () => {
+      menu.textContent = ''
+      this.buildSaveAsItems(menu, () => wrap.classList.remove('open'))
+    }
+    wrap.append(trigger, menu)
+    document.addEventListener('pointerdown', (ev) => {
+      if (!wrap.contains(ev.target as Node)) wrap.classList.remove('open')
+    })
+    return wrap
+  }
+
+  /**
+   * The Save-as list, built into `into`.
+   *
+   * Rebuilt on every open because it reflects live state: an encrypted file
+   * offers Change/Remove password where a plain one offers Encrypt.
+   *
+   * It takes a container so ONE list can serve two homes — the desktop split
+   * button's dropdown, and the ⋯ menu on a phone, where the caret that opens
+   * this list does not fit beside a 44px Save button. `mark` tags what it
+   * creates so the phone copy can be torn down again without disturbing the
+   * real toolbar buttons parked in that same menu.
+   */
+  private buildSaveAsItems(into: HTMLElement, close: () => void, mark = false) {
+    const tag = <T extends HTMLElement>(el: T): T => {
+      if (mark) el.dataset.phoneSaveas = '1'
+      return el
+    }
     const item = (icon: string, label: string, title: string, onClick: () => void) => {
       const b = document.createElement('button')
       b.className = 'ed-btn'
@@ -469,13 +764,12 @@ export class Editor {
       b.appendChild(Object.assign(document.createElement('span'), { textContent: label }))
       b.title = title
       b.addEventListener('click', () => {
-        wrap.classList.remove('open')
+        close()
         onClick()
       })
-      menu.appendChild(b)
+      into.appendChild(tag(b))
     }
-    const rebuild = () => {
-      menu.textContent = ''
+    {
       // FILE operations only — everything that goes to OTHER PEOPLE lives in
       // the Share panel (one mental model: Save = for me, Share = for others).
       item(ICONS.copy, t('Save a copy…'),
@@ -502,29 +796,77 @@ export class Editor {
       }
       // the document AS DATA — history and the AI/JSON round-trip live with
       // the other file operations now (they were buried in the About dialog)
-      menu.appendChild(div('ed-menu-sep'))
+      into.appendChild(tag(div('ed-menu-sep')))
       item(ICONS.history, t('Version history…'),
         t('Restore an earlier auto-saved version of this deck (kept locally in this browser).'),
         () => void this.openVersionHistory())
       item(ICONS.code, t('Copy document JSON'),
-        t('Copies this deck as plain JSON — paste it into an AI chat or any tool, then bring the edited JSON back here.'),
+        t('Copies this deck as plain JSON — content only, no live-session keys. Edit it in another tool, then bring it back with Replace from JSON.'),
         () => void this.copyDocJson())
       item(ICONS.code, t('Replace from JSON…'),
         t('Paste edited document JSON to replace this deck’s content — ⌘Z undoes.'),
         () => this.openReplaceJson())
+      item(ICONS.template, t('Start from scratch…'),
+        t('Replace every slide with one blank slide. Keeps the deck’s theme, name and live session — ⌘Z undoes.'),
+        () => this.startFromScratch())
     }
-    wrap.append(trigger, menu)
-    document.addEventListener('pointerdown', (ev) => {
-      if (!wrap.contains(ev.target as Node)) wrap.classList.remove('open')
-    })
-    return wrap
+  }
+
+  /**
+   * Put the save-as list at the bottom of ⋯ on a phone.
+   *
+   * The split button's caret is hidden there — it does not fit beside a 44px
+   * Save target — which left Save a copy, Duplicate as new deck, every password
+   * action, Version history and the whole JSON round-trip with NO route on a
+   * phone at all. They are file operations, so ⋯ ("everything occasional") is
+   * where they belong rather than a second nested dropdown, which on glass is
+   * a worse answer than a long list.
+   *
+   * Rebuilt on each open (the list is state-dependent) and torn down BY TAG:
+   * the buttons sharing this menu are the real toolbar nodes on loan from the
+   * bar, and clearing the container would destroy them.
+   */
+  private fillPhoneSaveAs(menu: HTMLElement, wrap: HTMLElement) {
+    for (const stale of Array.from(menu.querySelectorAll('[data-phone-saveas]'))) stale.remove()
+    if (!this.phoneChromeOn) return
+    // `el.dataset.x = …`, never Object.assign(el, {dataset}) — dataset is a
+    // getter-only accessor, so assigning it wholesale THROWS. It type-checks
+    // either way, and the throw here landed before the menu's own toggle, so
+    // the symptom was ⋯ refusing to open at all rather than anything about
+    // save-as.
+    const sep = div('ed-menu-sep')
+    sep.dataset.phoneSaveas = '1'
+    menu.appendChild(sep)
+    this.buildSaveAsItems(menu, () => wrap.classList.remove('open'), true)
+  }
+
+  /**
+   * Clear the deck back to a single blank slide (issue #31). Starting a fresh
+   * presentation meant deleting every slide by hand, then stripping the one
+   * the deck refuses to delete.
+   *
+   * CONTENT ONLY: docId, theme, size, layouts and the live session all stay.
+   * "Duplicate as new deck…" (above) is the action that changes IDENTITY, and
+   * conflating the two here would be the surprising choice — under collab this
+   * lands as an ordinary edit everyone sees, which is what "let's start over
+   * on this deck" means. One commit, so ⌘Z brings the whole deck back.
+   */
+  private startFromScratch() {
+    const n = this.store.doc.slides.length
+    if (!window.confirm(t('Replace all {n} slides with one blank slide? ⌘Z undoes this.', { n: String(n) }))) return
+    const blank = builtinLayouts().find((l) => l.id === 'layout-blank')
+    if (!blank) return
+    this.canvas.commitTextEdit() // a live text edit would commit ONTO the new slide
+    this.store.commit(() => {
+      this.store.doc.slides = [instantiateLayout(blank)]
+    }, 'slides')
   }
 
   /** A sealed hand-out: present-only player file, no editor, no live session. */
   private async savePresentationPackage() {
     const clone = JSON.parse(JSON.stringify(this.store.doc)) as import('../model').BentoDoc
     clone.readonly = true
-    delete clone.collab // a sealed package must not join (or leak) the live room
+    stripCollabSecrets(clone) // a sealed package must not join (or leak) the live room
     try {
       const ok = await writeUpdatedFileAs(await serializeAuto(clone), clone, { suffix: 'presentonly' })
       if (ok) this.toast(t('Presentation package saved — it opens straight into the show'))
@@ -545,9 +887,7 @@ export class Editor {
     }
     const clone = JSON.parse(JSON.stringify(this.store.doc)) as import('../model').BentoDoc
     clone.collab = { ...c, role: 'reader', on: true, sync: undefined }
-    delete clone.collab.writerPriv // the muzzle — no write capability travels
-    delete clone.collab.ownerPriv // v2: neither the owner key…
-    delete clone.collab.invite //    …nor any invite (delegation) material
+    stripCollabSecrets(clone, { keepRoom: true })
     try {
       const ok = await writeUpdatedFileAs(await serializeAuto(clone), clone, { suffix: 'viewonly' })
       if (ok) this.toast(t('Read-only copy saved — it follows the live session, view only'))
@@ -571,8 +911,12 @@ export class Editor {
     this.canvas.commitTextEdit()
     this.session?.stampInto(this.store.doc) // copies rejoin as true forks
     const clone = JSON.parse(JSON.stringify(this.store.doc)) as import('../model').BentoDoc
+    // Strip FIRST, then delegate: the invite is the only private material an
+    // editor copy is allowed to carry. A v2 room is verified through the
+    // owner→invite→member chain, so a stray `writerPriv` (room-wide write key
+    // from a pre-v2 mint) would be a second, UNREVOKABLE way in.
+    stripCollabSecrets(clone, { keepRoom: true })
     clone.collab!.invite = await mintInvite(c.ownerPriv, 'writer')
-    delete clone.collab!.ownerPriv
     clone.collab!.on = true
     try {
       const ok = await writeUpdatedFileAs(await serializeAuto(clone), clone, { suffix: 'invite' })
@@ -582,9 +926,19 @@ export class Editor {
     }
   }
 
+  /**
+   * The document as loose data (the AI/tooling round-trip). It leaves WITHOUT
+   * the live session: this text is pasted into chats, tickets and scratch
+   * files, and `collab` is a bearer capability — the room key decrypts every
+   * frame and blob the relay holds, and the private halves grant writing and
+   * member revocation on top. Nothing about the round-trip needs a room, and
+   * openReplaceJson keeps THIS document's, so dropping the block costs nothing.
+   */
   private async copyDocJson() {
+    const clone = JSON.parse(JSON.stringify(this.store.doc)) as import('../model').BentoDoc
+    stripCollabSecrets(clone)
     try {
-      await navigator.clipboard.writeText(JSON.stringify(this.store.doc))
+      await navigator.clipboard.writeText(JSON.stringify(clone))
       this.toast(t('Document JSON copied'))
     } catch {
       this.toast(t('Couldn’t access the clipboard'))
@@ -608,8 +962,22 @@ export class Editor {
     applyB.className = 'ed-btn ed-btn-primary'
     applyB.textContent = t('Apply')
     applyB.addEventListener('click', () => {
-      const ok = (window as unknown as { bento?: { loadDoc?: (j: string) => boolean } }).bento?.loadDoc?.(ta.value)
-      if (ok) {
+      // parseDoc + replaceDoc rather than window.bento.loadDoc (which is the
+      // same two calls) because the collab decision has to be made BEFORE the
+      // swap: replaceDoc's events reach the sync session synchronously, and it
+      // re-attaches to whatever `collab` the new document holds.
+      //
+      // The live session belongs to THIS document, not to the pasted text. The
+      // copy side sends no collab at all, so adopting the pasted one would
+      // either wipe the user's room credentials (paste of our own JSON) or
+      // silently move the deck into a room that came from somewhere else.
+      // Content is imported; identity and capability are not.
+      const next = parseDoc(ta.value)
+      if (next) {
+        const keep = this.store.doc.collab
+        if (keep) next.collab = keep
+        else delete next.collab
+        this.store.replaceDoc(next)
         this.toast(t('Document replaced — ⌘Z undoes'))
         overlay.remove()
       } else {
@@ -697,10 +1065,14 @@ export class Editor {
   private async saveAsTemplate() {
     const clone = JSON.parse(JSON.stringify(this.store.doc)) as import('../model').BentoDoc
     clone.template = true
-    delete clone.collab // instances mint their own credentials
+    stripCollabSecrets(clone) // instances mint their own credentials
     delete (clone as { docId?: string }).docId
     try {
-      const ok = await writeUpdatedFileAs(serializeFile(clone), clone, { suffix: 'template' })
+      // serializeAuto, never serializeFile: a template is the copy people hand
+      // around, and a password-protected deck saved as one wrote its body in
+      // PLAINTEXT while the preview veto still made the file thumbnail as
+      // locked — it looked protected and was readable in any text editor.
+      const ok = await writeUpdatedFileAs(await serializeAuto(clone), clone, { suffix: 'template' })
       if (ok) this.toast(t('Template saved — every open of it starts a fresh deck'))
     } catch (err) {
       console.error(err)
@@ -757,13 +1129,13 @@ export class Editor {
     nameInput.type = 'text'
     nameInput.placeholder = t('Guest')
     try {
-      nameInput.value = localStorage.getItem('bento-author') ?? ''
+      nameInput.value = lsGet('bento-author') ?? ''
     } catch {
       /* storage unavailable */
     }
     nameInput.addEventListener('change', () => {
       try {
-        localStorage.setItem('bento-author', nameInput.value.trim())
+        lsSet('bento-author', nameInput.value.trim())
       } catch {
         /* storage unavailable */
       }
@@ -793,7 +1165,7 @@ export class Editor {
       else if (cme.v === 2 && cme.ownerPriv) { myRole = 'owner'; myPub = cme.owner }
       else if (cme.v === 2 && cme.invite) {
         myRole = 'editor'
-        try { myPub = JSON.parse(localStorage.getItem(`bento-member-${this.store.doc.docId}`) ?? 'null')?.pub } catch { /* absent */ }
+        myPub = lsJson<{ pub?: string } | null>(`bento-member-${this.store.doc.docId}`, null)?.pub
       } else if (cme.writerPriv) { myRole = 'editor'; myPub = cme.writerPub }
       if (myRole) {
         const label = div('ed-share-label')
@@ -803,7 +1175,7 @@ export class Editor {
         const who = document.createElement('span')
         who.className = 'who'
         let myName = t('Guest')
-        try { myName = localStorage.getItem('bento-author') || myName } catch { /* ok */ }
+        myName = lsGet('bento-author') || myName
         who.textContent = `${myName} (${t('you')})`
         const where = document.createElement('span')
         where.className = 'where'
@@ -938,24 +1310,207 @@ export class Editor {
     await this.save(true)
   }
 
+  /**
+   * Languages dialog, organised by WHERE a language lives — because that is
+   * the only thing about it a user actually has to decide:
+   *
+   *   In this file          travels with the deck; everyone who opens it has it
+   *   On this computer      this browser only; every deck you open here
+   *   Available to add      published, not here yet
+   *
+   * The two scopes behave very differently and used to be explained in one
+   * buried sentence. Naming them as sections makes the consequence — "will the
+   * person I send this to see it?" — readable at a glance instead of inferred.
+   *
+   * "In this file" today means the languages compiled into the build. Packs
+   * spliced into a saved file will list there too, under the same heading,
+   * which is why the section is worded around the FILE rather than around
+   * "built in".
+   */
+  private async openLanguages() {
+    document.querySelector('.ed-about-overlay')?.remove()
+    const overlay = div('ed-about-overlay')
+    const box = div('ed-about')
+    const h = div('ed-about-h')
+    h.textContent = t('Languages')
+    box.appendChild(h)
+
+    const listHost = div('ed-lang-manage')
+    box.appendChild(listHost)
+
+    const paint = async () => {
+      listHost.textContent = ''
+      const bundled = LOCALE_CHOICES.filter((c) => c.code !== 'en')
+
+      const section = (label: string, blurb: string) => {
+        const s = div('ed-lang-sec')
+        s.textContent = label
+        listHost.appendChild(s)
+        const b = div('ed-lang-blurb')
+        b.textContent = blurb
+        listHost.appendChild(b)
+      }
+      const row = (label: string, sub: string, actions: HTMLElement[] = [], host: HTMLElement = listHost) => {
+        const r = div('ed-lang-row')
+        const txt = div('ed-lang-txt')
+        const n = document.createElement('b')
+        n.textContent = label
+        const s = document.createElement('span')
+        s.textContent = sub
+        txt.append(n, s)
+        r.appendChild(txt)
+        if (actions.length) {
+          const acts = div('ed-lang-acts')
+          for (const a of actions) acts.appendChild(a)
+          r.appendChild(acts)
+        }
+        host.appendChild(r)
+      }
+
+      section(t('In this file'), t('Travels with the deck — anyone you send it to gets these too.'))
+      row('English, ' + bundled.map((c) => c.label).join(', '), t('Included in every Bento'))
+      for (const p of packsInFile()) {
+        const rm = document.createElement('button')
+        rm.className = 'ed-btn'
+        rm.textContent = t('Remove')
+        rm.title = t('Take out of the file — applies when you next save')
+        rm.addEventListener('click', () => {
+          unstageFromFile(p.lang)
+          this.build()
+          this.rebuildSidebar()
+          void paint()
+        })
+        row(
+          p.label || p.lang,
+          p.pending ? t('Added when you next save') : t('Saved in this file'),
+          [rm],
+        )
+        // Say how much English this pack will actually show. A pack is frozen
+        // at the version it was built for while the app keeps gaining strings,
+        // so a translated deck slowly reverts — silently, per string. Naming
+        // the number turns "why is some of this English?" into a fact, and the
+        // sentence says it fixes itself so nobody goes hunting for a button.
+        const cov = packCoverage(p)
+        if (cov.missing > 0) {
+          const warn = div('ed-lang-warn')
+          warn.textContent = t(
+            'Built for v{v} — {n} phrases still show in English. Updating Bento refreshes it.',
+            { v: p.version ?? '?', n: String(cov.missing) },
+          )
+          listHost.appendChild(warn)
+        }
+      }
+
+      const all = await availablePacks()
+      section(t('Available to add'), t('Goes into the deck itself, so it travels with the file. Written when you next save.'))
+      if (!all.length) {
+        const none = div('ed-hint')
+        none.textContent = t('Nothing new right now.')
+        listHost.appendChild(none)
+      }
+      // Search + a scrolling list: this section is the one that grows without
+      // bound as more languages ship, while the two above stay short. Matching
+      // on the endonym AND the code means someone who knows "nl" but not
+      // "Nederlands" (or the reverse) finds it either way.
+      if (all.length > SEARCH_FROM) {
+        const search = document.createElement('input')
+        search.type = 'search'
+        search.className = 'ed-lang-search'
+        search.placeholder = t('Search languages')
+        search.addEventListener('input', () => renderAvail(search.value))
+        listHost.appendChild(search)
+      }
+      const scroller = div(all.length > SEARCH_FROM ? 'ed-lang-scroll' : '')
+      listHost.appendChild(scroller)
+
+      const renderAvail = (q = '') => {
+        scroller.textContent = ''
+        // Nothing on offer at all is already stated above — saying it twice,
+        // once as 'No language matches ""', is worse than saying it once.
+        if (!all.length) return
+        const needle = q.trim().toLowerCase()
+        const hits = needle
+          ? all.filter((p) => p.label.toLowerCase().includes(needle) || p.lang.toLowerCase().includes(needle))
+          : all
+        if (!hits.length) {
+          const none = div('ed-hint')
+          none.textContent = t('No language matches “{q}”.', { q: q.trim() })
+          scroller.appendChild(none)
+          return
+        }
+        for (const p of hits) addRow(p, scroller)
+      }
+
+      // One destination. A pack lives in the FILE — see packs.ts for why the
+      // "on this computer" option was removed rather than kept alongside.
+      const addRow = (p: import('../packs').PackListing, host: HTMLElement) => {
+        const add = document.createElement('button')
+        add.className = 'ed-btn'
+        add.textContent = t('Add')
+        add.title = t('Put it in the deck — written when you next save.')
+        add.addEventListener('click', async () => {
+          add.disabled = true
+          add.textContent = t('Adding…')
+          const got = await fetchPack(p)
+          if (typeof got === 'string') {
+            this.toast(languageInstallError(got))
+            add.disabled = false
+            add.textContent = t('Add')
+            return
+          }
+          stageForFile(got)
+          this.toast(t('{lang} will be saved with this deck', { lang: p.label }))
+          this.build()
+          this.rebuildSidebar()
+          void paint()
+        })
+        row(p.label, p.lang, [add], host)
+      }
+
+      renderAvail()
+    }
+    await paint()
+
+    const row = div('ed-about-row')
+    const close = document.createElement('button')
+    close.className = 'ed-btn'
+    close.textContent = t('Done')
+    close.addEventListener('click', () => overlay.remove())
+    row.appendChild(close)
+    box.appendChild(row)
+
+    overlay.appendChild(box)
+    overlay.addEventListener('click', (ev) => { if (ev.target === overlay) overlay.remove() })
+    document.body.appendChild(overlay)
+  }
+
   /** Globe → locale picker. UI language follows the VIEWER, never the file. */
   private languageDropdown(): HTMLElement {
     const wrap = div('ed-dropdown')
     const trigger = btn(ICONS.globe, '', () => wrap.classList.toggle('open'), t('Language'))
     const menu = div('ed-menu ed-lang-menu')
-    for (const c of LOCALE_CHOICES) {
+    // localeChoices(), NOT the frozen LOCALE_CHOICES const: installing a pack
+    // appends a language at runtime, and a static list could never show it.
+    for (const c of localeChoices()) {
       const b = btn('', c.label, () => {
         wrap.classList.remove('open')
         setLocale(c.code)
+        // switching to (or away from) Arabic/Hebrew/… turns the chrome around
+        applyDirection()
         this.build()
         this.rebuildSidebar()
       })
       if (c.code === locale()) b.classList.add('ed-lang-on')
       menu.appendChild(b)
     }
-    // right-anchor so the menu never overflows the window edge
-    menu.style.left = 'auto'
-    menu.style.right = '0'
+    menu.appendChild(div('ed-menu-sep'))
+    menu.appendChild(btn('', t('Manage languages…'), () => {
+      wrap.classList.remove('open')
+      void this.openLanguages()
+    }))
+    // end-anchored so the menu never overflows the window edge — as a class,
+    // not inline left/right, so it follows the chrome's direction (.ed-lang-menu
+    // in styles.css, alongside the Save menu's identical rule)
     wrap.append(trigger, menu)
     document.addEventListener('pointerdown', (ev) => {
       if (!wrap.contains(ev.target as Node)) wrap.classList.remove('open')
@@ -995,6 +1550,14 @@ export class Editor {
       const parentIdx = this.store.doc.slides.findIndex((s) => s.id === slide.stateOf)
       num.textContent = slide.name ?? `⤷ ${parentIdx + 1}`
       num.title = `Interactive state of slide ${parentIdx + 1} — reached via links while presenting`
+    } else if (slide.hidden) {
+      // The sidebar shows what the AUDIENCE would count. With the default
+      // numbering a hidden slide has no number at all, so show the marker
+      // alone; with office-suite numbering it keeps one, struck through — the
+      // same affordance PowerPoint uses. Either way it must be obvious at a
+      // glance, because a slide you forgot you hid is found mid-presentation.
+      num.textContent = paginates(slide, this.store.doc) ? String(this.linearNumber(i)) : '—'
+      num.title = t('Hidden — skipped while presenting and left out of PDF export')
     } else {
       num.textContent = String(this.linearNumber(i))
     }
@@ -1019,7 +1582,7 @@ export class Editor {
 
   /** 1-based position among non-state slides (what the audience counts). */
   private linearNumber(i: number): number {
-    return this.store.doc.slides.slice(0, i + 1).filter((s) => !s.stateOf).length
+    return this.store.doc.slides.slice(0, i + 1).filter((s) => paginates(s, this.store.doc)).length
   }
 
   private rebuildSidebar() {
@@ -1033,6 +1596,7 @@ export class Editor {
       if (!slide.stateOf) this.sidebar.appendChild(this.insertGap(i))
       const item = this.makeThumb(slide, i, !!slide.stateOf)
       if (slide.stateOf) item.classList.add('ed-thumb-state')
+      if (slide.hidden) item.classList.add('ed-thumb-hidden')
       this.sidebar.appendChild(item)
     })
     this.sidebar.appendChild(this.insertGap(slides.length))
@@ -1060,7 +1624,7 @@ export class Editor {
       t.textContent = i18nT('Apply layout to this slide')
       pick.appendChild(t)
     }
-    const sections: Array<[string, Slide[], boolean]> = [[t('Built-in'), builtinLayouts(), false]]
+    const sections: Array<[string, Slide[], boolean]> = [[t('Built-in'), builtinLayouts(doc.size), false]]
     if (doc.layouts?.length) sections.push([t('This document'), doc.layouts, true])
     for (const [label, layouts, custom] of sections) {
       const h = div('ed-layoutpick-h')
@@ -1151,6 +1715,14 @@ export class Editor {
   }
 
   private wireThumbDrag(item: HTMLElement, index: number) {
+    // Select on press, before the browser starts native dragging. Waiting for
+    // click/dragstart leaves Moveable's previous canvas target live while the
+    // pointer crosses the workspace.
+    item.addEventListener('mousedown', (ev) => {
+      if (ev.button !== 0 || (ev.target instanceof Element && ev.target.closest('.ed-thumb-tools'))) return
+      ev.stopPropagation() // keep the canvas Moveable gesture controller out
+      this.store.goTo(index)
+    })
     item.addEventListener('dragstart', (ev) => {
       ev.dataTransfer!.setData('text/bento-slide', String(index))
       ev.dataTransfer!.effectAllowed = 'move'
@@ -1169,15 +1741,17 @@ export class Editor {
         const [moved] = this.store.doc.slides.splice(from, 1)
         this.store.doc.slides.splice(index, 0, moved)
       }, 'slides')
-      this.store.currentIndex = index
-      this.store.emit('current')
     })
   }
 
   private highlightSidebar() {
+    let active: HTMLElement | undefined
     this.sidebar.querySelectorAll<HTMLElement>('.ed-thumb').forEach((n) => {
-      n.classList.toggle('active', Number(n.dataset.index) === this.store.currentIndex)
+      const isActive = Number(n.dataset.index) === this.store.currentIndex
+      n.classList.toggle('active', isActive)
+      if (isActive) active = n
     })
+    active?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }
 
   private scheduleThumbs() {
@@ -1252,14 +1826,13 @@ export class Editor {
         }
       }
     }, 'slides')
-    this.store.goTo(Math.min(i, this.store.doc.slides.length - 1))
-    this.store.emit('current')
   }
 
   /**
    * Export the deck to PDF via the browser's print pipeline: every linear
-   * slide becomes one exact 1600×900 page (states are reachable only through
-   * interaction, so they stay out of the paper trail).
+   * slide becomes one exact 1600×900 page. Anything outside the linear flow
+   * stays off the paper: a state is reachable only through interaction, and a
+   * hidden slide is material the audience was not meant to be handed.
    */
   exportPdf() {
     this.canvas.commitTextEdit()
@@ -1272,7 +1845,7 @@ export class Editor {
     pageCss.textContent = `@page { size: 1600px ${pageH}px; margin: 0; } #bento-print .bp-page { height: ${pageH}px; }`
     box.appendChild(pageCss)
     for (const slide of this.store.doc.slides) {
-      if (slide.stateOf) continue
+      if (!inLinearFlow(slide)) continue
       const page = div('bp-page')
       const surface = renderSlide(slide, this.store.doc, { svgAsImage: true, hidePlaceholders: true })
       // normalise to the print page size regardless of doc size
@@ -1343,7 +1916,9 @@ export class Editor {
 
   /** Insert a media element that REFERENCES a URL (not embedded). */
   private promptMediaUrl(kind: 'video' | 'audio') {
-    const url = window.prompt(t('Paste the {kind} URL — it stays a link, the file is not embedded:', { kind }))?.trim()
+    // t(kind), not kind: 'video'/'audio' are model words here, and dropping
+    // them raw into a translated sentence leaves one English noun in it.
+    const url = window.prompt(t('Paste the {kind} URL — it stays a link, the file is not embedded:', { kind: t(kind) }))?.trim()
     if (!url) return
     this.insertMedia(kind, url)
   }
@@ -1360,7 +1935,7 @@ export class Editor {
         const mb = Math.round(file.size / (1024 * 1024))
         const ok = confirm(t(
           'This {kind} is {mb} MB. Embedding keeps it inside the .bento.html but makes the file large and slow to open and save.\n\nEmbed anyway? (Cancel, then paste a hosted URL in the panel to keep the deck small.)',
-          { kind, mb },
+          { kind: t(kind), mb }, // localise the noun — see promptMediaUrl
         ))
         if (!ok) { this.insertMedia(kind, ''); return } // empty element → panel URL field
       }
@@ -1420,7 +1995,7 @@ export class Editor {
   present(fromStart = false, fullscreen = true) {
     if (this.presenting) return
     // They've started a slideshow — retire the first-run nudge for good.
-    try { localStorage.setItem('bento-slideshow-started', '1') } catch { /* storage off */ }
+    lsSet('bento-slideshow-started', '1')
     document.querySelector('.ed-hint-pulse')?.classList.remove('ed-hint-pulse')
     this.canvas.commitTextEdit()
     this.presenting = true
@@ -1434,6 +2009,13 @@ export class Editor {
   // --- paste: external objects + cross-deck elements/slides ---------------------
 
   private wirePaste() {
+    // A dropped .bento.html OPENS as a deck (and adopts a writable handle);
+    // anything else falls through to the existing image/media drop behaviour.
+    document.addEventListener('dragover', (ev: DragEvent) => {
+      if ([...(ev.dataTransfer?.items ?? [])].some((i) => i.kind === 'file')) ev.preventDefault()
+    })
+    document.addEventListener('drop', (ev: DragEvent) => { void this.openDroppedDeck(ev) })
+
     document.addEventListener('paste', (ev: ClipboardEvent) => {
       if (this.presenting) return
       const a = document.activeElement as HTMLElement | null
@@ -1453,6 +2035,7 @@ export class Editor {
         ev.preventDefault()
         let added: SlideElement[] = []
         this.store.commit(() => { added = insertElements(clip, this.store.doc, this.store.slide) })
+        if (clip.fonts?.length) injectFonts(this.store.doc)
         this.store.select(added.map((e) => e.id))
         this.toast(added.length === 1 ? t('Pasted 1 item') : t('Pasted {n} items', { n: added.length }))
         return
@@ -1462,6 +2045,7 @@ export class Editor {
         const at = this.store.currentIndex + 1
         let made: Slide[] = []
         this.store.commit(() => { made = insertSlides(clip, this.store.doc, at) }, 'slides')
+        if (clip.fonts?.length) injectFonts(this.store.doc)
         this.rebuildSidebar()
         this.store.goTo(at)
         this.toast(made.length === 1 ? t('Pasted 1 slide') : t('Pasted {n} slides', { n: made.length }))
@@ -1562,11 +2146,14 @@ export class Editor {
 
   private autosaveTimer = 0
   private lastVersionAt = 0
+  private lastBackupAt = 0
 
   private wireAutosave() {
     if (this.store.doc.readonly) return // player file — nothing to autosave
     void pruneOld()
     void this.checkRecovery()
+    this.noticeIfCannotWriteInPlace()
+    this.noticeIfJustUpdated()
     this.store.on('doc', () => this.scheduleAutosave())
   }
 
@@ -1581,8 +2168,11 @@ export class Editor {
     if (doc.readonly) return
     // Never write an encrypted deck's plaintext to IndexedDB; its file
     // write-back below stays encrypted via serializeAuto.
+    let snapshotted = false
     if (!isEncryptionActive()) {
-      await putRecovery(doc)
+      // only true if it REALLY stored — see putRecovery; no IndexedDB (Safari
+      // private browsing, some file:// contexts) must not read as "backed up"
+      snapshotted = await putRecovery(doc)
       if (Date.now() - this.lastVersionAt > 120_000) { this.lastVersionAt = Date.now(); await addVersion(doc) }
     }
     // Silent file write-back once we hold a writable handle (Chrome/Edge).
@@ -1591,9 +2181,34 @@ export class Editor {
         this.session?.stampInto(doc)
         await writeUpdatedFile(await serializeAuto(doc))
         this.store.setDirty(false)
+        markFileSaved() // the packs went out with those bytes too
         this.flashSaved()
+        return
       } catch { /* keep dirty; the IndexedDB snapshot is the backstop */ }
     }
+    // No handle (Safari/Firefox/iOS) or the write failed: the file on disk is
+    // STALE and the deck stays dirty — saying "Saved" here would be a lie. But
+    // the snapshot means the work is not lost, and that was previously
+    // invisible: nothing was shown at all, so the only signal was an amber dot
+    // that never cleared. Say what is actually true.
+    //
+    // Deliberately silent for an ENCRYPTED deck: those are never snapshotted to
+    // IndexedDB (plaintext-to-disk), so on a browser that cannot write back
+    // there is no backstop, and claiming one would be the worst kind of wrong.
+    if (snapshotted) {
+      this.lastBackupAt = Date.now()
+      this.flashSaved(t('Backed up in this browser'))
+      this.refreshDirtyHint()
+    }
+  }
+
+  /** Keep the dirty dot's tooltip honest about the backstop — the file is still
+   *  stale, but the work is recoverable, and the user should be able to find
+   *  that out by hovering the thing that is worrying them. */
+  private refreshDirtyHint() {
+    if (canWriteInPlace() || !this.lastBackupAt) return
+    const when = new Date(this.lastBackupAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    this.dirtyDot.title = t('Unsaved changes — kept in this browser at {when} and offered back if you reopen. ⌘S downloads an updated copy.', { when })
   }
 
   private async checkRecovery() {
@@ -1604,6 +2219,184 @@ export class Editor {
     try { recovered = JSON.parse(snap.json) } catch { return }
     if (docContentKey(recovered) === docContentKey(doc)) return // the file already has these edits
     this.showRecoveryBanner(snap, recovered)
+  }
+
+  /**
+   * Say ONCE, before any work is at risk, that this browser cannot rewrite the
+   * open file. Shown on Safari/Firefox and every iOS browser (all WebKit, none
+   * of which ship the File System Access API).
+   *
+   * Timing is the point. The editor used to state the opposite in its tooltips
+   * and only correct itself in a toast AFTER the first save — by which time the
+   * author had already trusted "⌘S rewrites this file" and, on a deck opened
+   * from disk, had no idea their edits were going to Downloads instead.
+   *
+   * Once per browser, not per deck: it is a property of the browser, and
+   * repeating it every time a file opens would be nagging.
+   */
+  /**
+   * Say what changed, once, right after an upgrade lands.
+   *
+   * The moment matters: before the upgrade the notes are decision support (and
+   * now ride inline in the signed manifest); AFTER it the user is inside the
+   * editor, where the features actually are. "You can write $x^2$ in any text
+   * box" means something different with a text box in front of you.
+   *
+   * Keyed on sessionStorage, NOT a stored last-seen version, because those
+   * answer different questions. We want "did this reload just follow an
+   * upgrade?", not "has this browser seen 1.0.11?". The difference is
+   * recipients: most people who open a .bento.html never upgraded anything, and
+   * a version comparison would greet them with release notes for a version they
+   * never had. They cannot reach this path — they never clicked Reload.
+   *
+   * localStorage would also be wrong mechanically: it is per ORIGIN, and in
+   * bento/tray every document gets its own origin, so a "seen" flag would be
+   * per document — five decks, five notices.
+   *
+   * Only fires when the reload actually landed on the version it promised, so a
+   * failed update never claims success. One shot: read and clear.
+   */
+  private noticeIfJustUpdated() {
+    let just: string | null = null
+    try {
+      just = sessionStorage.getItem(JUST_UPDATED_KEY)
+      sessionStorage.removeItem(JUST_UPDATED_KEY)
+    } catch { return /* private mode — no note, no harm */ }
+    if (!just || just !== APP_VERSION) return
+    if (this.store.doc.readonly) return // player file: not this person's upgrade
+
+    const bar = div('ed-recover')
+    const msg = document.createElement('span')
+    msg.textContent = t('Updated to v{v}.', { v: APP_VERSION })
+    const what = document.createElement('a')
+    what.className = 'ed-btn'
+    what.href = `https://github.com/nyblnet/bento/releases/tag/v${APP_VERSION}`
+    what.target = '_blank'
+    what.rel = 'noopener'
+    what.textContent = t('What’s new →')
+    const ok = document.createElement('button')
+    ok.className = 'ed-btn ed-btn-primary'
+    ok.textContent = t('Got it')
+    ok.addEventListener('click', () => bar.remove())
+    bar.append(msg, what, ok)
+    document.body.appendChild(bar)
+  }
+
+  /**
+   * Tab title = deck title, plus the FILE name once one is known.
+   *
+   * `openedFileName()` answers this from the handle, or from the URL when a
+   * `.bento.html` was opened directly — so it is right for a dropped file, a
+   * saved file, and a double-clicked one alike, and null for the hosted demo.
+   */
+  private syncWindowTitle() {
+    // Order matters. A handle is the truth. Failing that, a deck opened by drop
+    // is named by the file it came from — the URL is stale the moment a drop
+    // replaces the document, and would otherwise label this deck with the name
+    // of the file still sitting in the address bar.
+    const file = currentFileName() ?? this.openedAs ?? openedFileName()
+    const named = file && fileBase(file) !== this.store.doc.title
+    // Two segments, never three: a tab is narrow, and once a file name is
+    // shown the app name is the least informative thing competing for it.
+    document.title = named
+      ? `${this.store.doc.title} — ${file}`
+      : `${this.store.doc.title} — ${appConfig().appName}`
+    if (!this.fileChip) return
+    this.fileChip.hidden = !named
+    if (!file) return
+    this.fileChip.textContent = fileBase(file)
+    // Three states, because two would lie: with the API but no handle yet, ⌘S
+    // asks first and only then owns a file.
+    this.fileChip.title = !canWriteInPlace()
+      ? t('⌘S saves a copy — this browser can’t rewrite the file in place')
+      : hasFileHandle()
+        ? t('⌘S rewrites this file in place')
+        : t('⌘S asks where to save, then rewrites that file in place')
+  }
+
+  /**
+   * Open a `.bento.html` dropped onto the editor, adopting a WRITABLE handle
+   * where the browser offers one.
+   *
+   * This is the only route to in-place saving for a deck that arrived from
+   * disk. A file double-clicked in Finder opens on `file://` with no handle, so
+   * every ⌘S re-runs the save picker and asks the user to navigate to the file
+   * they already have open. `getAsFileSystemHandle()` returns a real handle for
+   * a dropped file (Chromium only), so one permission prompt converts that deck
+   * into one Bento can rewrite.
+   *
+   * Guards, in order: images and everything else keep their existing paste/drop
+   * behaviour; an encrypted deck is refused rather than half-opened, because the
+   * password gate lives in boot and there is nothing here to prompt with; and
+   * unsaved work is confirmed before being replaced, since this is destructive
+   * in a way dropping a picture is not.
+   */
+  private async openDroppedDeck(ev: DragEvent): Promise<boolean> {
+    const item = [...(ev.dataTransfer?.items ?? [])].find((i) => i.kind === 'file')
+    const named = ev.dataTransfer?.files?.[0]?.name ?? ''
+    if (!item || !/\.bento\.html$/i.test(named)) return false
+    ev.preventDefault()
+
+    if (this.store.dirty && !confirm(t('Open {name}? Unsaved changes in this deck will be lost.', { name: named }))) return true
+
+    // The handle is the prize; a plain File still opens, just without write-back.
+    //
+    // ORDER MATTERS: requestPermission() needs a live user gesture, and the drop
+    // is it. Reading the file first (600KB+ of text(), then DOMParser and
+    // JSON.parse) spends the activation, so the request throws SecurityError and
+    // the deck opens read-only — ⌘S then re-runs the save picker, which is the
+    // whole thing this feature exists to avoid. So: handle, permission, THEN read.
+    const anyItem = item as unknown as { getAsFileSystemHandle?: () => Promise<any> }
+    let handle: any = null
+    try { handle = await anyItem.getAsFileSystemHandle?.() } catch { /* not supported — read-only open */ }
+
+    let writable = false
+    if (handle?.requestPermission) {
+      try { writable = await handle.requestPermission({ mode: 'readwrite' }) === 'granted' }
+      catch { /* denied, or activation already spent — opens read-only */ }
+    }
+
+    const file: File | null = handle ? await handle.getFile() : (ev.dataTransfer?.files?.[0] ?? null)
+    if (!file) return true
+
+    const html = await file.text()
+    const el = new DOMParser().parseFromString(html, 'text/html').querySelector('#bento-doc')
+    const block = el?.textContent?.trim() ?? ''
+    // A pristine, never-saved shell ships an EMPTY block — the starter deck is
+    // generated at runtime, not stored. That file is a perfectly good Bento
+    // document; it just has nothing in it yet, so say that rather than call it
+    // a foreign file.
+    if (el && !block) { alert(t('{name} is an empty copy of Bento, not a saved deck. Open it on its own to start one.', { name: named })); return true }
+    let parsed: unknown
+    try { parsed = JSON.parse(block) } catch { alert(t('{name} isn’t a Bento document.', { name: named })); return true }
+    if ((parsed as { format?: string })?.format === 'bento/enc') {
+      alert(t('{name} is password-protected. Open it directly to unlock it.', { name: named }))
+      return true
+    }
+    const next = parseDoc(JSON.stringify(parsed))
+    if (!next) { alert(t('{name} isn’t a Bento document.', { name: named })); return true }
+
+    if (writable) adoptFileHandle(handle)
+    this.openedAs = named
+    this.store.replaceDoc(next)
+    this.canvas.render()
+    this.syncWindowTitle()
+    this.flashSaved(hasFileHandle() ? t('Opened {name}', { name: named }) : t('Opened {name} — ⌘S will save a copy', { name: named }))
+    return true
+  }
+
+  private noticeIfCannotWriteInPlace() {
+    if (canWriteInPlace()) return
+    if (lsGet(SAVE_NOTICE_KEY) === 'seen') return
+    const bar = div('ed-recover')
+    const msg = document.createElement('span')
+    msg.textContent = t('This browser can’t rewrite files in place. ⌘S will download an updated copy instead — your work is also kept in this browser and offered back if you reopen.')
+    const ok = document.createElement('button')
+    ok.className = 'ed-btn ed-btn-primary'
+    ok.textContent = t('Got it')
+    ok.addEventListener('click', () => { lsSet(SAVE_NOTICE_KEY, 'seen'); bar.remove() })
+    bar.append(msg, ok)
+    document.body.appendChild(bar)
   }
 
   private showRecoveryBanner(snap: Snapshot, recovered: import('../model').BentoDoc) {
@@ -1713,6 +2506,11 @@ export class Editor {
       ['C', t('Comment mode')],
       ['?', t('This help')],
     ])
+    section(colL, t('Canvas'), [
+      [t('Space-drag'), t('Pan the canvas, including past the edges of the slide')],
+      [t('Middle-drag'), t('Pan as well, if your mouse has a middle button')],
+      [`${mod}-${t('scroll')}`, t('Zoom in and out')],
+    ])
     section(colR, t('Lines & curves'), [
       [t('Shape ▾'), t('Draw a line, curved line or connector — then drag on the canvas')],
       [t('Drag a point'), t('Move an endpoint or anchor; drag the body to move the whole line')],
@@ -1731,6 +2529,7 @@ export class Editor {
       ['F5', t('Present')],
       ['F', t('Toggle fullscreen while presenting')],
       ['S', t('Speaker view — notes on a second screen if you have one')],
+      ['L', t('Toggle laser pointer while presenting')],
       ['M', t('Reduce motion — pause animations (also honours your OS setting)')],
       ['← · →', t('Previous · next slide')],
       ['Esc', t('End the show')],
@@ -1742,7 +2541,7 @@ export class Editor {
       t('Paste an image or text straight onto the canvas with ⌘V.'),
       t('Copy a slide (⌘C with nothing selected) and paste it into another Bento deck.'),
       t('Make a chart from a table and it stays linked — edit the table, the chart updates.'),
-      t('Your work auto-saves; restore earlier versions from About → Version history.'),
+      t('Your work auto-saves; restore earlier versions from Save → Version history.'),
     ]) { const li = document.createElement('li'); li.textContent = tip; ul.appendChild(li) }
     tips.appendChild(ul); colL.appendChild(tips)
     const more = div('ed-help-more')
@@ -1762,13 +2561,21 @@ export class Editor {
   }
 
   private savedTimer = 0
-  private flashSaved() {
+  private savedHideTimer = 0
+  private flashSaved(message = t('Saved')) {
     let tag = document.querySelector<HTMLElement>('.ed-autosaved')
     if (!tag) { tag = div('ed-autosaved'); document.querySelector('.ed-topbar .ed-title')?.after(tag) }
-    tag.textContent = t('Saved')
+    tag.textContent = message
+    // hidden while idle: at opacity 0 the tag still held its width, so after
+    // the first backup the title permanently lost the space this text needs
+    tag.hidden = false
+    void tag.offsetWidth // paint a frame at opacity 0 so the fade-in runs
     tag.classList.add('show')
     clearTimeout(this.savedTimer)
+    clearTimeout(this.savedHideTimer)
     this.savedTimer = window.setTimeout(() => tag!.classList.remove('show'), 1400)
+    // leave layout only after the 0.25s fade-out has finished
+    this.savedHideTimer = window.setTimeout(() => { tag!.hidden = true }, 1700)
   }
 
   async save(forcePicker: boolean) {
@@ -1780,6 +2587,10 @@ export class Editor {
       const result = await saveFile(this.store.doc, forcePicker)
       if (result === 'cancelled') return
       this.store.setDirty(false)
+      // the file name is knowable from here on — put it in the tab and the chip
+      this.syncWindowTitle()
+      // staged language packs are in the bytes now — stop calling them pending
+      markFileSaved()
       // record a recovery baseline + a version checkpoint at each manual save
       if (!isEncryptionActive()) { void putRecovery(this.store.doc); void addVersion(this.store.doc); this.lastVersionAt = Date.now() }
       // Saving is the opt-in: a named, saved deck is "live by default" from
@@ -2004,34 +2815,80 @@ export class Editor {
       } else {
         const { release } = result
         status.textContent = ''
+        // One card: version, what changed, and the ways to take it. Grouping
+        // them is the layout fix — as five loose children of the status block
+        // the notes were squeezed between the heading and a vertical stack of
+        // three buttons, in a dialog that also has to hold Document properties
+        // and the toggles. The card stretches full width and owns its scroll.
+        const card = div('ed-about-update')
+        status.appendChild(card)
         const line = div('ed-about-new')
         line.textContent = t('Version {v} is available.', { v: release.version })
-        status.appendChild(line)
-        if (release.notes) {
-          const notes = div('ed-about-notes')
-          notes.textContent = release.notes
-          status.appendChild(notes)
+        card.appendChild(line)
+        // Prefer per-version notes filtered to what THIS file actually skipped:
+        // releases land days apart, so a reader two versions behind should see
+        // both, and a reader one version behind should not see the older one
+        // again. `notes` is the fallback for a manifest that predates the field.
+        const skipped = release.notesFrom
+          ? Object.keys(release.notesFrom)
+              .filter((v) => compareVersions(v, APP_VERSION) > 0)
+              .sort((a, b) => compareVersions(b, a))
+          : []
+        if (skipped.length) {
+          const lines = skipped.flatMap((v) =>
+            (release.notesFrom![v] ?? []).map((h) => (skipped.length > 1 ? `• ${h}  (${v})` : `• ${h}`)))
+          card.appendChild(releaseNotes(lines.join('\n')))
+        } else if (release.notes) {
+          card.appendChild(releaseNotes(release.notes))
         }
+        const actions = div('ed-about-actions')
         const fail = (err: any) => { status.textContent = t('Update failed: {m}', { m: String(err?.message ?? err) }) }
-        const done = () => {
+        const done = (outcome: InPlaceOutcome) => {
           status.textContent = ''
+          const after = div('ed-about-update')
+          status.appendChild(after)
           const ok = div('ed-about-new')
           ok.textContent = t('Updated to v{v} on disk.', { v: release.version })
-          status.appendChild(ok)
+          after.appendChild(ok)
           const note = div('ed-about-notes')
-          note.textContent = canUpdateInPlace()
-            ? t('This window is still running v{v} — reload to finish. A v{v} backup was downloaded.', { v: APP_VERSION })
-            : t("This window is still running v{v}. If you overwrote the file that's open here, reload; otherwise open the file you saved.", { v: APP_VERSION })
-          status.appendChild(note)
+          // Say where the rollback actually went. It lands beside the document
+          // with a host installed and in the downloads folder without one, and
+          // a backup nobody can find is not much of a backup.
+          note.textContent = outcome.backup === 'beside'
+            ? t('This window is still running v{v} — reload to finish. A v{v} backup was saved beside this file.', { v: APP_VERSION })
+            : outcome.backup === 'downloaded'
+              ? t('This window is still running v{v} — reload to finish. A v{v} backup was downloaded.', { v: APP_VERSION })
+              : t("This window is still running v{v}. If you overwrote the file that's open here, reload; otherwise open the file you saved.", { v: APP_VERSION })
+          after.appendChild(note)
           const reloadB = document.createElement('button')
           reloadB.className = 'ed-btn ed-btn-primary'
           reloadB.textContent = t('Reload into new version')
           reloadB.addEventListener('click', () => {
             this.store.setDirty(false) // disk already holds this exact document
+            // Hand a note to the version we are about to become. sessionStorage
+            // because the lifetime is exactly right: it survives this reload and
+            // dies with the tab. See noticeIfJustUpdated.
+            try { sessionStorage.setItem(JUST_UPDATED_KEY, release.version) } catch { /* private mode */ }
             location.reload()
           })
-          status.appendChild(reloadB)
+          const row2 = div('ed-about-actions')
+          row2.appendChild(reloadB)
+          after.appendChild(row2)
         }
+
+        // The inline notes above are the signed manifest's summary — the first
+        // five CHANGELOG lead-ins (scripts/release.mjs). This is the rest of
+        // them: the per-version release page, which publish-site.mjs creates
+        // for every release, so the link cannot dangle. First in the action
+        // row deliberately: reading before deciding is the point.
+        const notesLink = document.createElement('a')
+        notesLink.className = 'ed-btn'
+        notesLink.href = `https://github.com/nyblnet/bento/releases/tag/v${release.version}`
+        notesLink.target = '_blank'
+        notesLink.rel = 'noopener'
+        notesLink.textContent = t('What’s new →')
+        notesLink.title = t('Read the release notes for v{v} (opens in a new tab)', { v: release.version })
+        actions.appendChild(notesLink)
 
         const inPlaceB = document.createElement('button')
         inPlaceB.className = 'ed-btn ed-btn-primary'
@@ -2045,11 +2902,11 @@ export class Editor {
           try {
             this.session?.stampInto(this.store.doc)
             const written = await applyUpdateInPlace(release, this.store.doc)
-            if (written) done()
+            if (written) done(written)
             else { inPlaceB.disabled = false; inPlaceB.textContent = t('Update this file…') }
           } catch (err: any) { fail(err) }
         })
-        status.appendChild(inPlaceB)
+        actions.appendChild(inPlaceB)
 
         const getB = document.createElement('button')
         getB.className = 'ed-btn'
@@ -2064,14 +2921,33 @@ export class Editor {
             getB.textContent = t('Downloaded ✓')
             const note = div('ed-about-notes')
             note.textContent = t('This window keeps running v{v} until you open the downloaded file.', { v: APP_VERSION })
-            status.appendChild(note)
+            card.appendChild(note)
           } catch (err: any) { fail(err) }
         })
-        status.appendChild(getB)
+        actions.appendChild(getB)
+        card.appendChild(actions)
       }
     })
     row.appendChild(checkB)
     box.append(row, status)
+
+    // Appearance — a VIEWER preference, so it sits with the others (language,
+    // auto-update) rather than anywhere near the document's own settings.
+    // "Auto" is first and is the default: most people want their machine's
+    // choice, and the explicit options exist for the ones who do not.
+    const themeRow = document.createElement('label')
+    themeRow.className = 'ed-about-auto'
+    const themeSel = document.createElement('select')
+    for (const c of THEME_CHOICES) {
+      const o = document.createElement('option')
+      o.value = c
+      o.textContent = c === 'auto' ? t('Match my system') : c === 'light' ? t('Light') : t('Dark')
+      if (c === themeChoice()) o.selected = true
+      themeSel.appendChild(o)
+    }
+    themeSel.addEventListener('change', () => setTheme(themeSel.value as never))
+    themeRow.append(document.createTextNode(t('Appearance') + ' '), themeSel)
+    box.appendChild(themeRow)
 
     const autoRow = document.createElement('label')
     autoRow.className = 'ed-about-auto'
@@ -2091,7 +2967,11 @@ export class Editor {
     offCb.type = 'checkbox'
     offCb.checked = offlineEnabled()
     offCb.addEventListener('change', () => {
-      setOffline(offCb.checked)
+      // setOffline reports whether the preference PERSISTED. It holds for this
+      // session either way (net.ts keeps it in memory), but a switch that
+      // silently forgets itself on reload has to say so — it used to show
+      // "on" over a setting that had never been stored.
+      const stuck = setOffline(offCb.checked)
       if (offCb.checked) {
         if (this.session) disconnectOnline(this.session)
       } else {
@@ -2099,9 +2979,11 @@ export class Editor {
       }
       this.wireOnlineStatus()
       this.toast(
-        offCb.checked
-          ? t('Offline mode on — nothing leaves this computer')
-          : t('Offline mode off — online features re-enabled'),
+        !stuck
+          ? t('Offline mode is on for this tab, but could not be saved — this browser is blocking site data, so it will not survive a reload')
+          : offCb.checked
+            ? t('Offline mode on — nothing leaves this computer')
+            : t('Offline mode off — online features re-enabled'),
       )
     })
     offRow.append(offCb, document.createTextNode(' ' + t('Offline mode — block all network features (updates, online collaboration)')))
@@ -2181,6 +3063,26 @@ export class Editor {
  * never receive it, and no later sync repairs that. Built at display time
  * because t() must never be frozen into a module-level const.
  */
+/**
+ * Turn a pack-install failure into a sentence. Built at display time because
+ * t() must never be frozen into a module-level const.
+ */
+function languageInstallError(code: import('../packs').PackError): string {
+  switch (code) {
+    case 'offline':
+      return t('Couldn’t download that language — check your connection and try again.')
+    case 'bad-pack':
+      return t('That language pack couldn’t be read.')
+    case 'wrong-app':
+      return t('That language pack was built for a different Bento app.')
+    // Says what happened and what was done about it, without pretending to
+    // know whether it was an attack or a bungled upload — we cannot tell, and
+    // the answer is the same either way: it was not installed.
+    case 'unverified':
+      return t('That language pack failed its security check, so it wasn’t added.')
+  }
+}
+
 function syncNoticeText(n: import('../sync/session').SyncNotice): string {
   switch (n.code) {
     case 'too-large':
@@ -2194,6 +3096,56 @@ function syncNoticeText(n: import('../sync/session').SyncNotice): string {
     case 'rate-limited':
       return t('Too many changes at once — live sync is catching up.')
   }
+}
+
+/**
+ * Release notes → a real list.
+ *
+ * The manifest carries them as PLAIN TEXT, one "• " bullet per line, capped at
+ * five plus an "…and N more" tail (scripts/release.mjs). A pre-wrap block gave
+ * every wrapped bullet a flush-left second line, which at 320px was most of
+ * them — so one item read as two and the box looked like a wall. Split per line
+ * and hang the indent instead.
+ *
+ * Always textContent, never innerHTML: the manifest is signed, but a signature
+ * says who wrote a string, not that it is safe to run.
+ */
+function releaseNotes(notes: string): HTMLElement {
+  const box = div('ed-about-release')
+  for (const raw of notes.split('\n')) {
+    const text = raw.trim()
+    if (!text) continue
+    const bullet = /^[•*-]\s+/.test(text)
+    const item = div(bullet ? 'ed-about-note' : 'ed-about-more')
+    item.textContent = bullet ? text.replace(/^[•*-]\s+/, '') : text
+    box.appendChild(item)
+  }
+  return box
+}
+
+/**
+ * Take the live session out of a copy that is about to leave this machine.
+ * ONE list, in one place: every field under `collab` is a bearer capability,
+ * so a hand-out that forgets one of them grants the recipient write access to
+ * the room, the power to revoke its members, or the ability to decrypt every
+ * frame and blob the relay has ever stored — and the file looks completely
+ * ordinary afterwards. Divergent per-export copies of this list are how one
+ * export path ends up leaking what the other three strip.
+ *
+ * The default is to drop the block outright (sealed packages, templates, the
+ * JSON on the clipboard: none of them may join anything). `keepRoom` is for
+ * the copies that are MEANT to follow the session — they keep the room, the
+ * symmetric read key and the public keys, and lose only the private halves.
+ */
+function stripCollabSecrets(doc: import('../model').BentoDoc, opts: { keepRoom?: boolean } = {}) {
+  if (!doc.collab) return
+  if (!opts.keepRoom) {
+    delete doc.collab
+    return
+  }
+  delete doc.collab.writerPriv // the muzzle — no write capability travels
+  delete doc.collab.ownerPriv // v2: neither the owner key…
+  delete doc.collab.invite //    …nor any invite (delegation) material
 }
 
 /** Deep-clone an element with a fresh id (same-slide duplicates must not share ids). */

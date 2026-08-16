@@ -1,25 +1,35 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 The Bento authors
 // Boot sequence for bento/spaces. Order matters: configure the app, then
-// capture the pristine document BEFORE any DOM mutation — the captured copy
-// is what gets re-serialized on save.
-//
-// SCAFFOLD: this is the reference wiring for a Bento app, deliberately small
-// enough to read in one sitting. It exercises every kernel seam — app config,
-// self-save, encryption-aware serialization, autosave/recovery, i18n, signed
-// updates, the AI round-trip surface — so a new app can be grown from here
-// rather than assembled from guesses. See docs/PLATFORM.md §10.
+// capture the pristine document BEFORE any DOM mutation — the captured copy is
+// what gets re-serialized on save.
 
 import './styles.css'
 import { configureApp, appConfig } from '../../kernel/src/app.ts'
 import {
-  capturePristine, readEmbeddedDoc, serializeFile, serializeAuto,
-  saveFile, parseEnvelope,
+  capturePristine, readEmbeddedDoc, serializeFile, serializeAuto, registerPreview,
+  saveFile, parseEnvelope, canWriteInPlace, decryptEnvelope, setEncryptionPassword,
+  writeUpdatedFileAs,
+  isEncryptionActive,
 } from '../../kernel/src/save.ts'
 import { putRecovery, getRecovery, clearRecovery, pruneOld } from '../../kernel/src/autosave.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
-import { t } from './i18n'
-import { parseDoc, starterDoc, docContentKey, uid, type SpacesDoc } from './model'
+import { t, locale, applyDirection } from './i18n'
+import { parseDoc, docContentKey, uid, newPage, type SpacesDoc, type ParseResult } from './model'
+import {
+  validateDoc, outlineDoc, statsDoc,
+  planInsertBlocks, planUpdateBlock, planRemoveBlocks, planMoveBlock, planUpdatePage, planRemovePage,
+  fieldsReport, issuesReport, planSetField, planNewIssue,
+  plainTitle, badTitle,
+  type Plan, type PlanError, type IssueQuery,
+} from './agent'
+import { starterDoc } from './starter'
+import { textOf } from './sanitize'
+import { evaluate, format, pageContext } from './calc'
+import { buildSpacePreview } from './preview'
+import { Store } from './store'
+import { Editor } from './editor'
+import { downloadMarkdown } from './about'
 
 configureApp({
   appId: 'bento-spaces',
@@ -27,164 +37,403 @@ configureApp({
   manifestUrl: 'https://bento.page/releases/spaces/manifest.json',
 })
 
+// Every save writes a still render of the home page into the shell, for the
+// readers that run no script: macOS QuickLook, iOS Files, Bento Tray, and any
+// preview pane that renders HTML without executing it. Without this the runtime
+// never inflates, the splash is never removed, and a saved space shows a boot
+// animation where its content should be. See preview.ts.
+registerPreview((doc) => buildSpacePreview(doc as unknown as SpacesDoc))
+
 capturePristine()
+applyDirection()
 
 const embedded = readEmbeddedDoc()
-// Encrypted files use the same bento/enc envelope as every Bento app; the
-// scaffold has no password UI yet, so it reports rather than pretending.
-if (embedded && parseEnvelope(embedded)) {
-  document.body.innerHTML =
-    `<div class="sp-gate"><h1>${t('This file is encrypted.')}</h1>` +
-    `<p>${t('Password unlocking is not implemented in this build yet.')}</p></div>`
+
+const envelope = embedded ? parseEnvelope(embedded) : null
+
+if (envelope) {
+  void passwordGate()
 } else {
-  boot((embedded && parseDoc(embedded)) || starterDoc())
+  const res = parseDoc(embedded ?? '')
+  if (res.ok) {
+    if (!res.doc.docId) res.doc.docId = uid('doc')
+    boot(res.doc, res.repaired, res.frozen)
+  } else if (res.err === 'empty') {
+    // THE ONLY path to the starter. Anything else that failed to parse is
+    // someone's data, and replacing it with an empty space would be a loss the
+    // first ⌘S makes permanent.
+    const doc = starterDoc()
+    doc.docId = uid('doc')
+    boot(doc, [], undefined)
+  } else {
+    refuse(res)
+  }
 }
 
-function boot(doc: SpacesDoc) {
+/**
+ * An encrypted space: ask, then boot.
+ *
+ * This MUST exist for as long as the About dialog can set a password —
+ * otherwise encrypting a space locks its author out of it permanently, which
+ * is the worst bug this app could have. The password is held in memory so
+ * every later save stays encrypted.
+ */
+async function passwordGate(): Promise<void> {
+  document.getElementById('bento-splash')?.remove()
+  const wrap = document.createElement('div')
+  wrap.className = 'sp-gate'
+  const card = document.createElement('div')
+  card.className = 'sp-gate-card'
+  card.innerHTML = `<h1>${t('This space is locked')}</h1>` +
+    `<p>${t('Enter the password to open it.')}</p>`
+  const input = document.createElement('input')
+  input.type = 'password'
+  input.className = 'sp-find'
+  input.autocomplete = 'current-password'
+  const go = document.createElement('button')
+  go.className = 'sp-btn sp-primary'
+  go.textContent = t('Unlock')
+  const err = document.createElement('p')
+  err.className = 'sp-note'
+  card.append(input, go, err)
+  wrap.append(card)
+  document.body.append(wrap)
+  input.focus()
+
+  const tryUnlock = async () => {
+    const pass = input.value
+    if (!pass) return
+    go.disabled = true
+    const json = await decryptEnvelope(envelope!, pass)
+    go.disabled = false
+    if (json === null) { err.textContent = t('Wrong password — try again'); input.select(); return }
+    const res = parseDoc(json)
+    if (!res.ok) { err.textContent = t('Unlocked, but the document inside could not be read.'); return }
+    // held in memory so ⌘S and autosave keep writing encrypted
+    setEncryptionPassword(pass)
+    wrap.remove()
+    if (!res.doc.docId) res.doc.docId = uid('doc')
+    boot(res.doc, res.repaired, res.frozen)
+  }
+  go.addEventListener('click', () => { void tryUnlock() })
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') void tryUnlock() })
+}
+
+/**
+ * A document we cannot read is NOT a reason to show an empty one.
+ *
+ * No editor, no autosave, and two ways out that do not require us to have
+ * understood the file: keep the bytes exactly as they are, or take the JSON
+ * somewhere else.
+ */
+function refuse(res: Extract<ParseResult, { ok: false }>): void {
+  const detail = 'detail' in res ? res.detail : ''
+  const what = res.err === 'format'
+    ? t('This is not a bento/spaces document — {detail}.', { detail })
+    : res.err === 'json'
+      ? t('The document block is not valid JSON — {detail}.', { detail })
+      : t('The document block is not shaped like a space — {detail}.', { detail })
+
+  gate(t('This file could not be opened'), what, [
+    [t('Save an untouched copy…'), () => {
+      // the bytes as they are, NOT a re-serialization: we did not understand
+      // this document, so we must not rewrite it
+      const html = `<!DOCTYPE html>\n${document.documentElement.outerHTML}`
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(new Blob([html], { type: 'text/html' }))
+      a.download = 'untouched-copy.bento.html'
+      a.click()
+    }],
+    [t('Copy the document JSON'), () => { void navigator.clipboard?.writeText(embedded ?? '') }],
+  ])
+
+  const pre = document.createElement('pre')
+  pre.className = 'sp-gate-raw'
+  pre.textContent = (embedded ?? '').slice(0, 400)
+  document.querySelector('.sp-gate-card')?.append(pre)
+}
+
+function gate(title: string, body: string, actions: Array<[string, () => void]>): void {
+  document.getElementById('bento-splash')?.remove()
+  const wrap = document.createElement('div')
+  wrap.className = 'sp-gate'
+  const card = document.createElement('div')
+  card.className = 'sp-gate-card'
+  const h = document.createElement('h1')
+  h.textContent = title
+  const p = document.createElement('p')
+  p.textContent = body
+  card.append(h, p)
+  for (const [label, fn] of actions) {
+    const b = document.createElement('button')
+    b.className = 'sp-btn sp-primary'
+    b.textContent = label
+    b.addEventListener('click', fn)
+    card.append(b)
+  }
+  wrap.append(card)
+  document.body.append(wrap)
+}
+
+function boot(doc: SpacesDoc, repaired: string[], frozen?: 'policy' | 'version'): void {
   document.title = `${doc.title} — ${appConfig().appName}`
   document.getElementById('bento-splash')?.remove()
 
-  const app = document.getElementById('app')!
-  app.innerHTML =
-    `<header class="sp-bar">` +
-    `<span class="sp-mark">bento<span>/</span>spaces</span>` +
-    `<input class="sp-title" value="">` +
-    `<button class="sp-save">${t('Save')}</button>` +
-    `<span class="sp-ver">v${APP_VERSION}</span>` +
-    `</header><main class="sp-doc"></main>`
+  const store = new Store(doc)
+  // `doc.readonly` was declared in the format and read by NOTHING: a space
+  // saved as a reading copy opened fully editable, so the one property the
+  // sender chose was the one the file did not keep. It is not a security
+  // boundary — anyone can edit the JSON — but a file that says it is a reading
+  // copy must behave like one for the person who opens it.
+  //
+  // `frozen` is the other, unrelated reason to lock: this build does not
+  // understand the file and must not rewrite it.
+  if (frozen || doc.readonly) store.readOnly = true
+  const editor = new Editor(document.getElementById('app')!, store)
 
-  const titleInput = app.querySelector<HTMLInputElement>('.sp-title')!
-  const main = app.querySelector<HTMLElement>('.sp-doc')!
-  titleInput.value = doc.title
-
-  let saveTimer: number | undefined
-  /** Debounced autosave — a recovery snapshot survives a crash or tab close. */
-  const touch = () => {
-    doc.modified = new Date().toISOString()
-    clearTimeout(saveTimer)
-    saveTimer = setTimeout(() => void putRecovery(doc), 2500) as unknown as number
+  if (!frozen && doc.readonly) {
+    banner(t('This is a reading copy. It opens for reading; nothing you do here changes the file.'))
+  }
+  if (frozen) {
+    banner(frozen === 'version'
+      ? t('This file was written by a newer version of bento/spaces. It is open read-only so nothing is lost.')
+      : t('This file declares rules this build does not know. It is open read-only so nothing is lost.'))
+  }
+  if (repaired.length) {
+    banner(t('{n} duplicate or missing id(s) were repaired so links and pages resolve.', { n: repaired.length }))
   }
 
-  const render = () => {
-    main.innerHTML = ''
-    for (const block of doc.blocks) {
-      const el = document.createElement('p')
-      el.className = 'sp-block'
-      el.contentEditable = 'true'
-      el.textContent = block.text
-      el.dataset.id = block.id
-      el.addEventListener('input', () => {
-        block.text = el.textContent ?? ''
-        touch()
-      })
-      el.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault()
-          const at = doc.blocks.indexOf(block)
-          const fresh = { id: uid(), text: '' }
-          doc.blocks.splice(at + 1, 0, fresh)
-          touch()
-          render()
-          focusBlock(fresh.id)
-        } else if (e.key === 'Backspace' && !el.textContent && doc.blocks.length > 1) {
-          e.preventDefault()
-          const at = doc.blocks.indexOf(block)
-          doc.blocks.splice(at, 1)
-          touch()
-          render()
-          focusBlock(doc.blocks[Math.max(0, at - 1)]?.id)
-        }
-      })
-      main.appendChild(el)
+  editor.onSave = () => { void doSave() }
+  editor.onSaveAs = (suffix: string) => {
+    if (suffix === '__markdown') { downloadMarkdown(store); return }
+    store.endRun()
+    // "Save a copy…" must leave you editing the ORIGINAL. That is what the
+    // label promises, and the file you go on typing into should never silently
+    // become the backup you just took.
+    //
+    // This used to call saveFile(doc, true), under a comment claiming the
+    // kernel kept the in-place handle pointed at the working file. It does the
+    // opposite: saveFile ASSIGNS the picked handle to the module's in-place
+    // handle (kernel/src/save.ts), so every later ⌘S wrote to the copy while
+    // the original stayed frozen at the moment it was copied. The guarantee the
+    // comment described lives in writeUpdatedFileAs, whose keepHandle defaults
+    // to false — slides learned the same lesson when a share export became the
+    // ⌘S target and the next save overwrote it with the full document.
+    //
+    // The status line was dead too: saveFile returns 'saved-as' down the
+    // forcePicker path, never 'saved', so the confirmation never appeared.
+    void serializeAuto(store.doc)
+      .then((html) => writeUpdatedFileAs(html, store.doc, { suffix: suffix === 'copy' ? 'copy' : suffix }))
+      .then((ok) => { if (ok) editor.status(t('Copy saved — you are still editing the original')) })
+  }
+  async function doSave(): Promise<void> {
+    store.endRun()
+    editor.status(t('Saving…'))
+    const res = await saveFile(store.doc)
+    if (res === 'saved' || res === 'saved-as' || res === 'downloaded') {
+      // the document is on disk now — the dot goes out
+      store.dirty = false
+      editor.syncDirty()
+    }
+    if (res === 'saved') {
+      void clearRecovery(store.doc.docId)
+      // "Saved" is doing real work here: on a browser without file-system
+      // access this was a NEW download, and saying so is the difference
+      // between understanding that and losing track of which copy is current
+      editor.status(canWriteInPlace() ? t('Saved') : t('Saved a new copy'))
+    } else {
+      editor.status('')
     }
   }
 
-  const focusBlock = (id?: string) => {
-    if (!id) return
-    const el = main.querySelector<HTMLElement>(`[data-id="${id}"]`)
-    if (!el) return
-    el.focus()
-    const range = document.createRange()
-    range.selectNodeContents(el)
-    range.collapse(false)
-    const sel = getSelection()
-    sel?.removeAllRanges()
-    sel?.addRange(range)
-  }
-
-  titleInput.addEventListener('input', () => {
-    doc.title = titleInput.value || 'Untitled'
-    document.title = `${doc.title} — ${appConfig().appName}`
-    touch()
+  // A recovery snapshot is the ONLY backstop on browsers with no file-system
+  // access — which is every browser on iOS.
+  //
+  // NEVER for an encrypted space. The snapshot is the document as plain JSON,
+  // so writing one puts in IndexedDB exactly what the password exists to keep
+  // off the disk — and it would do it every few seconds, for the one author who
+  // demonstrably cares. The kernel's putRecovery does not guard this; the
+  // caller must (slides has the same contract).
+  let timer: ReturnType<typeof setTimeout> | undefined
+  store.on('doc', () => {
+    clearTimeout(timer)
+    if (isEncryptionActive()) return
+    timer = setTimeout(() => { void putRecovery(store.doc) }, 2500)
   })
-
-  const save = async () => {
-    const res = await saveFile(doc)
-    if (res !== 'cancelled') void clearRecovery(doc.docId)
-  }
-  app.querySelector('.sp-save')!.addEventListener('click', () => void save())
-  addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-      e.preventDefault()
-      void save()
-    }
-  })
-
-  render()
-  void checkRecovery()
   void pruneOld()
+  void offerRecovery(doc, store, editor)
 
-  /** If the last autosaved snapshot differs from the file we loaded, the
-   *  previous session ended before a save — offer it back. */
-  async function checkRecovery() {
-    const snap = await getRecovery(doc.docId)
-    if (!snap) return
-    let prev: SpacesDoc | null = null
-    try {
-      prev = parseDoc(snap.json)
-    } catch {
-      return
+  // ---- the AI round-trip (PLATFORM §7) -----------------------------------
+  //
+  // Every write verb is ONE undoable step, and every one of them runs its plan
+  // FIRST: `store.commit` checkpoints undo before it mutates, so planning
+  // inside the commit would leave an undo entry behind for a patch that was
+  // refused. A refused patch changes nothing at all, including history.
+  function run<T extends object>(plan: Plan<T>): ({ ok: true } & T) | PlanError {
+    if (store.readOnly) {
+      return { ok: false, err: 'readonly', detail: 'this file is open read-only; nothing was changed' }
     }
-    if (!prev || docContentKey(prev) === docContentKey(doc)) return
-    const bar = document.createElement('div')
-    bar.className = 'sp-recover'
-    bar.innerHTML = `<span>${t('Unsaved changes from your last session were found.')}</span>`
-    const restore = document.createElement('button')
-    restore.textContent = t('Restore')
-    restore.addEventListener('click', () => {
-      doc = prev!
-      titleInput.value = doc.title
-      render()
-      bar.remove()
-    })
-    const discard = document.createElement('button')
-    discard.textContent = t('Discard')
-    discard.addEventListener('click', () => {
-      void clearRecovery(doc.docId)
-      bar.remove()
-    })
-    bar.append(restore, discard)
-    document.body.appendChild(bar)
+    if (!plan.ok) return plan
+    const { apply, ...rest } = plan
+    store.commit(apply)
+    editor.repaint()
+    return rest as { ok: true } & T
   }
 
-  // AI/tooling round-trip (docs/PLATFORM.md §7): the document JSON is the
-  // interchange unit, so agents can read and replace it without the file.
   ;(window as any).bento = {
     format: doc.format,
-    get doc() {
-      return doc
+    get doc() { return store.doc },
+    get readonly() { return store.readOnly },
+    serialize: () => serializeFile(store.doc),
+    serializeAuto: () => serializeAuto(store.doc),
+    undo: () => { store.undo(); editor.repaint() },
+    redo: () => { store.redo(); editor.repaint() },
+    updates: { version: APP_VERSION },
+    /** every page, flat — the shape an agent wants before it reads anything */
+    pages: () => store.doc.pages.map((p) => ({
+      id: p.id, title: p.title, parent: p.parent, archived: !!p.archived, blocks: p.blocks.length,
+    })),
+    getPage: (id: string) => store.doc.pages.find((p) => p.id === id) ?? null,
+    search: (q: string) => {
+      const needle = String(q).toLowerCase()
+      const out: Array<{ pageId: string; title: string; blockId: string }> = []
+      for (const p of store.doc.pages) {
+        for (const b of p.blocks) {
+          // textOf DECODES entities; a tag-strip does not. On a block reading
+          // "a &amp; b" the old regex searched "a &amp; b", so it missed the
+          // text the reader can see and matched text that is not there.
+          const text = textOf(b.html)
+          if (text.toLowerCase().includes(needle)) out.push({ pageId: p.id, title: p.title, blockId: b.id })
+        }
+      }
+      return out
     },
-    serialize: () => serializeFile(doc),
-    serializeAuto: () => serializeAuto(doc),
-    loadDoc(json: string): boolean {
-      const next = parseDoc(json)
-      if (!next) return false
-      doc = next
-      titleInput.value = doc.title
-      document.title = `${doc.title} — ${appConfig().appName}`
-      render()
-      touch()
+    /** what is WRONG or SUSPECT — see agent.ts */
+    validate: (target?: SpacesDoc) => validateDoc(target ?? store.doc),
+    /** the whole space as a tree, for orienting in one call */
+    outline: (target?: SpacesDoc) => outlineDoc(target ?? store.doc),
+    /** where the bytes are */
+    stats: (target?: SpacesDoc) => statsDoc(target ?? store.doc),
+
+    /**
+     * ONE undoable step. Without this an agent appending a paragraph has to
+     * rewrite and reparse the whole space through loadDoc — clobbering
+     * concurrent edits and flattening undo to a single entry.
+     *
+     * Keeps its original return shape (new ids, or null) because it shipped
+     * that way; the verbs below it return tagged results.
+     */
+    insertBlocks: (pageId: string, afterId: string | null, blocks: unknown[]) => {
+      const res = run(planInsertBlocks(store.doc, pageId, afterId ?? null, blocks))
+      return res.ok ? res.ids : null
+    },
+    updateBlock: (id: string, patch: unknown) => run(planUpdateBlock(store.doc, id, patch)),
+    removeBlocks: (ids: unknown) => run(planRemoveBlocks(store.doc, ids)),
+    moveBlock: (id: string, to: unknown) => run(planMoveBlock(store.doc, id, to)),
+    updatePage: (id: string, patch: unknown) => run(planUpdatePage(store.doc, id, patch)),
+    removePage: (id: string, opts?: { descendants?: boolean }) =>
+      run(planRemovePage(store.doc, id, opts ?? {})),
+
+    // ---- the tracker: an issue is a page ---------------------------------
+    /** the schema in force — the option IDS a value must use */
+    fields: () => fieldsReport(store.doc),
+    /** the backlog as data, filtered by field value or by status phase */
+    issues: (query?: IssueQuery) => issuesReport(store.doc, query ?? {}),
+    /**
+     * One field, one undoable step, `value` and its readable `html` written
+     * TOGETHER — the only supported way to set a value, because a prop block
+     * written by hand through insertBlocks gets that pairing wrong, and it is
+     * the one thing that must never happen.
+     */
+    setField: (pageId: string, key: string, value: unknown) =>
+      run(planSetField(store.doc, pageId, key, value)),
+    newIssue: (spec?: unknown) => run(planNewIssue(store.doc, spec)),
+
+    /**
+     * A page carries one empty paragraph, exactly as the editor's own New page
+     * does. A page with no blocks has nothing to put a caret in — no gutter, no
+     * / menu, no way to type — so an agent creating one would hand a human a
+     * page they cannot write in.
+     */
+    /**
+     * Work out an expression the way a line ending in `=` would.
+     *
+     * `bento.calc('20% of 340')` → 68. With a page id, the names defined on
+     * that page are in scope, so an agent sees exactly what a reader sees.
+     * Returns null for anything the grammar does not fully understand — the
+     * same refusal the page makes, rather than a guess.
+     */
+    calc: (expr: string, pageId?: string) => {
+      const page = pageId ? store.index.page.get(pageId) : undefined
+      const ctx = page
+        ? pageContext(page.blocks.map((b) => ({ id: b.id, text: textOf(b.html ?? '') })), '')
+        : {}
+      const v = evaluate(String(expr ?? ''), ctx)
+      return v ? { value: v.n, text: format(v, locale()) } : null
+    },
+    newPage: (title: string, parent?: string) => {
+      if (store.readOnly) return null
+      // A TITLE, not something that stringifies into one. This takes a string
+      // where the verbs beside it take an object, so `newPage({ title: 'x' })`
+      // is the natural mistake — and it used to make a page called
+      // "[object Object]" and hand back its id, which is the exact failure the
+      // rest of this surface exists to avoid.
+      if (badTitle(title)) return null
+      // a parent that names nothing would silently make this a ROOT page; say
+      // no instead, so the caller finds out now rather than in the sidebar
+      if (parent && !store.doc.pages.some((p) => p.id === parent)) return null
+      const page = newPage(plainTitle(title) || 'Untitled', parent ? { parent } : {})
+      store.commit(() => { store.doc.pages.push(page) })
+      editor.repaint()
+      return page.id
+    },
+    loadDoc: (json: string): boolean => {
+      if (store.readOnly) return false
+      const r = parseDoc(json)
+      if (!r.ok) return false
+      store.replaceDoc(r.doc)
+      editor.repaint()
       return true
     },
   }
+
+  if (!canWriteInPlace()) {
+    // stated rather than discovered — the product-defining limitation on iOS
+    console.info('[bento/spaces] this browser cannot write back to the file; every save makes a new copy')
+  }
+}
+
+function banner(text: string, actions: Array<[string, () => void]> = []): void {
+  const bar = document.createElement('div')
+  bar.className = 'sp-banner'
+  const span = document.createElement('span')
+  span.textContent = text
+  bar.append(span)
+  for (const [label, fn] of actions) {
+    const b = document.createElement('button')
+    b.className = 'sp-btn'
+    b.textContent = label
+    b.addEventListener('click', () => { fn(); bar.remove() })
+    bar.append(b)
+  }
+  const close = document.createElement('button')
+  close.className = 'sp-btn'
+  close.textContent = '✕'
+  close.setAttribute('aria-label', 'Dismiss')
+  close.addEventListener('click', () => bar.remove())
+  bar.append(close)
+  document.body.prepend(bar)
+}
+
+/** A snapshot that differs from the file we loaded means a crash lost work. */
+async function offerRecovery(doc: SpacesDoc, store: Store, editor: Editor): Promise<void> {
+  const snap = await getRecovery(doc.docId)
+  if (!snap) return
+  let saved: SpacesDoc
+  try { saved = JSON.parse(snap.json) as SpacesDoc } catch { return }
+  if (docContentKey(saved) === docContentKey(doc)) return
+  banner(t('Unsaved changes from a previous session were found.'), [
+    [t('Restore'), () => { store.replaceDoc(saved); editor.repaint() }],
+    [t('Discard'), () => { void clearRecovery(doc.docId) }],
+  ])
 }

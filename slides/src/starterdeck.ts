@@ -55,6 +55,8 @@ const T_A = 'sd-tile-a' // amber
 const T_B = 'sd-tile-b' // blue
 const T_C = 'sd-tile-c' // paper/white
 const T_D = 'sd-tile-d' // ink panel / card
+/** The formula that rearranges across the morph beat — one id, two slides. */
+const EQ = 'sd-eq'
 const TITLE = 'sd-title'
 const KICKER = 'sd-kicker'
 const GLOW = 'sd-glow'
@@ -182,7 +184,7 @@ const barOption = () => ({
   grid: { left: 48, right: 16, top: 24, bottom: 56 },
   xAxis: {
     type: 'category', data: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
-    axisLine: { lineStyle: { color: '#D8D2C4' } }, axisTick: { show: false },
+    axisLine: { lineStyle: { color: '#D8D2C4' } },
     axisLabel: { color: '#6B7280' },
   },
   yAxis: { type: 'value', axisLabel: { color: '#6B7280' }, splitLine: { lineStyle: { color: '#EAE4D6' } } },
@@ -217,7 +219,6 @@ const trendOption = () => ({
     type: 'category',
     data: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
     axisLine: { lineStyle: { color: 'rgba(185,196,212,0.25)' } },
-    axisTick: { show: false },
     axisLabel: { color: 'rgba(185,196,212,0.8)' },
   },
   yAxis: {
@@ -250,7 +251,7 @@ const scatterOption = () => ({
   grid: { left: 52, right: 24, top: 24, bottom: 56 },
   xAxis: {
     type: 'value', name: 'Reach',
-    axisLine: { lineStyle: { color: '#D8D2C4' } }, axisTick: { show: false },
+    axisLine: { lineStyle: { color: '#D8D2C4' } },
     axisLabel: { color: '#6B7280' }, splitLine: { lineStyle: { color: '#EAE4D6' } },
   },
   yAxis: {
@@ -311,7 +312,10 @@ const DOTS_PAPER =
 
 export function starterDoc(): BentoDoc {
   const doc = newDoc()
-  doc.title = 'bento/slides showcase'
+  // The DECK's title, not the app's — it reads as a document name (window title,
+  // suggested filename), so it stays in title case. The lowercase `bento/slides`
+  // wordmark is app chrome and is unaffected.
+  doc.title = 'Bento Slides Showcase'
   doc.theme.fontFamily = BODY
   doc.theme.accent = PEACH
   // new charts (＋ Chart, table→chart) inherit the deck's midnight-&-peach family
@@ -511,6 +515,64 @@ export function starterDoc(): BentoDoc {
           html: 'Shared ids animate between slides — position, size, color, <b>even gradients</b>.<br>Press ← then → to replay it.',
           fontSize: 19, fontWeight: 500, color: MIST, align: 'center', lineHeight: 1.65,
         }),
+        // Sits quietly here and becomes the point of the next slide: same id,
+        // so its SYMBOLS morph across rather than the formula crossfading.
+        text({
+          id: EQ, x: 340, y: 600, w: 600, h: 60, html: '$ax^2 + bx + c = 0$',
+          fontSize: 30, color: 'rgba(185,196,212,0.75)', align: 'center', valign: 'middle',
+        }),
+      ],
+    }),
+
+    // ── 3b · SYMBOL MORPH (the formula rearranges, term by term) ───────────
+    slide({
+      transition: 'morph',
+      notes:
+        'The quadratic on the last slide did not crossfade into this one — a, b and c TRAVELLED, ' +
+        'out of ax² + bx + c = 0 and into the fraction, the radical and the discriminant. Tokens ' +
+        'pair by what they are and which occurrence they are, so a term that moves is seen to move. ' +
+        'Everything here is one ordinary text box: type the LaTeX between dollar signs (two for a ' +
+        'display equation like this one) and the document stores exactly that — not a picture, not ' +
+        'a font, no library fetched at runtime. Backslash-escape a dollar to show one literally, ' +
+        'as the caption does.',
+      elements: [
+        grain(),
+        glow(20, [
+          { at: 0, color: 'rgba(255,158,138,0.20)' },
+          { at: 0.6, color: 'rgba(15,23,36,0)' },
+          { at: 1, color: 'rgba(62,86,120,0.24)' },
+        ]),
+        shape('rect', {
+          id: T_A, x: 1000, y: 420, w: 300, h: 300, radius: 90, fill: PEACH,
+          fillGradient: { angle: 135, stops: [{ at: 0, color: PEACH }, { at: 1, color: PEACH_SOFT }] },
+        }),
+        shape('rect', {
+          id: T_B, x: -120, y: -110, w: 380, h: 380, radius: 100, fill: STEEL,
+          fillGradient: { angle: 225, stops: [{ at: 0, color: '#41597A' }, { at: 1, color: STEEL_SOFT }] },
+        }),
+        shape('rect', {
+          id: T_C, x: -80, y: 470, w: 300, h: 300, radius: 84, fill: TILE_PAPER, opacity: 0.85,
+          fillGradient: { angle: 315, stops: [{ at: 0, color: '#FFFFFF' }, { at: 1, color: '#D8D3C6' }] },
+        }),
+        shape('rect', {
+          id: T_D, x: 1030, y: -90, w: 250, h: 250, radius: 70, fill: 'transparent',
+          stroke: 'rgba(185,196,212,0.4)', strokeWidth: 2, strokeStyle: 'dashed',
+        }),
+        kicker('EVEN INSIDE A FORMULA', { x: 340, y: 176, w: 600, h: 26, align: 'center' }),
+        // Display mode ($$) so the fraction, radical and ± set at full size.
+        // a, b and c fly out of the quadratic and into their places here.
+        text({
+          id: EQ, x: 190, y: 240, w: 900, h: 230,
+          html: '$$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$',
+          fontSize: 62, color: '#FFFFFF', align: 'center', valign: 'middle',
+        }),
+        text({
+          x: 340, y: 500, w: 600, h: 80,
+          // \$ escapes the delimiter so this line SHOWS "$…$" instead of
+          // rendering it — the first thing anyone copying this deck will hit.
+          html: 'Maths is plain <b>\\$…\\$</b> in a text box — the terms morph, not the picture.',
+          fontSize: 19, fontWeight: 500, color: MIST, align: 'center', lineHeight: 1.65,
+        }),
       ],
     }),
 
@@ -692,7 +754,6 @@ export function starterDoc(): BentoDoc {
             borderColor: 'rgba(30,42,58,0.10)', borderWidth: 1,
             cellPadX: 18, cellPadY: 12, fontSize: 18, color: '#26303E', radius: 12,
           },
-          fx: { enter: 'fade-up', order: 1 },
         } as TableElement,
         shape('rect', {
           id: T_D, x: 920, y: 196, w: 264, h: 458, radius: 18, fill: PANEL,
@@ -711,9 +772,16 @@ export function starterDoc(): BentoDoc {
             color: [PEACH, STEEL],
             grid: { left: 48, right: 42, top: 16, bottom: 26 },
             xAxis: { type: 'category', data: ['Q1', 'Q2', 'Q3', 'Q4'], axisLabel: { color: MIST } },
+            // MIST, not a half-transparent MIST. The engine used to ignore a
+            // y-axis's own label colour and reuse the x-axis one, so these read
+            // as MIST however they were written; once charts started honouring
+            // each axis, the declared 50% alpha became visible and dropped
+            // these numbers to 3.17:1 on the #16273E panel — under AA. The deck
+            // had been tuned against the old behaviour, so it now says what it
+            // always looked like: 8.28:1.
             yAxis: [
-              { type: 'value', axisLabel: { color: 'rgba(182,193,210,0.5)' }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } } },
-              { type: 'value', name: 'Growth', axisLabel: { color: 'rgba(182,193,210,0.5)', formatter: '{value}%' }, splitLine: { show: false } },
+              { type: 'value', axisLabel: { color: MIST }, splitLine: { lineStyle: { color: 'rgba(255,255,255,0.08)' } } },
+              { type: 'value', name: 'Growth', axisLabel: { color: MIST, formatter: '{value}%' }, splitLine: { show: false } },
             ],
             series: [
               { type: 'bar', name: 'Signups', yAxisIndex: 0, data: [1204, 3880, 9140, 21500], itemStyle: { borderRadius: [4, 4, 0, 0] } },
@@ -721,7 +789,7 @@ export function starterDoc(): BentoDoc {
             ],
             tooltip: { trigger: 'axis' },
           },
-          { id: 'sd-tbl-chart', x: 922, y: 266, w: 262, h: 224, preset: 'bar', source: { tableId: 'sd-table' }, fx: { enter: 'fade-up', order: 2 } },
+          { id: 'sd-tbl-chart', x: 922, y: 266, w: 262, h: 224, preset: 'bar', source: { tableId: 'sd-table' } },
         ),
         text({
           x: 944, y: 504, w: 216, h: 56,

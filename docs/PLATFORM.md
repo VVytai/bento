@@ -30,8 +30,13 @@ build of every app must keep:
 
 - a `<script type="application/bento+json" id="bento-doc">` block that is
   **plaintext** (never inside the compressed payloads), same id, forever;
-- block content that is JSON with `<` escaped as `<` — it can never
+- block content that is JSON with `<` escaped as `\u003c` — it can never
   contain `</script>`;
+- the SAME escaping on every other plaintext data block the shell carries
+  (`application/bento+*`, written by `registerShellBlocks` — language packs
+  today): their bodies are not authored by us, so an unescaped one could
+  close its own block or forge a second `#bento-doc` opening tag for an old
+  updater to splice into;
 - a file that survives `DOMParser → splice → outerHTML` round-trips, with
   balanced script tags and a v0.1.0-style *text* splice still producing a
   well-formed document.
@@ -42,8 +47,10 @@ checks) before any release.
 
 ## 3. Document identity & format
 
-- `doc.type` names the format (`bento/slides`; provisionally `bento/spaces`,
-  `bento/dash`) with an integer format version.
+- `doc.format` names the format (`bento/slides`, `bento/spaces`; `bento/dash`
+  to come) with an integer format version in `doc.version`. The field is
+  `format` — `slides/src/model.ts` exports `FORMAT = 'bento/slides'` and writes
+  it as `format`, and every reader keys off that.
 - **Formats are additive.** Every version opens files from every earlier
   version; unknown fields are preserved, not stripped. Breaking reads of old
   files is not an option — there is no server to migrate them.
@@ -57,6 +64,16 @@ checks) before any release.
 
 - Self-save: capture the pristine shell at boot, swap the `#bento-doc` block,
   re-serialize. File System Access API first, download fallback.
+- **Runtime-injected DOM must be marked `data-bento-transient`.** The pristine
+  capture clones the LIVE document, so anything the runtime adds before it —
+  the compressed shell's inflated stylesheet, first of all — would otherwise be
+  written into the saved file, then re-injected on the next boot and saved
+  again: unbounded growth, one copy per save (~100KB each for the CSS, which
+  ships deflated for a reason). `serializeBody` strips the marked nodes from
+  every serialized shell. Inject before the capture only if you mark it —
+  `scripts/shell-gate.mjs` proves both halves on every CI build (the loader
+  marks what it injects; the runtime still strips it) and rejects a shell that
+  carries any payload's content as plaintext.
 - Autosave (IndexedDB) keeps a latest-recovery snapshot + a capped version
   timeline, keyed by `docId`. Read-only players skip autosave.
 - Password-protected docs use the `bento/enc` envelope (PBKDF2-SHA-256 300k →
@@ -110,11 +127,67 @@ templates, never code).
 
 ## 8. i18n
 
-~1KB `t()` with English-string-as-key (missing key = English). Catalogs are
-compiled in; new UI strings must land in **all** catalogs in the same PR.
-Never call `t()` at module scope (frozen at import). `select()` localizes
-display labels only — model values stay English words. Audit with
-`setLocale('x-pseudo')`.
+~1KB `t()` with English-string-as-key (missing key = English). Never call
+`t()` at module scope (frozen at import). `select()` localizes display labels
+only — model values stay English words. Audit with `setLocale('x-pseudo')`.
+
+Catalogs come in two tiers. A **bundled core** is compiled in — the per-locale
+files under `slides/src/i18n/` are the authored source, packed key-once into
+`packed.ts` by `scripts/build-i18n.mjs` (CI gates that it is current). New UI
+strings must land in **all** core catalogs in the same PR. Every other language
+is a **signed pack**, released centrally and spliced into the file on demand;
+see `i18n-packs.md`. Packs are additive — a file that never fetches one behaves
+exactly as before — and both tiers fall back per string to the English key,
+which is what lets a stale or partial pack degrade instead of break.
+
+Four pack rules are platform-level, not app choices:
+
+- **A pack lives in the FILE and nowhere else.** No browser-local copy: the
+  download comes from an https origin and the file is then opened from
+  `file://`, so anything stored per-origin vanishes on the journey the product
+  encourages. A pack rides in an `application/bento+lang` block written by
+  `registerShellBlocks` (kernel `save.ts`), under the same `\u003c`-escaping
+  and the same §2 splice contract as `#bento-doc` — `scripts/shell-gate.mjs`
+  proves a pack-carrying shell conformant, with an adversarial pack, on every
+  build.
+- **Adding is staged, and written on the next save.** Writing on click means a
+  silent second download of the user's deck on every browser without File
+  System Access.
+- **Self-update carries packs forward** and refreshes them for the incoming
+  version (`registerUpdatePrepare` in kernel `update.ts`), best effort — a pack
+  that cannot be re-fetched is kept, never dropped.
+- **Fetched packs are verified against the signed release channel; embedded
+  packs are not re-verified** — they carry the same trust as the document
+  around them, and opening a file must never require the network.
+
+### Direction (RTL) — two halves, never confuse them
+
+**Content direction belongs to the DOCUMENT and is per element.** Text
+resolves its own base direction from what the author typed (`dir="auto"` in
+the renderer), so an Arabic paragraph reads RTL beside an English one in the
+same file. This is data: it renders identically for every viewer, and it is
+the half that fixes real bugs (misplaced sentence-final punctuation).
+
+**Chrome direction belongs to the VIEWER and never enters the format.** The
+editor flips to RTL when the viewer's locale is RTL — the same viewer-scoped
+pattern as `bento-lang` and reduce-motion. `applyDirection()` runs AFTER
+`capturePristine()`, so a saved file can never carry a `dir` attribute. Lay
+chrome out with logical properties (`inset-inline-start`, `margin-inline-end`,
+`text-align: start`) and it mirrors itself; only glyphs that encode a
+direction in their SHAPE need flipping by hand.
+
+> **INVARIANT — the document never mirrors.** Elements carry absolute x/y
+> model coordinates, so a document MUST render identically regardless of who
+> opens it. A document whose appearance depends on the viewer's locale is a
+> format-level bug, and a worse outcome than an unmirrored UI. Every surface
+> that renders document content is therefore pinned `direction: ltr`: the
+> document root, thumbnails, the scroller, the present overlay, print, and any
+> body-mounted overlay that reads coordinates (e.g. Moveable's control box,
+> which mounts outside the document subtree and needs its own pin).
+>
+> An app adding a new document-rendering surface MUST pin it. The pin is also
+> what keeps direction away from `scrollLeft` — the one layout API whose
+> meaning genuinely changes under RTL — so coordinate math stays untouched.
 
 ## 9. What is kernel vs what is app
 
@@ -124,9 +197,17 @@ encryption), `autosave.ts`, `update.ts`, `anim.ts`, `charts.ts`, the `i18n.ts`
 engine, `app.ts` (per-app identity via `configureApp`), `doc.ts` (the
 `KernelDoc` envelope). Apps import these through facades at their own paths.
 
-Also shared but NOT yet in `kernel/`: the collab engine (`slides/src/sync/`)
-and the relay (`server/`). Both are slides-shaped today and genericizing the
-CRDT is its own project — treat them as kernel-zone for serialization.
+The CRDT engine is `kernel/src/sync/crdt.ts` now. It takes its document shape
+as a `DocShape` at construction (two property names: the doc key holding the
+parent array, the parent key holding the child array), so one algebra serves
+bento/slides and bento/spaces with neither app's vocabulary in the kernel. An
+app imports its own binding — `slides/src/sync/crdt.ts` → `SLIDES_SHAPE` —
+never the engine directly.
+
+Also shared but NOT yet in `kernel/`: the session/transport layer
+(`slides/src/sync/session.ts`, `online.ts`, `blobs.ts`) and the relay
+(`server/`). Those are still slides-shaped — treat them as kernel-zone for
+serialization.
 
 Shared build tooling: `scripts/postbuild-compress.mjs` (parameterised per app
 via `--generator` / `--title`) and `scripts/shell-gate.mjs`.
@@ -139,7 +220,7 @@ the document model, the renderer, the editor UX, starter documents, panels.
 A new Bento app is on-platform when it:
 
 - [ ] builds to ONE self-contained HTML file passing the §2 conformance gate
-- [ ] declares `doc.type` + format version; opens its own older files
+- [ ] declares `doc.format` + `doc.version`; opens its own older files
 - [ ] mints and preserves `docId` per §3
 - [ ] self-saves (FSA + download) and autosaves per §4
 - [ ] supports the `bento/enc` envelope per §4 (or explicitly documents why not yet)
