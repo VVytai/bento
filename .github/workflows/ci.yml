@@ -295,6 +295,47 @@ jobs:
         # rather than by reloading an extension and pressing Cmd-S.
         run: node scripts/test-webext-bridge.ts
 
+      - name: WebExtension route rig
+        # Turning an absolute path into "where this granted folder lives", from
+        # paths the extension did not choose — browser history, for files that
+        # may have moved or never been in a grant at all. Getting it wrong does
+        # not produce a broken link; it records a folder at the wrong place and
+        # every document in it silently opens something else. So it must prove,
+        # never guess: the route resolves inside the grant AND dir.resolve()
+        # agrees with the path's own tail.
+        run: node scripts/test-webext-route.ts
+
+      - name: WebExtension document-library rig
+        # The popup is a document browser, and everything in it is DERIVED from
+        # files on disk: the title out of the document block, the thumbnail out
+        # of the preview block, the openable path out of a learned prefix. Each
+        # is a parse against a format that moves, and each fails quietly — a row
+        # showing a filename instead of a title, or a blank square. Nothing
+        # throws, so nothing reports it.
+        #
+        # Runs AFTER the slides build on purpose: it reads the real shell, and
+        # with a document spliced in at the real offset. Hand-written fixtures
+        # would have passed the bug this replaces, where a metadata reader hunted
+        # for the document block's CLOSING tag and so found nothing in any
+        # document carrying an image.
+        run: node scripts/test-webext-library.ts
+
+      - name: WebExtension update-notice rig
+        # Store installs update themselves; one loaded unpacked never will, and
+        # Chrome ignores update_url for a development install. So the GitHub
+        # route has to be told — and told in exactly one direction: a store user
+        # must never see a notice they cannot act on, and must not even cost a
+        # request. Every failure mode here is silent by nature.
+        run: node scripts/test-webext-update.ts
+
+      - name: WebExtension localisation rig
+        # Every failure mode of a message catalogue is silent: a key the code
+        # uses but English lacks renders as the key name, a locale missing a key
+        # falls back so a German page carries English sentences, and a dropped
+        # $1 leaves a hole in a translated sentence. All of them are visible
+        # only to someone who reads that language.
+        run: node scripts/test-webext-i18n.ts
+
       - name: Save-intent rig
         # A host polyfilling showSaveFilePicker sees only the options bag, and
         # must tell "overwrite the open document" from "make a second file" from
