@@ -14,6 +14,159 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-16 — Document search: the list stays native, the indexer is shared by FIXTURE
+
+**Decision.** When the native hosts grow a document library, each keeps its own
+**native list UI** and ports the text extraction itself; the three
+implementations are held together by **one shared fixture corpus**, not by a
+shared runtime. Specifically NOT by moving `tray/webext`'s `home.html` /
+`library.js` into a WebView on the native hosts.
+
+**The gap this is about.** The three surfaces are at three different levels, and
+only one of them can search:
+
+| | what "search" means there |
+|---|---|
+| `tray/webext` | scans every granted folder; matches title, file name, folder, **and the document's own prose** (`library.js extractText`) |
+| `tray/ios` | the system document browser's search field — **the app contributes nothing to it** (no CoreSpotlight, no `NSUserActivity`) |
+| `tray/android` | **none**; a recents list sorted by last-opened |
+
+`extractText` is the valuable part: up to 40KB of prose per document, pulled out
+of the `#bento-doc` block as string VALUES (`:"…"`, never keys), data URIs
+stripped first. Deliberately not a JSON parse, so it is format-agnostic across
+slides/spaces/dash and degrades to "finds less" rather than throwing. It is free
+in I/O because the same read already produced the thumbnail. That is what lets
+someone find a deck by a phrase on a slide rather than by what they named the
+file.
+
+Both platforms CAN support this — it is a "not built" gap, not a "can't" one.
+Android has `ACTION_OPEN_DOCUMENT_TREE` (a persistable whole-directory grant,
+near-exactly `showDirectoryPicker`); iOS has the document picker in folder mode
+(a security-scoped directory URL).
+
+**Why the shared-WebView-library option was rejected.** Three costs, in
+descending order of severity:
+
+1. **iOS would throw away `UIDocumentBrowserViewController`,** which is not a
+   list but a surface: Browse into iCloud Drive, Dropbox and every File Provider
+   on the device, drag-and-drop, in-place rename, favourites and tags, the
+   system's own sort and view controls. An HTML grid replaces all of that with
+   less, and contradicts the property `tray/README.md` claims — *on iOS the app
+   is a lens onto the filesystem; on Android it is a keyring*. **Android has
+   nothing to lose here**, which is the asymmetry that makes a single shared
+   answer wrong.
+2. **Cold start costs ~0.5s,** on the first screen of every launch. MEASURED
+   2026-08-16, Pixel 7 / Android 16 emulator, both cold: native list root
+   **1171ms** (1241ms on a repeat) against WebView root **1728ms**. That is an
+   emulator on Apple silicon, so treat it as a FLOOR — WebView provider load is
+   I/O and CPU bound and a mid-range phone widens the gap. iOS was not measured.
+3. **Accessibility stops being free.** Native lists get VoiceOver/TalkBack,
+   Dynamic Type and system font scaling correctly with no effort; in a WebView
+   Android's font-size setting does nothing unless `WebSettings.textZoom` is
+   wired, and Dynamic Type does not reach web content without explicit work.
+   Predictive back and interactive dismiss are native on a native screen and
+   reimplemented in a WebView. `home.html` is also a desktop-first grid with a
+   sidebar and would need a real mobile design pass, not a media query.
+
+**The reasoning that settles it: the UX cost sits entirely in the part that does
+not need sharing.** What is worth sharing is the INDEXER — pure data work, no UI.
+The chrome is what costs cold start, accessibility and the iOS browser, and the
+chrome is exactly what should stay native.
+
+**Why this differs from `tray/bridge.js`, which IS shared.** That file is shared
+because its semantics are subtle and a divergence is catastrophic and silent —
+its comments record a bug that wrote users' documents out as zero bytes. Text
+extraction is string scanning with a documented budget: a divergence makes search
+find less, which is visible and recoverable. So the right guarantee is weaker and
+cheaper. Trading "cannot diverge" for "cannot diverge SILENTLY" is the correct
+trade at this level of consequence, and it is already this repo's idiom for
+exactly this problem — the splice contract has a conformance gate in
+`release.mjs`, the save-purpose ids have `scripts/test-savepurpose.ts`.
+
+**Status: not built.** Nothing here has been implemented. The cheap intermediate
+step, if it is wanted before the full library, is a name filter over the existing
+Android recents list — that brings Android level with iOS and touches no
+extraction. Parity table and the standing gap: `tray/README.md` § Android.
+
+## 2026-08-16 — bento/tray gets an Android host (PR #87, rearchitected)
+
+**Decision.** `tray/android/` is a document host, written against the same two
+decisions as `tray/ios`: the document is served through an origin we control,
+and the app ships **file access only** — no bundled runtime, no OTA channel of
+its own.
+
+It lands as **PR #87** (savrum, opened 2026-07-26), which asked the right
+question first: Android needs a native host for the same reason iOS does. The
+branch keeps that original commit and builds on it. Its `native/ios` half is
+superseded by `tray/ios`, which arrived in the meantime; its Gradle and keystore
+scaffolding is the shape used here; and the `isElementFullscreenEnabled` flag
+`tray/ios` briefly used was found there.
+
+What did NOT survive is the **architecture**, which is the one tray deliberately
+rejected:
+
+- it BUNDLES a deck and OTA-fetches a newer one from the GitHub releases API on
+  every launch. tray's whole thesis is the opposite (`tray/README.md`, "What it
+  is, and what it deliberately is not"), and an unsigned OTA — which the PR's own
+  README flags — contradicts `docs/PLATFORM.md` §1 as well as the signed-update
+  invariant.
+- every save calls `ACTION_CREATE_DOCUMENT`, so Bento's 2.5s autosave write-back
+  would open a file picker on a loop. It has no in-place path at all.
+- the page is loaded from `file://` (opaque origin: unreliable `localStorage`
+  and IndexedDB) and the shim is injected from `onPageStarted`, which races the
+  boot-time capability check.
+
+**Three Android-specific findings worth not rediscovering.**
+
+1. **Write access is not implied by receiving a document.** `ACTION_VIEW` from a
+   file manager grants READ ONLY; only the app's own `ACTION_OPEN_DOCUMENT`
+   yields a persistable read+write grant. Checked per document
+   (`canWriteInPlace`), and when false every save becomes a Save-As — the
+   "when in doubt, prompt" rule the whole project already follows.
+2. **`androidx.webkit` is a required dependency, not a convenience.**
+   `addDocumentStartJavaScript` is the only true `.atDocumentStart` equivalent,
+   and `addWebMessageListener` is **origin-scoped** where `addJavascriptInterface`
+   is injected into every frame — a remote iframe in an untrusted document would
+   otherwise be handed a channel that writes the user's file.
+3. **`fitsSystemWindows = true` REPLACES a view's padding, it does not add to
+   it** — and from targetSdk 35 edge-to-edge is mandatory, so insets must be
+   applied by hand. Same for `enableOnBackInvokedCallback`: it stops
+   `onBackPressed` being called at all on API 33+, so an override alone compiles,
+   runs, and silently does nothing.
+
+**A host must implement the page-dialog delegate, and BOTH lacked it.** Building
+the Android host surfaced a bug that had been shipping in `tray/ios` too. Neither
+`WKWebView` nor Android's `WebView` shows `alert`/`confirm`/`prompt` on its own,
+and without the delegate they do not merely skip them — they answer wrongly and
+say nothing: `alert()` is a no-op and **`confirm()` returns `false`**. Every one
+of the runtime's seven uses is shaped `if (!confirm(…)) return`, so delete a
+slide, remove a collaborator, reset access, replace all slides and embed an
+oversized file all silently did nothing when tapped. Fixed on both
+(`WKUIDelegate`, `TrayChromeClient`) and verified on both: iOS through
+"Start from scratch…", Android over CDP (`true` on OK, `false` on Cancel).
+Android additionally needs `onShowFileChooser` or `<input type="file">` cannot
+open at all, which is how images, media and fonts get into a deck — restored
+from #87's `native/android`, which had it.
+
+**Parity is written down, not assumed.** `tray/README.md` § Android carries a
+row-per-behaviour table of iOS against Android, marking each as the same, a
+platform-forced difference, or a gap. The one gap is the status bar (iOS hides it
+on iPad; Android does not on tablets), left undone because it cannot be tested
+without a tablet target.
+
+**The launcher icon is GENERATED from the shared mark**
+(`tray/assets/make-icons.mjs`, with `--check` for CI). Android vector drawables
+have no `<rect>`, so every rounded rectangle has to be re-expressed as path data
+— four opaque `M…A…V…Z` strings nobody would ever diff against the SVG, so a
+change to the mark would land on iOS and silently miss Android.
+
+**`tray/bridge.js` is now SHARED** by both native hosts (was
+`tray/ios/Resources/bridge.js`). The transport is ~15 lines at the top; the rest
+is `FileSystemWritableFileStream` semantics whose comments record the bug that
+wrote documents out as zero bytes. Forking that file forks that bug.
+
+Details and verification state: `tray/README.md` § Android.
+
 ## 2026-08-06 — The tree is DERIVED at read time, in one function, and it cannot cycle
 
 **Decision.** `model.ts effectiveParents(page)` is the only answer to "what is
@@ -2447,7 +2600,16 @@ prompting, nothing reporting a fault.
 
 *Found in passing:* the rig carried a LITERAL NUL byte in a test case, which
 made `grep` treat the whole file as binary and hid it from ordinary tooling. It
-is now written as a ` ` escape.
+is now written as a `\x00` escape.
+
+*Amended 2026-08-16:* and then **this file caught it** — the sentence above
+shipped with a literal NUL where it says `` `\x00` ``, so `grep` treated
+DECISIONS.md as binary and returned nothing, silently, for every query. That is
+the worst possible file to lose to this: `CLAUDE.md` tells every agent to read it
+before non-trivial work, so a silent no-match reads as "no prior decision" and
+invites the contradiction the log exists to prevent. Found by a `grep` for a
+heading that was demonstrably present. If you are describing a control character,
+escape it.
 
 *Amended 2026-08-14, later.* Two corrections to the entry above, both from
 looking rather than reasoning.
