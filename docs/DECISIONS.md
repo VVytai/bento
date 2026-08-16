@@ -14,6 +14,49 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-16 — iOS document search: CoreSpotlight is the surface, and the port is pinned to the LIVE reference
+
+**Decision.** `tray/ios` implements the search settled below. Three things that
+the Android port and any future host should follow or knowingly diverge from:
+
+**1. On iOS the "native list" is a screen BESIDE the document browser, and the
+system index is a first-class output.** `UIDocumentBrowserViewController` stays
+the root; search is one toolbar button away from it. The extracted prose is also
+donated to **CoreSpotlight**, which is what the original gap statement ("the app
+contributes nothing to search — no CoreSpotlight, no `NSUserActivity`") actually
+asked for, and Spotlight results are resolved back through the index rather than
+by re-deriving a path. Android has no equivalent obligation; its recents list IS
+its root, so it has one surface where iOS has two.
+
+**2. The extractor is diffed against the RUNNING `library.js`, not only against
+fixture files.** `scripts/test-tray-index.mjs` imports the extension's own
+`describe()` — it is exported and takes injectable deps, so a fake file handle
+runs the real code path — and compares it to `tray/ios/BentoIndex.swift`,
+compiled on the fly with `swiftc`. A fixture corpus alone pins the ports to a
+SNAPSHOT of the reference: when `library.js` changes, static expectations go
+stale silently and every host stays green while diverging from the thing they are
+copies of. Importing it means the reference cannot move without the rig failing.
+The rig takes `--corpus <dir>`, so a shared corpus is additive — **the Android
+port should run through the same rig** rather than growing a second one.
+
+**3. Ports must count UTF-16 code units.** The reference is JavaScript, where
+every index, length and budget is UTF-16; the natural Swift/Kotlin spelling uses
+graphemes or code points and disagrees on any document containing an emoji or a
+CJK character — that is real documents, not pathological ones. One deviation is
+allowed and is written down in `BentoIndex.swift`: the final `slice(0, 40KB)` can
+land inside a surrogate pair, and where JavaScript keeps the lone half a Swift
+`String` cannot hold one, so it is dropped. The rig accepts exactly that shape
+and nothing looser.
+
+**Also:** enumeration needs a folder grant the app did not previously take
+(folder-mode `UIDocumentPickerViewController`, persisted as a security-scoped
+bookmark). Each indexed document gets its OWN bookmark, minted inside the
+folder's open scope, because a file in a granted folder is readable only while
+the FOLDER is scoped and an editing session outlives the walk. Encrypted
+documents are never read for text or preview, and revoking a folder deletes its
+documents from CoreSpotlight — both enforced in `LibraryIndex`, not just
+described. Parity table: `tray/README.md`.
+
 ## 2026-08-16 — Document search: the list stays native, the indexer is shared by FIXTURE
 
 **Decision.** When the native hosts grow a document library, each keeps its own

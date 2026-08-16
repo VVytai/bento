@@ -476,7 +476,9 @@ here rather than discovered later.
 | `<a download>` lands | app's Documents folder, silently | wherever the author picks | platform-forced |
 | write access to an opened document | always | **may be read-only** | platform-forced |
 | status bar while editing | hidden on iPad | always shown | **known gap** |
-| finding a document by its contents | — | — | **gap on both**, see below |
+| whole-folder grant | folder-mode `UIDocumentPickerViewController` | `ACTION_OPEN_DOCUMENT_TREE` | same capability |
+| text extracted from a document | `BentoIndex.swift` | (in progress) | ported per platform |
+| finding a document by its contents | ✓ search screen + Spotlight | — | **gap on Android**, see below |
 
 Two gaps, both named rather than quietly left out.
 
@@ -486,18 +488,49 @@ the whole screen there; the Android equivalent would be to hide it on tablets
 tablet target, and shipping an untested behaviour is worse than naming an
 untested one.
 
-**Search — and note this table compares the two NATIVE hosts to each other,
-which flatters both.** Against `tray/webext` there is a third axis neither has:
-the extension scans every granted folder and searches **the document's own
-prose**, so a deck is findable by a phrase on a slide. iOS gets only the system
-document browser's search field, and the app contributes nothing to it (no
-CoreSpotlight, no `NSUserActivity`); Android has no search at all. Both platforms
-*could* support it — `ACTION_OPEN_DOCUMENT_TREE` on Android, the folder-mode
-document picker on iOS — so this is "not built", not "can't". The direction is
-settled in `docs/DECISIONS.md` (2026-08-16): native list UI on each host, the
-extraction ported per platform and pinned against one shared fixture, rather than
-a shared HTML library screen in a WebView — which was measured at ~0.5s of extra
-cold start and would cost iOS its system document browser.
+**Search.** `tray/webext` scans every granted folder and searches **the document's
+own prose**, so a deck is findable by a phrase on a slide rather than by what
+somebody named the file. iOS has that now; Android does not yet.
+
+On iOS it is three pieces, following `docs/DECISIONS.md` (2026-08-16):
+
+- a **whole-folder grant** through the folder-mode document picker, persisted as
+  a security-scoped bookmark — the app could previously open one file at a time
+  and could not enumerate anything;
+- **`BentoIndex.swift`**, a port of the extension's `extractText`: up to 40KB of
+  prose per document pulled out of the `#bento-doc` block as string values, data
+  URIs stripped first, encrypted documents never read at all;
+- a **search screen** beside the document browser, and the same prose donated to
+  **CoreSpotlight** so results turn up in system search too.
+
+The browser stays the root. It is not a list but a surface — iCloud Drive, every
+File Provider on the device, drag-and-drop, rename in place, favourites and tags
+— so search is one button away from it rather than in place of it.
+
+The port is held to the extension's by `scripts/test-tray-index.mjs`, which
+imports the real `library.js` and diffs it against the compiled Swift over
+generated edge cases and every document in the tree. That is what makes "each
+host carries its own copy" safe: a divergence is a failing rig rather than a
+document that is findable on one platform and not another. **Android's port
+should be diffed by the same rig** — it takes a `--corpus` directory, and the
+one deviation it currently accepts is written down in `BentoIndex.swift`
+(JavaScript can hold half a surrogate pair at the 40KB cut; Swift cannot).
+
+Indexing prose into CoreSpotlight is a deliberate reach beyond the app, so two
+rules are enforced in code rather than described: an encrypted document yields no
+text and no preview, and revoking a folder deletes everything indexed from it.
+
+**Not built yet, on iOS.** The `data-bento-preview` slice is extracted and stored
+— it is free, the same read produces it — but the results list shows no
+thumbnail, because turning that HTML into an image means snapshotting a WebView
+per row. The document browser already thumbnails these documents; the search
+list does not.
+
+**One thing the extraction inherits from the reference**, visible in snippets: it
+pulls string VALUES, so style values (`sans-serif`, `#EAF4FF`, `rgba(…)`) sit in
+the prose alongside real words. That is what makes it format-agnostic, and it is
+the extension's behaviour too — narrowing it is a change to all three ports and
+belongs in `docs/DECISIONS.md`, not in one host.
 
 ### What is genuinely different
 

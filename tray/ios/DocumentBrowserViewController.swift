@@ -13,7 +13,25 @@ final class DocumentBrowserViewController: UIDocumentBrowserViewController,
         delegate = self
         allowsDocumentCreation = true
         allowsPickingMultipleItems = false
+        // Search sits BESIDE the browser, never in place of it. The browser's
+        // own field searches file names in whatever provider is being browsed;
+        // this one searches what the documents say. See SearchViewController.
+        additionalTrailingNavigationBarButtonItems = [
+            UIBarButtonItem(image: UIImage(systemName: "text.magnifyingglass"),
+                            style: .plain, target: self, action: #selector(openSearch))
+        ]
     }
+
+    @objc private func openSearch() {
+        let search = SearchViewController()
+        search.onOpen = { [weak self] url in self?.openEditor(url) }
+        let nav = UINavigationController(rootViewController: search)
+        present(nav, animated: true)
+    }
+
+    /// Open a document the index found. The URL carries its own security scope
+    /// (`FolderGrants.detach`), so it outlives the walk that discovered it.
+    func openIndexed(_ url: URL) { openEditor(url) }
 
     /// A new document is seeded from the bundled starter shell.
     ///
