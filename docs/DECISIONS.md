@@ -28,16 +28,31 @@ asked for, and Spotlight results are resolved back through the index rather than
 by re-deriving a path. Android has no equivalent obligation; its recents list IS
 its root, so it has one surface where iOS has two.
 
-**2. The extractor is diffed against the RUNNING `library.js`, not only against
-fixture files.** `scripts/test-tray-index.mjs` imports the extension's own
-`describe()` — it is exported and takes injectable deps, so a fake file handle
-runs the real code path — and compares it to `tray/ios/BentoIndex.swift`,
-compiled on the fly with `swiftc`. A fixture corpus alone pins the ports to a
-SNAPSHOT of the reference: when `library.js` changes, static expectations go
-stale silently and every host stays green while diverging from the thing they are
-copies of. Importing it means the reference cannot move without the rig failing.
-The rig takes `--corpus <dir>`, so a shared corpus is additive — **the Android
-port should run through the same rig** rather than growing a second one.
+**2. TWO checks, because they catch different things.**
+`scripts/test-tray-index.mjs` runs both:
+
+- **against the shared corpus** (`tray/fixtures/`, with `tray/doc-index.mjs` as
+  the reference and `expected.json` as the answer key). This proves all three
+  hosts give the same frozen answers — including Kotlin, which nothing on a Mac
+  running the Swift rig can execute. Budgets are checked too: a port that agreed
+  on every case while carrying a different `TEXT_BUDGET` agrees by luck.
+- **against the RUNNING `library.js`**, imported live — `describe()` is exported
+  and takes injectable deps, so a fake file handle runs the real code path.
+
+The second is not redundant. A frozen answer key pins each port to a SNAPSHOT:
+when `library.js` moves, static expectations go stale silently and every host
+stays green while drifting from the thing they are copies of. Importing the
+reference means it cannot move without a rig failing. Verified 2026-08-16: the
+Swift port agrees with both, on all 11 corpus cases and on 59 documents against
+the live reference.
+
+**The corpus contract is the one to conform to where they differ.** It folds
+`isDocument` into the same call and returns nulls throughout for a file that is
+not ours; `library.js`'s `describe()` always returns a title, falling back to the
+file name, because its caller sniffs first and it never faces a non-document.
+`BentoIndex.describe` follows the corpus and the LISTING supplies the file-name
+fallback — which is the better seam anyway: inventing a title during extraction
+reports one for a file that is not a Bento document at all.
 
 **3. Ports must count UTF-16 code units.** The reference is JavaScript, where
 every index, length and budget is UTF-16; the natural Swift/Kotlin spelling uses

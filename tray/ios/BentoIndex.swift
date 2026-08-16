@@ -61,8 +61,15 @@ enum BentoIndex {
     // MARK: - Result
 
     struct Meta {
-        /// The document's own title, or the file's base name when it has none.
-        var title: String
+        /// Is this one of ours at all? Everything below is nil or false when it
+        /// is not — the shared corpus pins that, and it is why `title` is
+        /// optional rather than falling back to the file name here. A file name
+        /// is what the LISTING shows when a document has no title of its own;
+        /// inventing one during extraction would report a title for a file that
+        /// is not even a Bento document.
+        var isDocument: Bool
+        /// The document's own title, if it has one.
+        var title: String?
         /// Which Bento this is — `slides`, `spaces`, `dash`. A pristine shell
         /// has no document in it yet and so no format: that is not a failure,
         /// it is a document nobody has saved.
@@ -73,6 +80,9 @@ enum BentoIndex {
         var text: String?
         /// The still first-page render the thumbnailers use, as raw HTML.
         var preview: String?
+
+        static let notADocument = Meta(isDocument: false, title: nil, app: nil,
+                                       encrypted: false, text: nil, preview: nil)
     }
 
     // MARK: - Sniff
@@ -86,25 +96,34 @@ enum BentoIndex {
 
     /// Everything a listing needs, from bytes already in hand.
     ///
-    /// `head` is the first `headBytes` of the file; `whole` is all of it, or
-    /// `nil` when the caller has decided not to pay for the full read. The split
-    /// mirrors the reference: the title is cheap and near the front, the preview
-    /// sits a quarter of the way into a 900KB file and cannot be had from the
-    /// head at all.
+    /// The three windows are the caller's to cut, because they are byte slices
+    /// of the file and this function only sees decoded text: `sniffHead` is the
+    /// first `sniffBytes`, `head` the first `headBytes`, `whole` all of it (or
+    /// nil when the caller has decided not to pay for the full read). The split
+    /// mirrors the reference — the title is cheap and near the front, the
+    /// preview sits a quarter of the way into a 900KB file and cannot be had
+    /// from the head at all.
     ///
     /// An ENCRYPTED document deliberately yields no text and no preview. That is
     /// a privacy rule, not an optimisation: a plaintext title page beside the
     /// ciphertext is the leak the password exists to prevent, and prose lifted
     /// into a system-wide search index is that same leak with a longer reach.
-    static func describe(head: String, whole: String?, fallbackTitle: String) -> Meta {
+    ///
+    /// The shape — `isDocument` folded in, everything else nil when it is false
+    /// — is the SHARED contract in `tray/fixtures/README.md`, not this host's
+    /// choice. `tray/webext`'s `describe()` never faces a non-document because
+    /// its caller sniffs first; a port that answers all the questions in one
+    /// call does, and has to say so.
+    static func describe(head: String, sniffHead: String, whole: String?) -> Meta {
+        guard isDocument(head: sniffHead) else { return .notADocument }
         let headU = Array(head.utf16)
         let encrypted = isEncrypted(headU)
-        var meta = Meta(title: fallbackTitle,
+        var meta = Meta(isDocument: true,
+                        title: title(headU).flatMap { $0.isEmpty ? nil : $0 },
                         app: app(headU),
                         encrypted: encrypted,
                         text: nil,
                         preview: nil)
-        if let t = title(headU), !t.isEmpty { meta.title = t }
         guard !encrypted, let whole else { return meta }
         let wholeU = Array(whole.utf16)
         meta.preview = previewSlice(wholeU)

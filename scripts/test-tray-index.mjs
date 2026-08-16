@@ -36,6 +36,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname, basename } from 'node:path'
@@ -204,7 +205,9 @@ async function referenceFor(files) {
   const out = new Map()
   for (const path of files) {
     const bytes = readFileSync(path)
-    const base = basename(path)
+    // What `listDocuments` computes and hands to describe() as the title
+    // fallback — extensions stripped, both of them.
+    const base = basename(path).replace(/\.bento\.html$/i, '').replace(/\.html?$/i, '')
     const file = {
       size: bytes.length,
       lastModified: 0,
@@ -236,7 +239,7 @@ import Foundation
 struct Row: Codable {
     let path: String
     let isDoc: Bool
-    let title: String
+    let title: String?
     let app: String?
     let encrypted: Bool
     let text: String?
@@ -249,10 +252,9 @@ for path in CommandLine.arguments.dropFirst() {
     let head = String(decoding: data.prefix(BentoIndex.headBytes), as: UTF8.self)
     let sniff = String(decoding: data.prefix(BentoIndex.sniffBytes), as: UTF8.self)
     let whole = String(decoding: data, as: UTF8.self)
-    let base = (path as NSString).lastPathComponent
-    let meta = BentoIndex.describe(head: head, whole: whole, fallbackTitle: base)
+    let meta = BentoIndex.describe(head: head, sniffHead: sniff, whole: whole)
     let row = Row(path: path,
-                  isDoc: BentoIndex.isDocument(head: sniff),
+                  isDoc: meta.isDocument,
                   title: meta.title,
                   app: meta.app,
                   encrypted: meta.encrypted,
@@ -303,7 +305,15 @@ function runSwift(bin, files) {
       const row = JSON.parse(line)
       out.set(row.path, {
         isDoc: row.isDoc,
-        title: row.title,
+        // `library.js`'s describe() ALWAYS returns a title, falling back to the
+        // file's base name, because its caller has already sniffed and it never
+        // faces a non-document. The Swift port answers all the questions in one
+        // call (the shared contract in tray/fixtures) so it returns nil, and the
+        // listing supplies the file name. Same behaviour, different seam — the
+        // fallback is applied here so the two are compared like for like.
+        title: row.title ?? basename(row.path)
+          .replace(/\.bento\.html$/i, '').replace(/\.html?$/i, ''),
+        rawTitle: row.title ?? null,
         app: row.app ?? null,
         encrypted: row.encrypted,
         text: row.text ?? null,
@@ -390,6 +400,63 @@ for (const path of files) {
 }
 
 const real = files.length - generated - (EXTRA_CORPUS ? 0 : 0)
+/* ── the shared corpus ────────────────────────────────────────────────────── */
+
+/**
+ * `tray/fixtures/` is the corpus all three hosts answer, with `expected.json`
+ * as the answer key and `tray/doc-index.mjs` as the reference. It is a DIFFERENT
+ * guarantee from the diff above and worth having both: that one proves this port
+ * tracks the extension as it moves, this one proves all three hosts agree on one
+ * frozen set of answers — including Kotlin, which nothing on this machine can run.
+ *
+ * Skipped, not failed, when the directory is absent: it arrives with the Android
+ * work, and a rig that fails until an unrelated branch lands is a rig people
+ * learn to ignore.
+ */
+function sharedCorpus() {
+  const dir = join(ROOT, 'tray/fixtures')
+  let expected
+  try { expected = JSON.parse(readFileSync(join(dir, 'expected.json'), 'utf8')) } catch { return null }
+
+  const names = Object.keys(expected.cases).sort()
+  const paths = names.map((n) => join(dir, 'cases', n))
+  const rows = runSwift(bin, paths)
+  const sha = (s) => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16)
+  const bad = []
+
+  for (const name of names) {
+    const want = expected.cases[name]
+    const r = rows.get(join(dir, 'cases', name))
+    if (!r) { bad.push(`  ${name}: the port produced no answer`); continue }
+    const mine = {
+      isDocument: r.isDoc,
+      title: r.rawTitle,
+      app: r.app,
+      encrypted: r.encrypted,
+      hasPreview: r.preview !== null,
+      textLength: r.text === null ? null : r.text.length,
+      textSha256_16: r.text === null ? null : sha(r.text),
+      text: r.text,
+    }
+    for (const key of Object.keys(want)) {
+      if (JSON.stringify(want[key]) === JSON.stringify(mine[key])) continue
+      bad.push(`  ${name} · ${key}: corpus says ${show(want[key])}, port says ${show(mine[key])}`)
+    }
+  }
+
+  // The budgets are part of the contract too — a port that agreed on every case
+  // while carrying a different TEXT_BUDGET agrees only by luck.
+  const budgets = [['textBudget', 40960], ['sniffBytes', 65536], ['headBytes', 307200]]
+  for (const [key, mineValue] of budgets) {
+    if (expected[key] !== undefined && expected[key] !== mineValue) {
+      bad.push(`  ${key}: corpus says ${expected[key]}, port uses ${mineValue}`)
+    }
+  }
+  return { count: names.length, bad }
+}
+
+const shared = sharedCorpus()
+
 console.log(`\ntray index: ${checked} documents compared ` +
   `(${generated} generated edge cases, ${real} from the tree${EXTRA_CORPUS ? `, corpus ${EXTRA_CORPUS}` : ''})`)
 console.log(`            ${withText} yielded searchable text`)
@@ -398,9 +465,22 @@ if (known.length) {
     `(${known.join(', ')})`)
 }
 
-if (failures.length) {
-  console.error(`\n${failures.length} disagreement(s) between library.js and BentoIndex.swift:\n`)
-  console.error(failures.join('\n\n'))
+if (shared) {
+  console.log(`            shared corpus (tray/fixtures): ${shared.count} cases` +
+    (shared.bad.length ? ` — ${shared.bad.length} DISAGREE` : ' — all agree'))
+} else {
+  console.log('            shared corpus (tray/fixtures): absent, skipped — arrives with tray/android')
+}
+
+if (failures.length || shared?.bad.length) {
+  if (failures.length) {
+    console.error(`\n${failures.length} disagreement(s) between library.js and BentoIndex.swift:\n`)
+    console.error(failures.join('\n\n'))
+  }
+  if (shared?.bad.length) {
+    console.error('\nDisagreements with the shared corpus (tray/fixtures/expected.json):\n')
+    console.error(shared.bad.join('\n'))
+  }
   process.exit(1)
 }
 console.log('            swift port agrees with library.js on every field')

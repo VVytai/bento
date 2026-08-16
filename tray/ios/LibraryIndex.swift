@@ -183,17 +183,17 @@ final class LibraryIndex {
     private func describe(_ url: URL, name: String, folder: String, size: Int, modified: Date) -> IndexedDocument? {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
         let head = String(decoding: data.prefix(BentoIndex.headBytes), as: UTF8.self)
+        let sniffHead = String(decoding: data.prefix(BentoIndex.sniffBytes), as: UTF8.self)
         // The whole file is only decoded when the head says it is worth it. A
         // sniffed file has already proven it carries the marker; a named one has
         // not, and a 40MB video someone called `.html` should not be decoded to
         // find that out.
-        guard BentoIndex.isDocument(head: String(decoding: data.prefix(BentoIndex.sniffBytes), as: UTF8.self))
-        else { return nil }
+        guard BentoIndex.isDocument(head: sniffHead) else { return nil }
         let whole = String(decoding: data, as: UTF8.self)
         let base = name
             .replacingOccurrences(of: #"\.bento\.html$"#, with: "", options: [.regularExpression, .caseInsensitive])
             .replacingOccurrences(of: #"\.html?$"#, with: "", options: [.regularExpression, .caseInsensitive])
-        let meta = BentoIndex.describe(head: head, whole: whole, fallbackTitle: base)
+        let meta = BentoIndex.describe(head: head, sniffHead: sniffHead, whole: whole)
         // Minted HERE, inside the folder's open scope, because that is the only
         // moment it can be: a document inside a granted folder is readable only
         // while the FOLDER is scoped, and an editing session outlives this walk
@@ -204,7 +204,11 @@ final class LibraryIndex {
                                name: name,
                                base: base,
                                folder: folder,
-                               title: meta.title,
+                               // The file name is what a listing shows for a
+                               // document that never got a title of its own.
+                               // That is a listing decision, so it is made here
+                               // rather than inside the extractor.
+                               title: meta.title ?? base,
                                app: meta.app,
                                encrypted: meta.encrypted,
                                text: meta.text,

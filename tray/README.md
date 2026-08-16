@@ -507,14 +507,22 @@ The browser stays the root. It is not a list but a surface — iCloud Drive, eve
 File Provider on the device, drag-and-drop, rename in place, favourites and tags
 — so search is one button away from it rather than in place of it.
 
-The port is held to the extension's by `scripts/test-tray-index.mjs`, which
-imports the real `library.js` and diffs it against the compiled Swift over
-generated edge cases and every document in the tree. That is what makes "each
-host carries its own copy" safe: a divergence is a failing rig rather than a
-document that is findable on one platform and not another. **Android's port
-should be diffed by the same rig** — it takes a `--corpus` directory, and the
-one deviation it currently accepts is written down in `BentoIndex.swift`
-(JavaScript can hold half a surrogate pair at the 40KB cut; Swift cannot).
+The port is held in place by `scripts/test-tray-index.mjs`, which runs two checks
+because they fail for different reasons:
+
+- the **shared corpus** in `tray/fixtures/` — the same cases and answer key every
+  host answers, budgets included. Skipped, not failed, when that directory is
+  absent, since it arrives with the Android work.
+- a diff against the **live `library.js`**, imported and run rather than copied,
+  over generated edge cases and every document in the tree. A frozen answer key
+  pins a port to a snapshot; when the reference moves, static expectations go
+  stale silently and every host stays green while drifting.
+
+That is what makes "each host carries its own copy" safe: a divergence is a
+failing rig rather than a document that is findable on one platform and not
+another. The one deviation currently accepted is written down in
+`BentoIndex.swift` — JavaScript can hold half a surrogate pair at the 40KB cut
+and Swift cannot, so the port drops it.
 
 Indexing prose into CoreSpotlight is a deliberate reach beyond the app, so two
 rules are enforced in code rather than described: an encrypted document yields no
