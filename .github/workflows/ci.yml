@@ -281,6 +281,16 @@ jobs:
         # Mac has to run it before either side changes.
         run: node scripts/test-tray-index.mjs
 
+      - name: tray/ios release verifier rig
+        # Starter decks are not bundled; a new document is FETCHED from the
+        # signed release channel and written to disk as an executable page. The
+        # signature and hash checks are what make that acceptable, so this proves
+        # the verifier REFUSES — tampered payload, tampered signature, a real
+        # signature over different bytes, no signature at all. Watching it accept
+        # the live manifest proves nothing: `return true` passes that test.
+        # Needs a Swift toolchain; self-skips loudly on the Linux runner.
+        run: node scripts/test-tray-releases.mjs
+
       - name: WebExtension package rig
         # Validates the store package without writing it: every file the
         # manifest names exists, every icon is the size it claims, no unexpected

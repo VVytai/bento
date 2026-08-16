@@ -14,6 +14,59 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-16 — Starter decks are FETCHED and verified, never bundled
+
+**Decision.** No `bento/tray` host ships a starter deck inside the app. A new
+document is fetched from the signed release channel
+(`https://bento.page/releases/<app>/manifest.json`) and cached. Andy's call;
+`tray/android` did it first (`Releases.kt`), `tray/ios` mirrors it
+(`Releases.swift`).
+
+**Why.** Starter decks change often and there are three apps with more coming, so
+bundling means either picking one arbitrarily or shipping several copies of Bento
+inside the app, each stale from the moment it was built. Measured: the single
+bundled slides seed was 517,161 bytes, **81% of a 630,851-byte Android release
+APK**. A document created this way is also the version everyone else has, the
+same day.
+
+**What it costs, stated plainly.** The host now makes ONE network request, only
+when creating a new document, only to the signed release channel. It makes no
+other — no update check of its own, no telemetry. `docs/PLATFORM.md` §1 requires
+no network to OPEN, EDIT, PRESENT or SAVE; creating from a template is none of
+those, and `tray/webext` already drew the line in the same place. The result is
+cached in durable storage (NOT a caches directory, which the OS may evict), so
+only the first "New" of a given release needs a connection, and a previously
+cached shell is the offline fallback — sound rather than a guess, because it was
+verified when it was cached.
+
+**VERIFICATION IS NOT OPTIONAL, and it is the reason the fetch is acceptable.**
+The bytes become an executable HTML document on the reader's own disk that they
+will afterwards trust. Both halves are checked, as `kernel/src/update.ts` does:
+the manifest's ECDSA P-256 signature over the EXACT payload string (no
+canonicalisation, no re-serialisation), then the downloaded shell's sha256
+against the hash pinned inside that signed payload. **Do NOT copy
+`tray/webext`'s `newDocument()`** — it does neither, and it is also broken
+against the live server (it reads a top-level `url` from what is actually a
+`{payload, sig}` envelope, so it always throws). Raised separately.
+
+**Three things a third port should not have to rediscover.**
+
+1. **The signature is raw `r || s`, not DER.** WebCrypto signs that way. Swift's
+   `P256.Signing.ECDSASignature(rawRepresentation:)` takes it directly; Java's
+   `SHA256withECDSA` wants DER and silently reports a bad signature otherwise —
+   indistinguishable from tampering. Check which your platform expects before
+   concluding the manifest is wrong.
+2. **Ask for bytes, not a page** (`Accept: */*`). A browser-shaped Accept header
+   got the artifact treated as a page being browsed and a CDN injected a tracking
+   beacon into it — 359 bytes longer than the signed release, which the hash
+   check correctly refused. Fixed at the origin since; the header stays because
+   the class of rewrite does not go away. The hash check is the defence.
+3. **Prove the verifier REFUSES.** `scripts/test-tray-releases.mjs` runs the
+   Swift verifier against a captured real manifest plus seven tampered ones
+   (payload edited, signature bent, a valid signature over different bytes, no
+   signature, captive-portal HTML). Watching it accept the live manifest proves
+   nothing — `return true` passes that test.
+
 ## 2026-08-16 — iOS document search: CoreSpotlight is the surface, and the port is pinned to the LIVE reference
 
 **Decision.** `tray/ios` implements the search settled below. Three things that
