@@ -267,9 +267,13 @@ for path in CommandLine.arguments.dropFirst() {
 `
 
 /**
- * CI runs on Linux with no Swift toolchain, so this rig skips there rather than
- * failing — the same convention as `test-tray-bridge.ts`. Deliberately LOUD
- * about it: a skip that reads like a pass is how a rig stops being run at all.
+ * `BentoIndex.swift` is Foundation-only, which is what lets this rig REALLY RUN
+ * on the Linux CI runner — Swift is installed there and the file compiles
+ * unchanged, so the whole diff happens on every push rather than only on a Mac.
+ * That is the payoff for keeping UIKit out of it.
+ *
+ * The skip below is for a machine with no Swift at all. Deliberately LOUD: a
+ * skip that reads like a pass is how a rig stops being run.
  */
 function haveSwift() {
   try {

@@ -22,26 +22,46 @@
  * a signature stays valid for the bytes it covers forever, so this keeps testing
  * the same thing after the live release has moved on.
  *
- * Needs a Swift toolchain; skips loudly on the Linux CI runner, like the other
- * tray rigs.
+ * Needs an APPLE Swift toolchain, and the reason is worth stating precisely
+ * because the obvious guess is wrong: the Linux CI runner DOES have `swiftc`,
+ * and `scripts/test-tray-index.mjs` really does compile and run there. What is
+ * missing on Linux is CryptoKit, which is Apple-only — so this rig probes for
+ * the MODULE rather than for the compiler. Probing for `swiftc` skipped nothing
+ * and failed the build.
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-function haveSwift() {
-  try { execFileSync('swiftc', ['--version'], { stdio: 'pipe' }); return true } catch { return false }
+/** Can this machine build the thing under test at all? */
+function haveCryptoKit() {
+  let probe
+  try {
+    probe = mkdtempSync(join(tmpdir(), 'bento-cryptokit-'))
+    // Foundation too — `Data` comes from there, and a probe that fails for its
+    // OWN missing import would skip this rig on a perfectly capable Mac.
+    writeFileSync(join(probe, 'main.swift'),
+      'import CryptoKit\nimport Foundation\nprint(SHA256.hash(data: Data()).description)\n')
+    execFileSync('swiftc', ['-o', join(probe, 'p'), join(probe, 'main.swift')], { stdio: 'pipe' })
+    return true
+  } catch {
+    return false
+  } finally {
+    if (probe) try { rmSync(probe, { recursive: true, force: true }) } catch { /* best effort */ }
+  }
 }
 
-if (!haveSwift()) {
-  console.log('tray releases: SKIPPED — no swiftc on this machine.')
-  console.log('               This rig is the only proof that the release verifier REFUSES')
-  console.log('               a tampered manifest. Run it on a Mac before touching Releases.swift.')
+if (!haveCryptoKit()) {
+  console.log('tray releases: SKIPPED — no CryptoKit on this machine (Apple platforms only).')
+  console.log('               This rig is the only proof that the release verifier REFUSES a')
+  console.log('               tampered manifest, and a new document is fetched over the network')
+  console.log('               and written to disk as an executable page. Run it on a Mac before')
+  console.log('               touching Releases.swift.')
   process.exit(0)
 }
 
