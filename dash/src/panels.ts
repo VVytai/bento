@@ -36,6 +36,10 @@ import { t, locale } from './i18n.ts'
 import { lsJson, lsSet } from '../../kernel/src/storage.ts'
 import { TYPE_LABEL } from './format.ts'
 import { buildCellProps, type CellRange, type PanelKit } from './cellprops.ts'
+import {
+  appearancePatch, buildAppearanceSection, describeOverrideSelection, effectiveFormat,
+  overrideFormatPatch, overrideKeys, type Appearance, type AppearanceEdit,
+} from './cellfmt.ts'
 import { mountTabs, renameSheetPatch } from './tabs.ts'
 import type { Column, ColumnType, TableSheet } from './model.ts'
 import type { Patch, Store } from './store.ts'
@@ -369,10 +373,79 @@ export function mountPanels(host: PanelsHost): Panels {
       right.appendChild(p)
       return
     }
+    buildDatasetCellSection(sheet)
     buildColumnSection(sheet)
     buildSheetSection(sheet)
     buildWorkbookSection()
     applyAccordion(right)
+  }
+
+  /**
+   * The Cell section on a DATASET — the gap this closes.
+   *
+   * The spreadsheet kind has had one since cellprops.ts landed; this kind had
+   * nothing, so ⌘B and the panel both did different things depending on which
+   * tab you were on. The Appearance rows below are literally the same builder
+   * (cellfmt.ts `buildAppearanceSection`) the spreadsheet draws, so the two
+   * cannot drift again.
+   *
+   * WHAT IS DELIBERATELY DIFFERENT is the two rows above it, and they are the
+   * type boundary made visible rather than merely respected:
+   *
+   *   * TYPE is READ-ONLY here and says which column decides it. On a dataset
+   *     the column owns the type — that is what earns the column formula, the
+   *     import refusal and the chart binding — so the cell cannot have its own.
+   *     Showing it greyed beside the cell's own appearance is the honest way to
+   *     say "this you may change, that you may not"; an absent row would leave
+   *     a reader wondering whether the panel simply forgot.
+   *   * PATTERN is display only. Typing one here stamps how this cell PRINTS
+   *     and never re-reads the value, which is the opposite of what the same
+   *     control does on a spreadsheet (there it is a type declaration and rules
+   *     6–8 recast). The note says so, because the two controls look identical.
+   */
+  function buildDatasetCellSection(sheet: TableSheet): void {
+    section(right, t('Cell'))
+    const visible = visibleColumns(sheet)
+    const col = currentColumn(sheet)
+    const keys = overrideKeys(sheet, store.order[sheet.id], visible, grid.sel.ranges() as CellRange[])
+    const cursorKey = keys.length
+      ? overrideKeys(sheet, store.order[sheet.id], visible,
+          [{ anchor: grid.sel.cursor, head: grid.sel.cursor }] as CellRange[])[0]
+      : undefined
+    if (!col || !keys.length || !cursorKey) {
+      note(right, t('Select a cell to format it.'))
+      return
+    }
+    const cell = sheet.cells?.[cursorKey]
+    readonlyRow(right, t('Selection'),
+      describeOverrideSelection(keys, `${col.name} ${grid.sel.cursor.row + 1}`))
+    readonlyRow(right, t('Type'), t(TYPE_LABEL[col.type]))
+
+    const own = typeof cell?.format === 'string' ? cell.format : ''
+    const pat = text(own, (v) => {
+      const next = v.trim()
+      if (next === own) return
+      const p = overrideFormatPatch(sheet, keys, next || undefined)
+      if (p) commit(p)
+    })
+    // The COLUMN's pattern as the placeholder: what this cell prints with
+    // today, when it has said nothing of its own.
+    pat.placeholder = effectiveFormat(sheet, cursorKey) ?? '#,##0.00'
+    pat.classList.add('dp-mono')
+    pat.disabled = ro()
+    row(right, t('Pattern'), pat)
+    note(right, t('The column decides what these cells ARE. A pattern here only changes how they print.'))
+
+    buildAppearanceSection({
+      host: right,
+      kit: KIT,
+      cell: cell as Appearance | undefined,
+      readOnly: ro(),
+      write: (edit: AppearanceEdit) => {
+        const p = appearancePatch(sheet, keys, edit)
+        if (p) commit(p)
+      },
+    })
   }
 
   function buildColumnSection(sheet: TableSheet): void {

@@ -69,6 +69,10 @@ const INDIRECT: Array<{ arg: string; file: string; name: string; pick: 'values' 
   // The column header renders the SAME table panels.ts wraps in t(); it used to
   // render it raw, so the type chip read "Money" in a Japanese workbook.
   { arg: 'TYPE_LABEL[c.type]', file: 'format.ts', name: 'TYPE_LABEL', pick: 'values' },
+  // The dataset Cell section shows the column's type READ-ONLY beside the
+  // cell's appearance — the type boundary made visible, so it has to be
+  // localized like every other reading of this table.
+  { arg: 'TYPE_LABEL[col.type]', file: 'format.ts', name: 'TYPE_LABEL', pick: 'values' },
   { arg: 'role', file: 'sync/people.ts', name: 'ROLE_LABEL', pick: 'values' },
 ]
 

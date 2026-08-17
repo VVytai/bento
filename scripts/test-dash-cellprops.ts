@@ -367,6 +367,34 @@ console.log('\npatches — one edit, one patch, one undo')
     'and clearing the last field REMOVES the cell — null, the spelling that survives JSON to a collaborator')
 }
 {
+  // THE VOCABULARY IS THE DATASET KIND'S TOO NOW. `stylePatch` writes through
+  // cellfmt.ts's `applyAppearance`, which is the same function the dataset
+  // panel writes through — so the fields below are not four new spreadsheet
+  // features, they are the two kinds reaching parity. Their own rig is
+  // scripts/test-dash-cellfmt.ts; these checks are here because THIS is the
+  // file that pins what the canvas writer does.
+  const s = sheetOf({ A1: { v: 1 } })
+  const p = stylePatch(s, ['A1'], {
+    italic: true, underline: true, wrap: true,
+    border: 'trbl', borderColor: '#445566', borderStyle: 'dashed',
+  })
+  const cell = (p as { cells: Record<string, CanvasCell> }).cells.A1
+  ok(cell.italic === true && cell.underline === true && cell.wrap === true,
+    'italic, underline and wrap are writable on the spreadsheet kind — they used to be absent from BOTH kinds')
+  ok(cell.border === 'trbl' && cell.borderColor === '#445566' && cell.borderStyle === 'dashed',
+    'and so are borders, as edges + colour + style')
+  ok(cell.v === 1, 'with the value untouched, like every other appearance write')
+  const cleared = stylePatch(sheetOf({ A1: { v: 1, italic: true, wrap: true } }), ['A1'],
+    { italic: null, wrap: false })
+  const after = (cleared as { cells: Record<string, CanvasCell> }).cells.A1
+  ok(!('italic' in after) && !('wrap' in after) && after.v === 1,
+    'clearing the new fields deletes them too — one rule for the whole vocabulary')
+  // The type boundary, from this side: the canvas writer refuses a value key
+  // exactly as the dataset one does, so neither panel can smuggle a write.
+  ok(stylePatch(sheetOf({ A1: { v: 1 } }), ['A1'], { v: 2, f: '=1+1' } as never) === null,
+    'a key outside the appearance vocabulary is ignored — a style control cannot write a value')
+}
+{
   const s = sheetOf({ A1: { v: 'north' }, A2: { v: '1/2/2026' }, A3: { v: '5 Mar 2026' } })
   const r = formatPatch(s, ['A1', 'A2', 'A3'], DATE_PATTERN)
   ok(r.refused === 2, 'two of three values could not be read as a date, and the panel is told the number')

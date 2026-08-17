@@ -74,6 +74,11 @@ import { starterDoc } from './starter.ts'
 import { validateDoc } from './validate.ts'
 import { mountHelp } from './help.ts'
 import { keyToAction, normalize } from './select.ts'
+import {
+  appearancePatch, attachAppearancePainter, overrideKeys, toggleTarget,
+  type AppearanceField, type CellRange,
+} from './cellfmt.ts'
+import { rangeKeys, stylePatch } from './cellprops.ts'
 import { mountComments, flatComments } from './comments.ts'
 import { mountRecovery } from './recovery.ts'
 import { mountDropOpen } from './dropopen.ts'
@@ -84,7 +89,7 @@ import { defaultBinding, renderChart, chartHeading, type ChartBinding } from './
 import { readCell } from './store.ts'
 import {
   insertRowsAt, deleteRowsAt, insertColumn, deleteColumn, resizeColumn,
-  autoFitWidth, setHidden, freezeAt, readFrozen } from './rowcol.ts'
+  autoFitWidth, setHidden, freezeAt, readFrozen, hiddenSet } from './rowcol.ts'
 import { FUNCTIONS, dependencies, recalc } from './formula.ts'
 import { buildScene, defaultViz3d, mountViz3d, type Viz3dBinding, type Viz3dKind } from './viz3d.ts'
 
@@ -348,6 +353,14 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   const viewEl = app.querySelector<HTMLElement>('.dx-status-view')!
 
   const grid = new Grid({ el: app.querySelector<HTMLElement>('.dx-grid')!, store, sheetId: doc.sheets[0].id })
+
+  // PER-CELL APPEARANCE, PAINTED — and painted from OUT HERE only until
+  // grid.ts takes the hook. The honest change is two `+= appearanceCss(cell)`
+  // inside the grid's two paint loops (that file is owned elsewhere this
+  // week); this does the same work over the window the grid just painted, and
+  // it CHAINS `onPaint` rather than claiming it, because comments.ts is
+  // documented as wanting the same slot.
+  attachAppearancePainter(grid, app.querySelector<HTMLElement>('.dx-grid')!)
 
   // --- can this action run on the sheet in front of the reader? ---------------
   //
@@ -1292,7 +1305,59 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     // ⌘D / ⌘Enter fill down. THE MAP decides which keys mean fill; a fill
     // WRITES CELLS, which the selection model cannot do, so the verb lands here.
     else if (keyToAction(e)?.kind === 'fill') { e.preventDefault(); grid.fillDownSelection() }
+    else {
+      // ⌘B / ⌘I / ⌘U. Beside `fill` and for the same reason: `Grid.handleKey`
+      // routes motion and clipboard, and a style write is neither — it is a
+      // patch cellfmt.ts builds from the selection.
+      const a = keyToAction(e)
+      if (a?.kind === 'style') {
+        // Not while a field or a cell editor has the caret: ⌘B in the title
+        // box is the browser's business, and the grid's own key handler stands
+        // down there for exactly this reason.
+        const el = e.target as HTMLElement | null
+        if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+        e.preventDefault()
+        styleSelection(a.field)
+      }
+    }
   })
+
+  /**
+   * ⌘B / ⌘I / ⌘U over the selection, on EITHER kind of sheet.
+   *
+   * ONE PATCH, so it is ONE undo step however many cells are selected — the
+   * rule cellprops.ts and cellfmt.ts both hold and both rigs pin. The two arms
+   * differ only in how a selection becomes keys: A1 addresses on a spreadsheet,
+   * `<colId>:<rid>` on a dataset, which is the whole difference between the
+   * kinds showing through at the one place it has to.
+   *
+   * The toggle is decided from the CELLS, not from the cursor: every cell on →
+   * turn it off, anything else → turn it all on (cellfmt.ts `toggleTarget`).
+   */
+  function styleSelection(field: AppearanceField): void {
+    if (store.readOnly) return
+    const ranges = grid.sel.ranges() as CellRange[]
+    const canvas = grid.canvas
+    if (canvas) {
+      const keys = rangeKeys(ranges)
+      if (!keys.length) return
+      const p = stylePatch(canvas, keys, {
+        [field]: toggleTarget(keys.map((k) => canvas.cells[k]), field) ? true : null,
+      })
+      if (p) store.commit(p)
+      return
+    }
+    let sheet: TableSheet
+    try { sheet = grid.sheet } catch { return }
+    const hidden = hiddenSet(sheet)
+    const visible = sheet.columns.filter((c) => !hidden.has(c.id))
+    const keys = overrideKeys(sheet, store.order[sheet.id], visible, ranges)
+    if (!keys.length) return
+    const p = appearancePatch(sheet, keys, {
+      [field]: toggleTarget(keys.map((k) => sheet.cells?.[k]), field) ? true : null,
+    })
+    if (p) store.commit(p)
+  }
   document.addEventListener('paste', (e) => {
     if ((e.target as HTMLElement)?.isContentEditable) return
     const target = e.target as HTMLElement | null
