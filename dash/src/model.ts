@@ -137,11 +137,26 @@ export interface CellOverride {
   by?: string
   at?: string
   why?: string
+  /**
+   * PRESENTATION, and on this kind that word is a boundary rather than a
+   * category. See the APPEARANCE block at the foot of this file: the COLUMN
+   * owns the type on a dataset, so everything here changes how a cell is
+   * DRAWN and nothing here changes what it IS. `format` in particular is a
+   * display pattern only — applying one never re-reads the value, which is
+   * exactly what it does on the spreadsheet kind (cellprops.ts rules 6–8).
+   */
   note?: string
+  format?: string
   color?: string
   bg?: string
   bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  wrap?: boolean
   align?: string
+  border?: string
+  borderColor?: string
+  borderStyle?: string
   [extra: string]: unknown
 }
 
@@ -261,14 +276,95 @@ export interface CanvasSheet {
 export interface CanvasCell {
   v?: unknown
   f?: string
+  /** appearance — the same vocabulary `CellOverride` carries, deliberately.
+   *  See the APPEARANCE block at the foot of this file. */
   format?: string
   note?: string
   color?: string
   bg?: string
   bold?: boolean
+  italic?: boolean
+  underline?: boolean
+  wrap?: boolean
   align?: string
+  border?: string
+  borderColor?: string
+  borderStyle?: string
   [extra: string]: unknown
 }
+
+// --- APPEARANCE, and why it is spelled twice --------------------------------
+//
+// `CanvasCell` (spreadsheet) and `CellOverride` (dataset) carry the SAME
+// appearance fields, listed independently in both interfaces rather than
+// factored into a shared `interface Appearance` the two extend.
+//
+// That is not laziness. These two interfaces are the FORMAT — a reader of this
+// file is reading the file on disk, and a field that only appears through an
+// `extends` two screens away is a field somebody misses. cellfmt.ts holds the
+// one runtime list (`APPEARANCE_FIELDS`) that every writer and painter goes
+// through, and `scripts/test-dash-cellfmt.ts` asserts the two interfaces and
+// that list stay in step, which is the check an `extends` would have bought.
+//
+// The fields, and what each is FOR:
+//
+//   format       a display pattern (`#,##0.00`). On the spreadsheet kind it is
+//                also the cell's TYPE declaration (cellprops.ts rule 1); on the
+//                dataset kind it is display ONLY and never re-reads a value.
+//   color / bg   ink and fill, `#rrggbb`.
+//   bold         "600", not the CSS number — an author's word.
+//   italic       .
+//   underline    .
+//   wrap         let a long value use more than one line. ABSENT means the row
+//                stays one line high and the value is clipped, which is what
+//                every grid here has always done.
+//   align        'left' | 'center' | 'right'. Absent = the type's own default
+//                (numbers right, text left), which is not the same as 'left'.
+//   border       WHICH EDGES, as a subset of "trbl" in that order — "b" is an
+//                underscore rule, "trbl" is a box. A string rather than four
+//                booleans because a box is one decision and four registers
+//                would let a merge produce three sides of one.
+//   borderColor  `#rrggbb`. Absent = the grid's own rule colour.
+//   borderStyle  'solid' | 'dashed' | 'dotted'. Absent = solid.
+//
+// EVERY ONE IS OPTIONAL AND ABSENT MEANS OFF (PLATFORM §3). A cleared field is
+// DELETED, never stored as `false` or `''` — otherwise un-bolding a cell leaves
+// a file that differs from the one before anyone bolded it, and two documents
+// that should be equal are not. Old files carry none of these and must render
+// exactly as they did; a build that does not know them must round-trip them
+// untouched, which the open `[extra: string]` index signature is what
+// guarantees.
+//
+// WIDTH IS DELIBERATELY ABSENT. Excel has thick borders; dash has one hairline,
+// because a per-cell width is a fourth register on a decoration and the grid
+// draws a 1px lattice that a 3px cell border only fights.
+
+/**
+ * The appearance fields, as data — the ONE runtime list, and it lives here
+ * because it is part of the FORMAT rather than part of a panel.
+ *
+ * Two very different readers need it and neither may retype it:
+ *
+ *   * cellfmt.ts writes through it, so no writer on either kind can touch a
+ *     key outside it (which is how per-cell appearance is stopped from
+ *     becoming per-cell TYPE on a dataset).
+ *   * sync/crdt.ts splits an override's registers by it, so bolding a cell
+ *     while somebody else retypes it keeps both. crdt.ts is deliberately free
+ *     of imports beyond this file and the store's writer — it runs in a node
+ *     rig with no DOM — which is the other reason the list cannot live beside
+ *     the panel that draws it.
+ *
+ * `format` and `note` are presentation too but are NOT here: they predate this
+ * vocabulary, and `format` on the SPREADSHEET kind is a type declaration
+ * (cellprops.ts rule 1) rather than decoration. Each consumer adds them
+ * explicitly, which keeps that difference visible instead of buried in a list.
+ */
+export const APPEARANCE_FIELDS = [
+  'bold', 'italic', 'underline', 'wrap', 'align',
+  'color', 'bg', 'border', 'borderColor', 'borderStyle',
+] as const
+
+export type AppearanceField = typeof APPEARANCE_FIELDS[number]
 
 /**
  * A pivot sheet holds a SPEC and never the numbers it produces — the same rule

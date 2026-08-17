@@ -89,8 +89,20 @@ import { t } from './i18n.ts'
 import { alignFor, formatValue } from './format.ts'
 import { formatRef } from './a1.ts'
 import { isFormula } from './cellformula.ts'
+import {
+  KEY_CAP, applyAppearance, buildAppearanceSection, sameCell,
+  type Appearance, type AppearanceEdit, type CellRange, type Pos,
+} from './cellfmt.ts'
 import type { CanvasCell, CanvasSheet, ColumnType } from './model.ts'
 import type { Patch } from './store.ts'
+
+// The selection geometry and the whole appearance vocabulary now live in
+// cellfmt.ts, which serves BOTH kinds of sheet — this kind is no longer the
+// only one that can bold a cell. Re-exported from here because this is where
+// every existing caller (panels.ts, the rig) already looks for them, and a
+// moved export is a needless edit to five other files.
+export { KEY_CAP }
+export type { CellRange, Pos }
 
 // --- patterns ---------------------------------------------------------------
 
@@ -426,15 +438,9 @@ export function recastForFormat(prev: CanvasCell | undefined, fmt: string | unde
 
 // --- selections, as A1 keys -------------------------------------------------
 
-export interface Pos { row: number; col: number }
-export interface CellRange { anchor: Pos; head: Pos }
-
 /** One address. a1.ts's `formatRef` is the ONLY place a key is minted. */
 const a1 = (row: number, col: number): string =>
   formatRef({ row, col, absRow: false, absCol: false })
-
-/** More cells than one edit should carry. A guard, not a limit anyone meets. */
-export const KEY_CAP = 50_000
 
 /**
  * Every address in the selection, once, in reading order.
@@ -484,16 +490,12 @@ export function describeSelection(ranges: readonly CellRange[]): string {
 // already carries many cells for exactly this reason (a paste, a fill, a
 // delete). Twenty patches would also be twenty CRDT ops and twenty repaints.
 
-export type StyleEdit = Partial<Record<'bold' | 'align' | 'color' | 'bg', string | boolean | null>>
+/** The appearance vocabulary is cellfmt.ts's now, and it is the SAME one the
+ *  dataset kind writes — italic, underline, wrap and borders included. */
+export type StyleEdit = AppearanceEdit
 
-const same = (a: CanvasCell | null, b: CanvasCell | undefined): boolean => {
-  if (a === null) return b === undefined
-  if (b === undefined) return false
-  const ka = Object.keys(a)
-  const kb = Object.keys(b)
-  if (ka.length !== kb.length) return false
-  return ka.every((k) => a[k] === b[k])
-}
+const same = (a: CanvasCell | null, b: CanvasCell | undefined): boolean =>
+  sameCell(a as Record<string, unknown> | null, b as Record<string, unknown> | undefined)
 
 /**
  * Set or clear appearance fields across a selection.
@@ -513,15 +515,10 @@ export function stylePatch(sheet: CanvasSheet, keys: readonly string[], edit: St
   let n = 0
   for (const key of keys) {
     const prev = sheet.cells[key]
-    const next: CanvasCell = { ...(prev ?? {}) }
-    for (const [k, v] of Object.entries(edit)) {
-      // `false` clears too: a stored `bold: false` is noise that says what
-      // absence already says, and it would make an unbolded cell unequal to a
-      // cell nobody ever bolded.
-      if (v === null || v === undefined || v === '' || v === false) delete next[k]
-      else next[k] = v
-    }
-    const out = orNull(next)
+    // `applyAppearance` is the shared writer: it clears by DELETING the key
+    // (`false` and `''` mean absent too) and it refuses to write anything
+    // outside `APPEARANCE_FIELDS`, so this path cannot smuggle a `v` either.
+    const out = applyAppearance<CanvasCell>(prev, edit)
     if (same(out, prev)) continue
     cells[key] = out
     n++
@@ -611,11 +608,6 @@ const kindLabel = (k: FormatKind): string =>
         : k === 'percent' ? t('Percent')
           : k === 'date' ? t('Date')
             : t('Text')
-
-const alignLabel = (a: string): string =>
-  a === 'left' ? t('Left') : a === 'center' ? t('Center') : t('Right')
-
-const ALIGNS = ['left', 'center', 'right'] as const
 
 /** A quantity for the preview when the cell is empty — something with a shape. */
 const SAMPLE = 1234.5
@@ -737,58 +729,10 @@ export function buildCellProps(ctx: CellPropsHost): void {
     ctx.say('')
   }
 
-  kit.section(host, t('Appearance'))
-
-  const bold = kit.check(cell?.bold === true, (v) => style({ bold: v ? true : null }))
-  bold.disabled = readOnly
-  kit.row(host, t('Bold'), bold)
-
-  const align = kit.select(
-    [['auto', t('Auto')] as const, ...ALIGNS.map((a) => [a, alignLabel(a)] as const)],
-    typeof cell?.align === 'string' && (ALIGNS as readonly string[]).includes(cell.align)
-      ? cell.align : 'auto',
-    (v) => style({ align: v === 'auto' ? null : v }),
-  )
-  align.disabled = readOnly
-  kit.row(host, t('Align'), align)
-
-  kit.row(host, t('Text colour'), colour(
-    typeof cell?.color === 'string' ? cell.color : '', '#1e2a3a', readOnly,
-    (v) => style({ color: v }), t('Use the default colour')))
-  kit.row(host, t('Background'), colour(
-    typeof cell?.bg === 'string' ? cell.bg : '', '#fff3cd', readOnly,
-    (v) => style({ bg: v }), t('No background')))
+  // ONE section builder, drawn identically on the dataset kind — see
+  // cellfmt.ts. This kind's own contribution above it is the FORMAT block,
+  // which is where its cell types are decided and is meaningless on a dataset.
+  buildAppearanceSection({ host, kit, cell: cell as Appearance | undefined, readOnly, write: style })
 
   if (ctx.message) kit.note(host, ctx.message)
-}
-
-/**
- * A colour with an OFF state, which `<input type="color">` does not have: it
- * always holds a colour, so "no background" cannot be expressed by the swatch
- * alone. The × beside it is the only way to get back to the default — without
- * it, one click on a cell's background is permanent.
- */
-function colour(
-  value: string, fallback: string, readOnly: boolean,
-  onChange: (v: string | null) => void, clearTitle: string,
-): HTMLElement {
-  const wrap = document.createElement('span')
-  wrap.className = 'dc-colour'
-  const input = document.createElement('input')
-  input.type = 'color'
-  input.value = /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
-  input.disabled = readOnly
-  if (!value) wrap.classList.add('dc-colour-off')
-  // `change`, never `input`: a drag through the OS colour wheel fires input on
-  // every pixel, and every one of those would be an undo step.
-  input.addEventListener('change', () => onChange(input.value))
-  const clear = document.createElement('button')
-  clear.type = 'button'
-  clear.className = 'dc-clear'
-  clear.textContent = '×'
-  clear.title = clearTitle
-  clear.disabled = readOnly || !value
-  clear.addEventListener('click', () => onChange(null))
-  wrap.append(input, clear)
-  return wrap
 }

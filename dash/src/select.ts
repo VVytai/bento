@@ -107,6 +107,17 @@ export type Action =
   | { kind: 'paste' }
   | { kind: 'undo' }
   | { kind: 'redo' }
+  /**
+   * ⌘B / ⌘I / ⌘U — the appearance of the selected CELLS, on either kind of
+   * sheet. Declared here rather than as three actions because the field is the
+   * only thing that differs and the card should say so once per key.
+   *
+   * NOT handled by `Grid.handleKey`: it falls through (no motion, no match),
+   * and main.ts picks it up beside ⌘D, because a style write goes through
+   * cellfmt.ts's patch builders and the grid does not write cells for the
+   * panel. Same division `fill` already uses.
+   */
+  | { kind: 'style'; field: 'bold' | 'italic' | 'underline' }
   /** Push the top row of the selection down through the rest of it (⌘D, ⌘↵). */
   | { kind: 'fill' }
   /**
@@ -260,6 +271,12 @@ export function keyToAction(e: KeyLike): Action | null {
     // — which is precisely the problem, because the browser can only see the
     // rows the virtualiser left in the DOM. Shift is deliberately ignored on
     // 'f' (⇧⌘F is the same verb) and load-bearing on 'g'.
+    // ⌘B / ⌘I / ⌘U. The browser's own defaults here (bookmarks bar, view
+    // source on some builds) are the reason a grid must claim them explicitly;
+    // every spreadsheet on the platform already means bold/italic/underline.
+    case 'b': return { kind: 'style', field: 'bold' }
+    case 'i': return { kind: 'style', field: 'italic' }
+    case 'u': return { kind: 'style', field: 'underline' }
     case 'f': return { kind: 'find' }
     case 'g': return { kind: 'findNext', back: shift }
     case 's': return { kind: 'save' }
@@ -321,6 +338,9 @@ export function actionSig(a: Action): string {
     case 'home': case 'end':
       return `${a.kind}${a.whole ? '.whole' : ''}${a.extend ? '.extend' : ''}`
     case 'panel': return `panel.${a.side}`
+    // Three keys, three rows: the field IS the difference, so leaving it out
+    // would collapse bold, italic and underline into one line reading "⌘B".
+    case 'style': return `style.${a.field}`
     default: return a.kind
   }
 }

@@ -83,6 +83,10 @@ const LABELS: Record<string, [Section, string]> = {
   'clear': ['enter', 'Clear the selected cells'],
   'cancel': ['enter', 'Cancel what you are editing'],
 
+  'style.bold': ['enter', 'Bold the selected cells — or un-bold them, when every one is already bold'],
+  'style.italic': ['enter', 'Italic the selected cells'],
+  'style.underline': ['enter', 'Underline the selected cells'],
+
   'copy': ['clip', 'Copy the selection'],
   'cut': ['clip', 'Cut the selection'],
   'paste': ['clip', 'Paste into the selection'],
