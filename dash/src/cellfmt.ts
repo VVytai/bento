@@ -61,7 +61,7 @@
 import './cellprops.css'
 import { t } from './i18n.ts'
 import { APPEARANCE_FIELDS, type AppearanceField } from './model.ts'
-import type { CanvasCell, CellOverride, Column, TableSheet } from './model.ts'
+import type { CellOverride, Column, TableSheet } from './model.ts'
 import type { Patch } from './store.ts'
 
 // --- the vocabulary ---------------------------------------------------------
@@ -224,47 +224,6 @@ export function appearanceCss(cell: Appearance | undefined | null): string {
   return st
 }
 
-/**
- * The same appearance, applied to a live element instead of a string.
- *
- * This exists because grid.ts is not this task's to edit and the feature has to
- * be visible: `attachAppearancePainter` runs it over the painted window from
- * the grid's own `onPaint` hook. Property-at-a-time, never `cssText`, because
- * the element already carries a width and an alignment the grid computed.
- *
- * The moment grid.ts takes `appearanceCss` into its two paint loops (the
- * one-line change this file was written to be called from) this and its
- * attacher go, and nothing else changes.
- */
-export function paintAppearance(el: HTMLElement, cell: Appearance | undefined | null): void {
-  const s = el.style
-  // ADDITIVE ONLY — it never CLEARS a property. The grid rebuilds its cell
-  // elements from scratch on every paint, so there is no stale styling to
-  // undo; and clearing would wipe inline styles that belong to somebody else,
-  // most obviously a conditional format's background sitting on the very same
-  // cell. `appearanceCss` (the string the grid should eventually inline
-  // itself) is emitted after the conditional format's own declarations, so it
-  // wins the same way this does, and neither erases the other's untouched
-  // properties.
-  const bg = cssColor(cell?.bg)
-  if (bg) s.background = bg
-  const fg = cssColor(cell?.color)
-  if (fg) s.color = fg
-  if (cell?.bold) s.fontWeight = '600'
-  if (cell?.italic) s.fontStyle = 'italic'
-  if (cell?.underline) s.textDecoration = 'underline'
-  if (cell?.wrap) { s.whiteSpace = 'normal'; s.overflowWrap = 'anywhere' }
-  const edges = normaliseEdges(cell?.border)
-  if (!edges) return
-  const style = (BORDER_STYLES as readonly string[]).includes(String(cell?.borderStyle))
-    ? String(cell?.borderStyle) : 'solid'
-  const col = cssColor(cell?.borderColor) ?? 'currentColor'
-  for (const [e, side] of [['t', 'Top'], ['r', 'Right'], ['b', 'Bottom'], ['l', 'Left']] as const) {
-    if (edges.includes(e)) {
-      ;(s as unknown as Record<string, string>)[`border${side}`] = `1px ${style} ${col}`
-    }
-  }
-}
 
 // --- dataset addressing -----------------------------------------------------
 
@@ -571,59 +530,3 @@ export function colourControl(
   return wrap
 }
 
-// --- the interim painter ----------------------------------------------------
-
-/**
- * Paint appearance over the grid's painted window, from its `onPaint` hook.
- *
- * INTERIM, and it says so at every level: the right answer is two `+=
- * appearanceCss(cell)` in grid.ts's two paint loops, which this task does not
- * own. Until then this walks the cells that exist — the virtualised window,
- * never the whole sheet — and applies the same appearance the string version
- * would have inlined.
- *
- * It CHAINS whatever `onPaint` already holds instead of taking the slot: the
- * hook is a single callback and the comments overlay is documented as wanting
- * it, so a straight assignment here would be a landmine for the next person.
- */
-export interface PaintableGrid {
-  onPaint?: () => void
-  sheet: TableSheet
-  canvas: { cells: Record<string, CanvasCell> } | null
-}
-
-export function attachAppearancePainter(grid: PaintableGrid, root: HTMLElement): void {
-  const prev = grid.onPaint
-  grid.onPaint = () => {
-    prev?.()
-    try { repaint(grid, root) } catch { /* a paint is not worth a boot */ }
-  }
-}
-
-function repaint(grid: PaintableGrid, root: HTMLElement): void {
-  const canvas = grid.canvas
-  if (canvas) {
-    // The spreadsheet kind: grid.ts already inlines bg/color/bold, so this is
-    // additive for the four fields it does not know. Re-applying all of them
-    // is still right — `paintAppearance` writes the same values back.
-    for (const el of root.querySelectorAll<HTMLElement>('.dg-cell[data-key]')) {
-      const key = el.dataset.key
-      if (!key) continue
-      const cell = canvas.cells[key]
-      if (cell) paintAppearance(el, cell as Appearance)
-    }
-    return
-  }
-  let sheet: TableSheet
-  try { sheet = grid.sheet } catch { return }   // mid-replaceDoc
-  const cells = sheet?.cells
-  if (!cells || !Object.keys(cells).length) return
-  for (const el of root.querySelectorAll<HTMLElement>('.dg-row[data-rid]')) {
-    const rid = el.dataset.rid
-    if (rid === undefined) continue
-    for (const c of el.querySelectorAll<HTMLElement>('.dg-cell[data-col]')) {
-      const over = cells[`${c.dataset.col}:${rid}`]
-      if (over) paintAppearance(c, over as Appearance)
-    }
-  }
-}

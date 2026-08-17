@@ -615,5 +615,69 @@ function pair(): {
     'with identical registers on all three, which is why this cannot be found by comparing sync state')
 }
 
+// --- the grid actually PAINTS it ---------------------------------------------
+//
+// Everything above proves `appearanceCss` computes the right declaration. None
+// of it proved the grid ever CALLS it — and measured, it did not have to:
+// deleting BOTH `st += appearanceCss(…)` lines from grid.ts's two paint loops
+// left every check in this file, and in test-dash-cellprops.ts, green. The
+// feature would have been invisible on screen with CI reporting success.
+//
+// That is a shape this repo has shipped before. `--accent-ink` was a token the
+// stylesheet never declared: the class was applied, the rule was dead, and the
+// check that "covered" it asserted the class rather than the colour. A unit
+// test of a pure function tests the function, not the feature.
+//
+// So these mount the REAL Grid over the DOM shim the a11y rig uses and read the
+// emitted markup. It cannot say a cell LOOKS bold — only that the declaration
+// reached the element, which is exactly the link the checks above skip.
+{
+  const { installDom } = await import('./lib/dash-dom.ts')
+  const { Grid } = await import('../dash/src/grid.ts')
+  const dom = installDom()
+
+  const paintHtml = (doc: DashDoc, sheetId: string): string => {
+    const host = dom.doc.createElement('div')
+    dom.doc.body.appendChild(host)
+    const grid = new Grid({ el: host as never, store: new Store(doc), sheetId })
+    const scroll = host.querySelector('.dg-scroll')!
+    scroll.clientHeight = 600
+    scroll.clientWidth = 900
+    grid.paint()
+    return host.innerHTML
+  }
+
+  // DATASET — the kind that could carry no appearance at all until this change.
+  {
+    const doc = fresh({ cells: { 'amount:1': { bold: true, italic: true, color: '#b3261e' } } })
+    const html = paintHtml(doc, 'sh1')
+    ok(/font-weight:\s*600/.test(html),
+      'a dataset cell marked bold emits font-weight — the GRID calls appearanceCss, not only the rig')
+    ok(/#b3261e/i.test(html), 'and its colour reaches the element')
+    ok(/font-style:\s*italic/.test(html), 'and italic, which the dataset kind could not carry before at all')
+  }
+
+  // SPREADSHEET — the same vocabulary through the OTHER paint loop. Two loops
+  // with two ideas of what "bold" means is how the kinds drifted the first time.
+  {
+    const r = parseDoc(JSON.stringify({
+      format: 'bento/dash', version: 1, policy: 'bento-dash-1', docId: 'd', title: 'test',
+      sheets: [{ id: 'cv1', name: 'Scratch', kind: 'canvas',
+        cells: { A1: { v: 1, bold: true, underline: true } } }],
+    }))
+    const html = paintHtml(r.doc, 'cv1')
+    ok(/font-weight:\s*600/.test(html), 'a spreadsheet cell marked bold emits font-weight from the other paint loop')
+    ok(/underline/.test(html), 'and underline, which neither kind carried before')
+  }
+
+  // Nothing set must emit nothing: appearance is applied AFTER a conditional
+  // format, so a non-additive implementation would silently erase one.
+  {
+    const html = paintHtml(fresh(), 'sh1')
+    ok(!/font-weight:\s*600/.test(html) && !/font-style:\s*italic/.test(html),
+      'and a sheet with no appearance emits none of it — or appearance would overwrite conditional formats')
+  }
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures) process.exit(1)

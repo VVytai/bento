@@ -21,6 +21,7 @@
 
 import { formatValue, alignFor, TYPE_LABEL } from './format.ts'
 import type { CanvasCell, CanvasSheet, Column, ColumnType, Sheet, TableSheet } from './model.ts'
+import { appearanceCss } from './cellfmt.ts'
 import { readCell, type Patch, type Store } from './store.ts'
 import { recalc, isErr, type Vec } from './formula.ts'
 import {
@@ -1151,6 +1152,12 @@ export class Grid {
           if (cf?.bg) st += `;background:${cf.bg}`
           if (cf?.color) st += `;color:${cf.color}`
           if (cf?.bold) st += ';font-weight:600'
+          // The cell's OWN appearance, LAST so it wins the tie — a hand-set
+          // colour is a decision and a conditional format is a rule, and the
+          // reader who bolded this cell should see it bold. Additive: an
+          // override that sets nothing emits nothing, so a conditional
+          // format's background survives untouched.
+          st += appearanceCss(over)
           const bar = cf?.bar
             ? `<span class="dg-bar" style="left:${bar0(cf)}%;width:${cf.bar.pct}%;background:${cf.bar.color}"></span>`
             : ''
@@ -2305,12 +2312,12 @@ export class Grid {
           : ''
         let st = `width:${this.canvasColW(s, c)}px;text-align:${canvasAlign(cell, v)}${hst}`
         if (h !== ROW_H) st += `;line-height:${h - 1}px`
-        // The cell's OWN styling — `CanvasCell` has carried these four since
-        // commit one and nothing has ever drawn them. Setting them is a later
-        // pass; a file that already says `bold` must not be shown plain.
-        if (cell?.bg) st += `;background:${cell.bg}`
-        if (cell?.color) st += `;color:${cell.color}`
-        if (cell?.bold) st += ';font-weight:600'
+        // The cell's OWN appearance. These were three hand-written lines for
+        // the three fields `CanvasCell` carried since commit one; both kinds
+        // now share one vocabulary, so this is `appearanceCss` and the dataset
+        // loop above calls the same function. Two paint sites with two ideas
+        // of what "bold" means is how they drifted the first time.
+        st += appearanceCss(cell)
         cells.push(
           `<div class="dg-cell${cell?.note ? ' dg-noted' : ''}${isErr(v) ? ' dg-err' : ''}` +
           `${inSel ? ' dg-sel' : ''}${isCursor ? ' dg-cursor' : ''}${hit}" ` +

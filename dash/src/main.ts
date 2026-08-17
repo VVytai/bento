@@ -75,7 +75,7 @@ import { validateDoc } from './validate.ts'
 import { mountHelp } from './help.ts'
 import { keyToAction, normalize } from './select.ts'
 import {
-  appearancePatch, attachAppearancePainter, overrideKeys, toggleTarget,
+  appearancePatch, overrideKeys, toggleTarget,
   type AppearanceField, type CellRange,
 } from './cellfmt.ts'
 import { rangeKeys, stylePatch } from './cellprops.ts'
@@ -353,14 +353,6 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
   const viewEl = app.querySelector<HTMLElement>('.dx-status-view')!
 
   const grid = new Grid({ el: app.querySelector<HTMLElement>('.dx-grid')!, store, sheetId: doc.sheets[0].id })
-
-  // PER-CELL APPEARANCE, PAINTED — and painted from OUT HERE only until
-  // grid.ts takes the hook. The honest change is two `+= appearanceCss(cell)`
-  // inside the grid's two paint loops (that file is owned elsewhere this
-  // week); this does the same work over the window the grid just painted, and
-  // it CHAINS `onPaint` rather than claiming it, because comments.ts is
-  // documented as wanting the same slot.
-  attachAppearancePainter(grid, app.querySelector<HTMLElement>('.dx-grid')!)
 
   // --- can this action run on the sheet in front of the reader? ---------------
   //
