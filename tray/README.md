@@ -474,6 +474,8 @@ here rather than discovered later.
 | starter deck bundled in the app | **no** | **no** | same |
 | release manifest signature verified | `CryptoKit` P-256 | `SHA256withECDSA` + DER | same check |
 | downloaded shell hash-checked | ✓ | ✓ | same |
+| release is for the app we ASKED for | ✓ | — | **gap on Android** |
+| rollback refused (per-app version floor) | ✓ | — | **gap on Android** |
 | seed cached for offline "New" | Application Support | `filesDir` | same |
 | way back out | floating exit, fades when idle | system back gesture | platform-forced |
 | root screen | `UIDocumentBrowserViewController` | own recents list over SAF | platform-forced |
