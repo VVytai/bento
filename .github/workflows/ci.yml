@@ -271,6 +271,16 @@ jobs:
         # Source-shape checks; the Swift half self-skips without a toolchain.
         run: node scripts/test-tray-bridge.ts
 
+      - name: tray mark is one source
+        # tray-icon.svg is the only drawing of the mark. Everything else is
+        # generated from it: the Android launcher vectors (which have no <rect>,
+        # so each rounded corner becomes opaque path data nobody would diff), and
+        # the iOS asset catalog — the mark plus the four brand colours the app's
+        # chrome reads by name. A hex value retyped into Swift is a value that can
+        # disagree with the logo while looking almost right, which is the kind of
+        # wrong nothing notices. This fails if any of it drifts.
+        run: node tray/assets/make-icons.mjs --check
+
       - name: tray/ios index rig
         # The iOS text extractor is a PORT of tray/webext's, and the two are held
         # together by nothing but agreement — so this diffs them, driving the

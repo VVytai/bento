@@ -23,12 +23,18 @@ final class SearchViewController: UIViewController {
     private let table = UITableView(frame: .zero, style: .insetGrouped)
     private let search = UISearchController(searchResultsController: nil)
     private let empty = UILabel()
+    /// The mark and wordmark sit above the empty state's text. This is the one
+    /// screen in the app that is OURS rather than the system's — the document
+    /// browser is deliberately left as iOS designed it — so it is the right and
+    /// only place to say whose app this is.
+    private let brand = Brand.lockup("tray", side: 34, style: .title2)
     private var hits: [SearchHit] = []
 
     override func viewDidLoad() {
         super.viewDidLoad()
         title = "Search"
         view.backgroundColor = .systemGroupedBackground
+        view.tintColor = Brand.accent
 
         navigationItem.leftBarButtonItem = UIBarButtonItem(
             barButtonSystemItem: .close, target: self, action: #selector(close))
@@ -62,11 +68,19 @@ final class SearchViewController: UIViewController {
         empty.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(empty)
 
+        brand.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(brand)
+
         NSLayoutConstraint.activate([
             table.topAnchor.constraint(equalTo: view.topAnchor),
             table.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             table.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             table.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            // The lockup and the text are one block, centred together: pinning the
+            // text to the centre and hanging the mark above it drifts as Dynamic
+            // Type changes the text's height.
+            brand.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            brand.bottomAnchor.constraint(equalTo: empty.topAnchor, constant: -20),
             empty.centerYAnchor.constraint(equalTo: view.centerYAnchor),
             empty.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 40),
             empty.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -40),
@@ -82,6 +96,7 @@ final class SearchViewController: UIViewController {
         table.reloadData()
         let granted = !FolderGrants.shared.isEmpty
         empty.isHidden = !hits.isEmpty
+        brand.isHidden = !hits.isEmpty
         table.isHidden = hits.isEmpty
         empty.text = granted
             ? (search.isActive && !(search.searchBar.text ?? "").isEmpty

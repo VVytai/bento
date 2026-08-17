@@ -13,6 +13,13 @@ final class DocumentBrowserViewController: UIDocumentBrowserViewController,
         delegate = self
         allowsDocumentCreation = true
         allowsPickingMultipleItems = false
+        // The ONLY styling this screen gets. It is `UIDocumentBrowserViewController`
+        // — Files, iCloud Drive, every File Provider on the device, drag-and-drop,
+        // rename in place, favourites, tags — and keeping it as iOS designed it is
+        // the decision (docs/DECISIONS.md, 2026-08-16), so it is not dressed up.
+        // A tint on our own buttons is enough to say the app is ours; a branded
+        // bar would fight the system chrome it sits in and win nothing.
+        view.tintColor = Brand.accent
         // Search sits BESIDE the browser, never in place of it. The browser's
         // own field searches file names in whatever provider is being browsed;
         // this one searches what the documents say. See SearchViewController.
