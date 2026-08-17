@@ -102,18 +102,35 @@ against the live server (it reads a top-level `url` from what is actually a
    load-bearing case remains a manifest captured verbatim from bento.page and
    checked against the SHIPPED key with nothing injected — the only check a
    self-consistent fixture cannot fake.
-7. **Rollback replay: refuse a genuine release older than one already accepted.**
+7. **Rollback replay is a KNOWN GAP, deferred as a policy call — not built.**
    A stale but real manifest passes signature, app identity AND digest, because
-   every byte of it is authentic — it just hands over an older shell, which is
-   how someone who can re-serve but not forge pins new documents to a version
-   with a known hole. `kernel/src/update.ts` already refuses to go backwards; a
-   host that CREATES documents had no floor, having no version of its own to
-   compare against. `Releases.swift` keeps a per-app high-water mark, raised only
-   AFTER the downloaded bytes pass their hash (raising it on an unproven manifest
-   would let a forgery lock the device out of every real release below it).
-   The cost, stated: a deliberate maintainer rollback is refused too, until the
-   version number moves past it — the same trade `update.ts` makes.
-   **Neither `tray/webext` nor `tray/android` has this yet.**
+   every byte of it is authentic; it just hands over an older shell, which is how
+   someone who can re-serve but not forge pins new documents to a version with a
+   known hole. `kernel/src/update.ts` refuses to go backwards, but a host that
+   CREATES documents has no version of its own to compare against, so it needs a
+   per-app high-water mark instead.
+
+   **Deferred by Andy pending a decision across all three hosts**, because it is
+   not a straight win: refusing a rollback also refuses a DELIBERATE one, so
+   pulling a bad release would require a version bump rather than a re-point.
+   Implemented in `tray/ios` and then removed before merge rather than shipping a
+   behaviour the other hosts had not adopted — one host quietly diverging on
+   what a release channel is allowed to do is worse than the gap.
+
+   The two details that are easy to get backwards, kept here so they are not
+   re-derived when this is revisited:
+   - **Raise the floor only AFTER the downloaded bytes pass their digest.**
+     Raising it on a merely-verified manifest lets a forged one lock the device
+     out of every real release below it — a failed attack becomes a permanent
+     denial of service.
+   - **An EQUAL version must be accepted.** Re-fetching the version you already
+     have is the normal case, and getting it wrong breaks the second creation
+     rather than some exotic edge.
+
+   Both `compareVersions` in `kernel/src/update.ts` and the equivalent in
+   `tray/webext/src/update.js` sort an unparsable component as **0**, not as
+   inconclusive: `Number('1a')` is NaN, but `(pa[i] || 0)` coerces it, since NaN
+   is falsy. Verified by running it. Any floor should match that.
 
 ## 2026-08-16 — iOS document search: CoreSpotlight is the surface, and the port is pinned to the LIVE reference
 
