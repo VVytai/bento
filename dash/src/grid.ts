@@ -31,7 +31,7 @@ import { buildOrder, type ColumnFilter } from './filter.ts'
 import { evaluateRules, type CellStyle } from './condfmt.ts'
 import { colToLetters, formatRef, parseRef } from './a1.ts'
 import { t } from './i18n.ts'
-import { resizeColumn, autoFitWidth, hiddenSet, readFrozen } from './rowcol.ts'
+import { resizeColumn, autoFitWidth, hiddenSet, readFrozen, insertRowsAt } from './rowcol.ts'
 import {
   cellKey, isFormula, recalcCells, recalcWorkbook, translateCellFormula,
   shiftSheetFormulas, workbookSources, type CellSource,
@@ -185,6 +185,116 @@ export function viewStatusText(
   return parts.join('  ·  ')
 }
 
+// --- the dataset's frontier --------------------------------------------------
+//
+// WHAT IS BELOW THE LAST ROW OF A DATASET? Exactly one row, and it is a control.
+//
+// The complaint this answers: an 8-row sheet had no row 9, ArrowDown from the
+// last row did nothing, and the ruled lines under the total — which look
+// exactly like empty spreadsheet rows — were BACKGROUND PAINT on `.dg-table`
+// that selected nothing when clicked. So the grid looked like Excel's infinite
+// canvas and behaved like a table, with nothing on screen saying which.
+//
+// REJECTED — real appendable empty rows past the data (Sheets' answer). It was
+// the right answer when it was written down, and the spreadsheet kind
+// (`kind: 'canvas'`) has since been built and IS that answer: unbounded, sparse,
+// typed per cell, `=SUM(` anywhere. Giving the dataset a second unbounded
+// frontier would leave two half-spreadsheets and would cost the dataset the one
+// thing it is for. Every derived surface here is defined over "the rows there
+// are": the order vector is a permutation of them, the footer is `SUBTOTAL` over
+// them, `rid` identity anchors comments and per-cell formulas to them, the CRDT
+// keys nodes by them, and export writes them as an xlsx ListObject. Twenty
+// phantom rows would have to be excluded from every one of those, one by one,
+// forever — and the first one missed is a wrong number that looks right.
+//
+// REJECTED — leaving the lattice and calling it decoration. That is the present
+// state and it is the actual defect: a lie told in paint.
+//
+// CHOSEN — the frontier is honest in BOTH directions at once:
+//   • the ruled lattice now STOPS at the last row (`paintEmptyGrid` clips both
+//     background layers to the content height). Below it is plain background,
+//     which is the truthful picture of "there is nothing there";
+//   • and one real row sits at the bottom, a DOM row you can click, arrow onto
+//     and type into. Typing appends a real row (`insertRowsAt`) and continues
+//     the edit into it, so the universal gesture — click below the numbers,
+//     type — now lands where the reader aimed instead of overwriting the last
+//     data cell. `=SUM(D1:D8)` typed there becomes a per-cell formula on a real
+//     row, which is what the reader meant.
+//
+// Excel agrees, and this is the same agreement that already governs the totals
+// row: dash's dataset maps to an xlsx ListObject, and a ListObject does not
+// have an infinite frontier either — it has ONE insert row that extends the
+// table when you type in it.
+//
+// SUPPRESSED WHILE FILTERED. A blank row appended into a filtered view fails
+// the filter and vanishes on the spot, which is a control that appears to do
+// nothing. A SORT is fine and is allowed: `buildOrder` sinks blanks in both
+// directions, so the new row lands at the bottom, where it was typed.
+
+/**
+ * Which VIEW ROW is the appender, or -1 when there is none.
+ *
+ * Pure, and exported, because this one number decides the selection's height,
+ * the sizer's height, where the lattice stops and whether a keystroke appends —
+ * five call sites that must not each re-derive it slightly differently.
+ */
+export function frontierRow(opts: {
+  rows: number          // rowCount(sheet) — the rows the file has
+  viewRows: number      // the order vector's length, or `rows` when there is none
+  cols: number          // visible columns; a sheet with none has nothing to type into
+  readOnly: boolean
+}): number {
+  if (opts.readOnly || opts.cols < 1) return -1
+  if (opts.viewRows < opts.rows) return -1      // filtered: see above
+  return opts.viewRows
+}
+
+// --- ARIA coordinates ---------------------------------------------------------
+//
+// THE GRID IS VIRTUALISED, so a painted row's position in the DOM is not its
+// position in the sheet: about forty rows of a 5,000-row view exist at any
+// moment. `aria-rowindex` must describe the FULL VIEW — that is the entire
+// reason the attribute exists — and getting it wrong tells a screen-reader user
+// that a 5,000-row sheet has 40 rows, which is worse than saying nothing at
+// all, because it is a confident wrong answer.
+//
+// Both indices are 1-BASED and both count the furniture: row 1 is the column
+// header, column 1 is the row-number gutter. So a body row at view index 0 is
+// aria-rowindex 2, and the first data column is aria-colindex 2.
+
+/** View row index (0-based) → `aria-rowindex`. Row 1 is the header. */
+export const ariaRowIndex = (viewRow: number): number => viewRow + 2
+/** Visible column index (0-based) → `aria-colindex`. Column 1 is the gutter. */
+export const ariaColIndex = (visCol: number): number => visCol + 2
+
+/**
+ * `aria-rowcount` for a dataset — every row a reader can land on, header and
+ * furniture included, whether or not it is in the DOM.
+ *
+ * The appender and the totals row are rows: they carry an `aria-rowindex`, so a
+ * count that left them out would be smaller than the largest index in the grid,
+ * which is the one arithmetic error a screen reader cannot recover from.
+ */
+export function ariaRowCount(
+  viewRows: number, hasAppender: boolean, hasTotals: boolean,
+): number {
+  return 1 + viewRows + (hasAppender ? 1 : 0) + (hasTotals ? 1 : 0)
+}
+
+/** `aria-colcount`: the gutter, then the visible columns. */
+export const ariaColCount = (visCols: number): number => 1 + visCols
+
+/**
+ * A SPREADSHEET REPORTS ITS SIZE AS UNKNOWN, which is what -1 means in ARIA.
+ *
+ * The canvas kind's extent is a frontier, not a fact: it grows with the cursor
+ * and with the window, so `aria-rowcount="40"` would be announced as the size
+ * of a sheet that is unbounded by definition, and would go stale on the next
+ * scroll. -1 is the value ARIA defines for "the total is not known", and it is
+ * the honest one here — the indices are still exact.
+ */
+export const ARIA_UNKNOWN = -1
+
 export function aggregate(
   spec: TotalSpec,
   read: (i: number) => unknown,
@@ -243,6 +353,9 @@ const FRONTIER_COLS = 4
 const CANVAS_COL_W = 100
 const MIN_COL_W = 32
 const MIN_ROW_H = 14
+
+/** Two grids on one page must not share a `aria-describedby` target. */
+let DESC_SEQ = 0
 
 /**
  * A cell's address. `A1`, `Z10000` — the key the document is written with.
@@ -450,8 +563,7 @@ export class Grid {
       // and insert/delete renumber the rows underneath them. Leaving it alone
       // left the grid drawing blanks and rows in an order matching nothing.
       if (this.store.lastTouched.structural || this.store.lastTouched.all) this.applyView()
-      this.sel.resize(this.store.order[this.sheet.id]?.length ?? rowCount(this.sheet),
-        cols(this.sheet).length)
+      this.sel.resize(this.selRows(), cols(this.sheet).length)
       this.paint()
     })
     this.store.on('view', () => this.paint())
@@ -584,6 +696,10 @@ export class Grid {
 
   private head!: HTMLElement
   private foot!: HTMLElement
+  /** `.dg-table` — the element carrying `role="grid"` and the aria counts. */
+  private gridEl!: HTMLElement
+  /** the visually-hidden span the grid is `aria-describedby` */
+  private descEl!: HTMLElement
 
   /**
    * Header and totals are in normal FLOW and stick to the scroller; only the
@@ -595,19 +711,36 @@ export class Grid {
    * lands underneath it.
    */
   private build(): void {
+    // ARIA STRUCTURE, declared once here rather than re-stamped by every paint:
+    // `grid` → `row` (the header) / `rowgroup` (the windowed body) / `row` (the
+    // totals). The sizer has to carry `rowgroup` because it sits BETWEEN the
+    // grid and its rows, and a `grid` whose children are plain divs is a grid
+    // with no rows in it as far as assistive technology is concerned.
+    //
+    // `.dg-desc` is the view status — "4 of 8 rows · Sorted by Value ▼" — in a
+    // visually-hidden span the grid POINTS AT with `aria-describedby`. It is
+    // deliberately NOT a live region: the line changes on every sort, filter,
+    // sheet switch and structural edit, and a polite live region would read the
+    // row count over the top of whatever the reader was actually doing. Pointed
+    // at, it is read when the grid is entered and whenever the reader asks —
+    // which is when a description is wanted and not before.
+    const descId = `dg-desc-${++DESC_SEQ}`
     this.host.innerHTML =
-      '<div class="dg-scroll">' +
-      '<div class="dg-table">' +
-      '<div class="dg-head-row"></div>' +
-      '<div class="dg-sizer"></div>' +
-      '<div class="dg-foot-row"></div>' +
-      '</div></div>'
+      '<div class="dg-scroll" tabindex="-1">' +
+      `<div class="dg-table" role="grid" aria-describedby="${descId}">` +
+      '<div class="dg-head-row" role="row" aria-rowindex="1"></div>' +
+      '<div class="dg-sizer" role="rowgroup"></div>' +
+      '<div class="dg-foot-row" role="row"></div>' +
+      '</div></div>' +
+      `<span class="dg-a11y" id="${descId}"></span>`
     // One number, written where the stylesheet can see it. See ROW_H.
     this.host.style.setProperty('--row-h', `${ROW_H}px`)
     this.scroller = this.host.querySelector('.dg-scroll')!
     this.table = this.host.querySelector('.dg-sizer')!
     this.head = this.host.querySelector('.dg-head-row')!
     this.foot = this.host.querySelector('.dg-foot-row')!
+    this.gridEl = this.host.querySelector('.dg-table')!
+    this.descEl = this.host.querySelector('.dg-a11y')!
     this.scroller.addEventListener('scroll', () => this.paint(), { passive: true })
     // A WINDOW THAT CHANGES SIZE IS A DIFFERENT WINDOW, and until this the grid
     // only ever repainted on a scroll, an edit or a sheet switch. Two ways to
@@ -664,11 +797,25 @@ export class Grid {
 
   private header(): string {
     const s = this.sheet
-    return `<div class="dg-cell dg-corner" data-all="1" title="${esc(t('Select every cell in the sheet'))}"></div>` +
+    return `<div class="dg-cell dg-corner" role="columnheader" aria-colindex="1" tabindex="-1" data-all="1" title="${esc(t('Select every cell in the sheet'))}"></div>` +
       `${cols(s).map((c, ci) => {
       const arrow = this.sort?.col === c.id ? (this.sort.dir === 'asc' ? ' ▲' : ' ▼') : ''
       const filtered = this.filters.some((f) => f.col === c.id)
       const fz = this.freeze(ci)
+      // `aria-sort` IS THE SORT INDICATOR for anyone not looking at the ▲.
+      // Every dataset column is sortable (clicking the name sorts it), and
+      // `none` is ARIA's word for "sortable, not currently sorted" — omitting
+      // it entirely would say the column cannot be sorted at all. The sorted
+      // one is read off `this.sorts`, not `this.sort`, so a shift-click's
+      // second key is announced as well as the first.
+      const sk = this.sorts.find((k) => k.col === c.id)
+      const sortAttr = ` aria-sort="${sk ? (sk.dir === 'asc' ? 'ascending' : 'descending') : 'none'}"`
+      // Filtered is not a state ARIA has an attribute for, so it goes into the
+      // accessible NAME — otherwise the one column hiding rows sounds exactly
+      // like the seven that are not.
+      const label = filtered
+        ? ` aria-label="${esc(t('{name} (filtered)').replace('{name}', c.name))}"`
+        : ''
       // The COLUMN header lights with the selection, as the row gutter already
       // did. Excel and Sheets both mark the selected row AND column headers,
       // and with only one of the two the eye keeps losing which column it is
@@ -676,7 +823,9 @@ export class Grid {
       // the cursor has scrolled away.
       const box = this.sel.bounds()
       const on = ci >= box.left && ci <= box.right ? ' dg-h-on' : ''
-      return `<div class="dg-cell dg-h${filtered ? ' dg-filtered' : ''}${on}${fz.cls}" style="${fz.st}width:${c.w ?? 130}px" data-col="${c.id}" data-ci="${ci}">` +
+      return `<div class="dg-cell dg-h${filtered ? ' dg-filtered' : ''}${on}${fz.cls}" ` +
+        `role="columnheader" aria-colindex="${ariaColIndex(ci)}" tabindex="-1"${sortAttr}${label} ` +
+        `style="${fz.st}width:${c.w ?? 130}px" data-col="${c.id}" data-ci="${ci}">` +
         // TWO LINES, because one could not hold them: the letter, the name,
         // the type control, the filter arrow and the resize grip were sharing
         // 130px and the NAME lost — every column read "A R", "B O", "C :".
@@ -743,15 +892,17 @@ export class Grid {
     const rows = order ?? null
     const n = rows ? rows.length : all
     const filtered = n < all
-    return `<div class="dg-cell dg-gutter"${filtered ? ` title="${esc(t('Totals cover the {n} row(s) the filter leaves showing, not all {all}.')
-      .replace('{n}', String(n)).replace('{all}', String(all)))}"` : ''}>${filtered ? '⌄' : ''}</div>` +
+    return `<div class="dg-cell dg-gutter" role="rowheader" aria-colindex="1" aria-label="${esc(t('Totals'))}"` +
+      `${filtered ? ` title="${esc(t('Totals cover the {n} row(s) the filter leaves showing, not all {all}.')
+        .replace('{n}', String(n)).replace('{all}', String(all)))}"` : ''}>${filtered ? '⌄' : ''}</div>` +
       `${vis.map((c, ci) => {
       const spec = s.totals?.[c.id]
       const fz = this.freeze(ci)
+      const aria = ` role="gridcell" aria-colindex="${ariaColIndex(ci)}" tabindex="-1"`
       const w = `${fz.st}width:${c.w ?? 130}px`
       if (!spec) {
-        if (!offer || !canTotal(c.type)) return `<div class="dg-cell${fz.cls}" style="${w}"></div>`
-        return `<div class="dg-cell dg-tot dg-tot-add${fz.cls}" data-tcol="${c.id}" ` +
+        if (!offer || !canTotal(c.type)) return `<div class="dg-cell${fz.cls}"${aria} style="${w}"></div>`
+        return `<div class="dg-cell dg-tot dg-tot-add${fz.cls}"${aria} data-tcol="${c.id}" ` +
           `title="${esc(t('Add a total to this column'))}" ` +
           `style="${w};text-align:${alignFor(c.type)}"><span class="dg-agg-add">${esc(t('Total'))}</span></div>`
       }
@@ -771,7 +922,7 @@ export class Grid {
       // while the only way to choose `count` was a dropdown in a side panel;
       // it is one click from the number now.
       const shown = spec === 'count' ? fmtNum(out) : formatValue(out, c)
-      return `<div class="dg-cell${fz.cls}${filtered ? ' dg-part' : ''}${this.store.readOnly ? '' : ' dg-tot'}" ` +
+      return `<div class="dg-cell${fz.cls}${filtered ? ' dg-part' : ''}${this.store.readOnly ? '' : ' dg-tot'}"${aria} ` +
         `${this.store.readOnly ? '' : `data-tcol="${c.id}" title="${esc(hint)}" `}` +
         `style="${w};text-align:${alignFor(c.type)}">` +
         `<span class="dg-agg">${esc(label)}</span> ${esc(shown)}</div>`
@@ -830,11 +981,92 @@ export class Grid {
       })))
   }
 
-  private announceView(): void { this.onViewChange?.(this.viewStatus()) }
+  /**
+   * The view status, to the status bar AND to assistive technology.
+   *
+   * The same sentence in two places, because a sighted reader gets it from the
+   * footer and a screen-reader user got it from nowhere at all. `.dg-a11y` is
+   * the grid's `aria-describedby` target and is NOT a live region — see
+   * `build()` for why a polite one would be the wrong shape here.
+   */
+  private announceView(): void {
+    const text = this.viewStatus()
+    this.onViewChange?.(text)
+    if (this.descEl) this.descEl.textContent = text
+  }
+
+  /**
+   * How many rows the SELECTION spans — the view's rows, plus the appender when
+   * there is one.
+   *
+   * One function, because the `doc` listener and `paint` both size the selection
+   * and a disagreement between them is a cursor that can sit on a row the paint
+   * does not draw.
+   */
+  private selRows(): number {
+    if (this.canvas) return this.sel.rows
+    const s = this.sheet
+    const n = this.store.order[s.id]?.length ?? rowCount(s)
+    return this.frontier() >= 0 ? n + 1 : n
+  }
+
+  /** The appender's view-row index on the DATASET showing, or -1. See `frontierRow`. */
+  private frontier(): number {
+    if (this.canvas) return -1
+    const s = this.sheet
+    const rows = rowCount(s)
+    return frontierRow({
+      rows,
+      viewRows: this.store.order[s.id]?.length ?? rows,
+      cols: cols(s).length,
+      readOnly: this.store.readOnly,
+    })
+  }
+
+  /** Is this view row the appender rather than a row the file has? */
+  private isFrontier(row: number): boolean {
+    const f = this.frontier()
+    return f >= 0 && row === f
+  }
+
+  /**
+   * Make the appender real: `count` rows on the end of the DATA, one commit.
+   *
+   * Returns the view index the first new row occupies, or -1 if nothing was
+   * appended. It is the old view length in both orderings — unsorted the row
+   * goes last, and under a sort `buildOrder` sinks blanks to the end in both
+   * directions — so the cursor is already on it and does not have to be moved.
+   */
+  private appendRows(count = 1): number {
+    const at = this.frontier()
+    if (at < 0) return -1
+    const s = this.sheet
+    const patches = insertRowsAt(s, rowCount(s), count)
+    if (!patches.length) return -1
+    this.store.commit(patches)
+    // The `doc` listener repaints, but only if the store emits synchronously;
+    // painting again is cheap and makes the new row's cell findable by the
+    // caller that is about to open an editor on it.
+    this.paint()
+    return at
+  }
+
+  /**
+   * The cursor is on the appender and something is about to write there — turn
+   * it into a real row first. False means the write must not happen.
+   */
+  private materialiseCursorRow(): boolean {
+    if (!this.isFrontier(this.sel.cursor.row)) return true
+    return this.appendRows() >= 0
+  }
 
   paint(): void {
+    // Captured BEFORE any innerHTML is replaced: afterwards the previously
+    // focused node is detached and `contains` answers false for it, so this is
+    // the only moment the question "did the grid have focus?" can be asked.
+    const hadFocus = this.hasFocus()
     const cv = this.canvas
-    if (cv) { this.paintCanvas(cv); return }
+    if (cv) { this.paintCanvas(cv, hadFocus); return }
     // …and put back what the spreadsheet path borrowed. A grid that had shown a
     // canvas kept its 16,000-column width and its single-line header CSS the
     // moment it was pointed back at a dataset.
@@ -880,23 +1112,28 @@ export class Grid {
     }
     const order = this.store.order[s.id]
     const n = order ? order.length : all
-    this.sel.resize(n, cols(s).length)
-    this.table.style.height = `${n * ROW_H}px`
+    const front = this.frontier()
+    // The appender is a row of the grid: the selection reaches it, the sizer is
+    // tall enough for it, and the lattice stops after it.
+    const gridN = front >= 0 ? n + 1 : n
+    this.sel.resize(gridN, cols(s).length)
+    this.table.style.height = `${gridN * ROW_H}px`
 
     // Only the visible slice exists. 100k x 6 would be 600,000 nodes, and that
     // — not the arithmetic — is what stops the browser.
     const top = Math.max(0, Math.floor(this.scroller.scrollTop / ROW_H) - OVERSCAN)
     const visible = Math.ceil(this.scroller.clientHeight / ROW_H) + OVERSCAN * 2
-    const end = Math.min(n, top + visible)
+    const end = Math.min(gridN, top + visible)
 
     const body: string[] = []
     for (let i = top; i < end; i++) {
+      if (i === front) { body.push(this.frontierRowHtml(i)); continue }
       const rid = ridAt(this.store, s, i)
       const r = dataRow(s, rid)
       const box = this.sel.bounds()
       const rowSelected = i >= box.top && i <= box.bottom
-      body.push(`<div class="dg-row" data-rid="${rid}" data-row="${i}" style="top:${i * ROW_H}px">` +
-        `<div class="dg-cell dg-gutter${rowSelected ? ' dg-gutter-on' : ''}" data-rowhead="${i}">${i + 1}</div>` +
+      body.push(`<div class="dg-row" role="row" aria-rowindex="${ariaRowIndex(i)}" data-rid="${rid}" data-row="${i}" style="top:${i * ROW_H}px">` +
+        `<div class="dg-cell dg-gutter${rowSelected ? ' dg-gutter-on' : ''}" role="rowheader" aria-colindex="1" data-rowhead="${i}">${i + 1}</div>` +
         cols(s).map((c, ci) => {
           const over = s.cells?.[`${c.id}:${rid}`]
           const comp = this.computed.get(c.id)
@@ -927,10 +1164,16 @@ export class Grid {
             ? (this.findCur === fk ? ' dg-find dg-find-cur' : ' dg-find')
             : ''
           return `<div class="dg-cell${note}${bad}${inSel ? ' dg-sel' : ''}${isCursor ? ' dg-cursor' : ''}${hit}${fz.cls}" ` +
+            `role="gridcell" aria-colindex="${ariaColIndex(ci)}" aria-selected="${inSel}" ` +
+            // THE ROVING TABINDEX. Exactly one cell in the grid is in the tab
+            // order and it is the cursor — 300 focusable cells would mean 300
+            // Tab presses to get past the grid, and Tab already means "next
+            // cell" inside it (select.ts owns that key).
+            `tabindex="${isCursor ? 0 : -1}" ` +
             `data-col="${c.id}" data-ci="${ci}" style="${fz.st}${st}">${bar}<span class="dg-v">${esc(shown)}</span></div>`
         }).join('') + '</div>')
     }
-    this.paintEmptyGrid()
+    this.paintEmptyGrid(gridN * ROW_H)
     this.head.innerHTML = this.header()
     this.table.innerHTML = body.join('') + this.outline()
     // `totalsRow()` returns '' when the sheet declares no totals, but the
@@ -941,7 +1184,17 @@ export class Grid {
     const totals = this.totalsRow()
     this.foot.hidden = totals === ''
     this.foot.innerHTML = totals
+    if (totals === '') this.foot.removeAttribute('aria-rowindex')
+    else this.foot.setAttribute('aria-rowindex', String(ariaRowIndex(gridN)))
+    this.gridEl.setAttribute('aria-rowcount', String(ariaRowCount(n, front >= 0, totals !== '')))
+    this.gridEl.setAttribute('aria-colcount', String(ariaColCount(cols(s).length)))
+    // The grid's accessible name is the SHEET's name — data, not a UI string,
+    // so there is nothing here to translate.
+    if (s.name) this.gridEl.setAttribute('aria-label', s.name)
+    if (this.store.readOnly) this.gridEl.setAttribute('aria-readonly', 'true')
+    else this.gridEl.removeAttribute('aria-readonly')
     this.wire()
+    this.restoreFocus(hadFocus)
     // AFTER wire(), so anything decorating cells finds the real nodes. The
     // comments overlay used a MutationObserver on the sizer before this
     // existed — correct, and a microtask on every paint for something the
@@ -1020,6 +1273,72 @@ export class Grid {
   }
 
   /**
+   * The appender — the one row past the data, and the whole of the dataset's
+   * frontier. See the `frontierRow` note for why it is one row and not twenty.
+   *
+   * It is a REAL DOM ROW, which is the entire point: it can be clicked,
+   * arrowed onto, and typed into, and each of those is something the painted
+   * lattice it replaces could not do. Its gutter shows `+` rather than a
+   * number, because the row it would be numbered is not there yet — that is
+   * the visual difference between an invitation and a row of data, and it is
+   * the signal that was missing.
+   *
+   * No `data-rid`: it has no row identity because it is not a row of the file.
+   * That also keeps it out of `wire()`'s `.dg-row[data-rid]` sweep and out of
+   * comments.ts's rid lookup, neither of which has anything to say about it.
+   */
+  private frontierRowHtml(i: number): string {
+    const box = this.sel.bounds()
+    const rowSelected = i >= box.top && i <= box.bottom
+    const hint = esc(t('This sheet has exactly the rows it has. Type here to add one.'))
+    return `<div class="dg-row dg-add-row" role="row" aria-rowindex="${ariaRowIndex(i)}" ` +
+      `data-row="${i}" data-addrow="1" title="${hint}" style="top:${i * ROW_H}px">` +
+      `<div class="dg-cell dg-gutter dg-add-gutter${rowSelected ? ' dg-gutter-on' : ''}" ` +
+      `role="rowheader" aria-colindex="1" aria-label="${esc(t('Add a row'))}" data-rowhead="${i}">+</div>` +
+      cols(this.sheet).map((c, ci) => {
+        const inSel = this.sel.ranges().some((rg) => contains(rg, i, ci))
+        const isCursor = this.sel.cursor.row === i && this.sel.cursor.col === ci
+        const fz = this.freeze(ci)
+        return `<div class="dg-cell dg-add-cell${inSel ? ' dg-sel' : ''}${isCursor ? ' dg-cursor' : ''}${fz.cls}" ` +
+          `role="gridcell" aria-colindex="${ariaColIndex(ci)}" aria-selected="${inSel}" ` +
+          `tabindex="${isCursor ? 0 : -1}" aria-label="${esc(t('Add a row'))}" ` +
+          `data-col="${c.id}" data-ci="${ci}" style="${fz.st}width:${c.w ?? 130}px"></div>`
+      }).join('') + '</div>'
+  }
+
+  /** Does the keyboard currently live inside this grid? */
+  private hasFocus(): boolean {
+    const a = typeof document === 'undefined' ? null : document.activeElement
+    return !!a && a !== document.body && this.host.contains(a)
+  }
+
+  /**
+   * Put focus back where it was — on the CURSOR cell, which the paint has just
+   * replaced.
+   *
+   * Every paint rebuilds `.dg-sizer`'s innerHTML, so the focused cell is
+   * destroyed roughly forty times a second while somebody holds an arrow key
+   * down. Without this, `document.activeElement` falls to BODY on the first
+   * keystroke and the grid stops being a focusable thing at all — which is
+   * exactly the state the audit found.
+   *
+   * The scroller is the fallback, never BODY: the cursor can be scrolled clean
+   * out of the window (it is virtualised), and focus landing on the document
+   * body would drop the reader out of the grid entirely.
+   */
+  private restoreFocus(had: boolean): void {
+    const cur = this.sel.cursor
+    const cell = this.cellEl(cur.row, cur.col)
+    // The tab stop, whether or not the grid is focused: exactly one thing in
+    // here answers Tab from outside, and it is the cursor cell when that cell
+    // is painted and the scroller when it is not.
+    if (cell) { cell.tabIndex = 0; this.scroller.tabIndex = -1 } else this.scroller.tabIndex = 0
+    if (!had) return
+    if (cell) cell.focus({ preventScroll: true })
+    else this.scroller.focus({ preventScroll: true })
+  }
+
+  /**
    * Rule the EMPTY space past the last row and the last column.
    *
    * A spreadsheet's grid does not stop where the data stops — Excel and Sheets
@@ -1037,8 +1356,17 @@ export class Grid {
    * It lives on `.dg-table`, which scrolls WITH the content, so the lines stay
    * aligned to the rows. `background-position` steps it down past the header,
    * which is in normal flow above the sizer.
+   *
+   * AND IT STOPS AT `contentH`. It used to `repeat-y` forever, which drew ruled
+   * rows below the last row of the sheet that looked exactly like empty
+   * spreadsheet rows and selected nothing when clicked — the visual half of the
+   * lie the appender fixes the other half of. Both layers are now sized to the
+   * content and told not to repeat, so what is below the data is plain
+   * background: the truthful picture of a sheet that ends. The row lattice is
+   * offset past the header; the column rules start at the top of `.dg-table`
+   * and so have to be that much taller.
    */
-  private paintEmptyGrid(): void {
+  private paintEmptyGrid(contentH: number): void {
     const vis = cols(this.sheet)
     const line = 'var(--grid-line, #edf0f4)'
     // vertical rules at each column boundary, starting after the gutter
@@ -1061,8 +1389,9 @@ export class Grid {
     // down within the sheet's width and stop, and past the final column is
     // plain background — which is the truthful answer to "is there anything
     // over there".
-    this.table.parentElement!.style.backgroundSize = `${x}px auto, auto auto`
-    this.table.parentElement!.style.backgroundRepeat = 'repeat-y, repeat-y'
+    this.table.parentElement!.style.backgroundSize =
+      `${x}px ${contentH}px, ${x}px ${headH + contentH}px`
+    this.table.parentElement!.style.backgroundRepeat = 'no-repeat, no-repeat'
   }
 
   /** Value at a VISIBLE position — what the clipboard and the status bar read. */
@@ -1072,6 +1401,9 @@ export class Grid {
     const c = cols(s)[ci]
     if (!c) return null
     const rid = ridAt(this.store, s, row)
+    // The appender has no rid, and reading through a -1 asks every column for
+    // index -1 — `undefined` dressed up as a value the sheet does not hold.
+    if (rid < 0) return null
     const r = dataRow(s, rid)
     const fv = this.cellFormulaValue(r, c.id)
     if (fv !== undefined) return fv
@@ -1155,8 +1487,6 @@ export class Grid {
     const s = this.sheet
     const c = cols(s)[this.sel.cursor.col]
     if (!c || this.store.readOnly) return
-    const rid = ridAt(this.store, s, this.sel.cursor.row)
-    if (rid < 0) return
     if (text.trim().startsWith('=')) {
       // a leading = in the formula bar sets the COLUMN's expression: dash's
       // formulas are per column, so this is the honest place for it to land
@@ -1164,6 +1494,11 @@ export class Grid {
       return
     }
     if (c.formula) return  // typing a value over a computed column would be
+    // A VALUE needs a row to live in, so the formula bar over the appender
+    // appends one — the same rule as typing into the cell directly. (The `=`
+    // branch above does not: a column formula is a property of the column and
+    // wants no new row.)
+    if (!this.materialiseCursorRow()) return
     this.writeBlock(this.sel.cursor.row, this.sel.cursor.col, [[coerceForColumn(text, c.type)]])
   }
 
@@ -1231,6 +1566,18 @@ export class Grid {
 
   pasteTsv(text: string): void {
     const cur = this.sel.cursor
+    // A PASTE ONTO THE APPENDER APPENDS. Without this the write would find no
+    // rid under any of its lines and land nowhere — a paste that silently does
+    // nothing, which is the same class of failure the appender exists to fix.
+    // The rows go in first, in their own commit, so the values have somewhere
+    // to go; only `pasteTsv` does this, and not `writeBlock`, because
+    // `clearSelection` also goes through `writeBlock` and a Delete over the
+    // appender must not grow the sheet.
+    if (this.isFrontier(cur.row)) {
+      const lines = this.clip && this.clip.tsv === text
+        ? this.clip.block.length : parseTsv(text).length
+      if (lines > 0) this.appendRows(lines)
+    }
     // our own clip, still intact on the system clipboard? then formulas ride
     // along, TRANSLATED by how far the block moved
     if (this.clip && this.clip.tsv === text) {
@@ -1908,7 +2255,7 @@ export class Grid {
     return v == null ? '' : String(v)
   }
 
-  private paintCanvas(s: CanvasSheet): void {
+  private paintCanvas(s: CanvasSheet, hadFocus = false): void {
     this.host.classList.add('dg-canvas')
     const ext = this.canvasExtent(s, this.sel.cursor)
     this.sel.resize(ext.rows, ext.cols)
@@ -1967,12 +2314,14 @@ export class Grid {
         cells.push(
           `<div class="dg-cell${cell?.note ? ' dg-noted' : ''}${isErr(v) ? ' dg-err' : ''}` +
           `${inSel ? ' dg-sel' : ''}${isCursor ? ' dg-cursor' : ''}${hit}" ` +
+          `role="gridcell" aria-colindex="${ariaColIndex(c)}" aria-selected="${inSel}" ` +
+          `tabindex="${isCursor ? 0 : -1}" ` +
           `data-ci="${c}" data-key="${key}" style="${st}">` +
           `<span class="dg-v">${esc(canvasShown(cell, v))}</span></div>`)
       }
       body.push(
-        `<div class="dg-row" data-row="${i}" style="top:${rs.top(i)}px${hst}">` +
-        `<div class="dg-cell dg-gutter${rowSel ? ' dg-gutter-on' : ''}" data-rowhead="${i}"` +
+        `<div class="dg-row" role="row" aria-rowindex="${ariaRowIndex(i)}" data-row="${i}" style="top:${rs.top(i)}px${hst}">` +
+        `<div class="dg-cell dg-gutter${rowSel ? ' dg-gutter-on' : ''}" role="rowheader" aria-colindex="1" data-rowhead="${i}"` +
         `${hst ? ` style="${hst.slice(1)};line-height:${h - 1}px"` : ''}>${i + 1}` +
         `<span class="dg-rgrip" data-rgrip="${i}" title="${esc(t('Drag to resize the row'))}"></span>` +
         `</div>${pad}${cells.join('')}</div>`)
@@ -1988,7 +2337,16 @@ export class Grid {
     this.table.innerHTML = body.join('') + this.canvasOutline(rs, lefts, ext)
     this.foot.hidden = true
     this.foot.innerHTML = ''
+    this.foot.removeAttribute('aria-rowindex')
+    // UNKNOWN, not "the frontier". See ARIA_UNKNOWN: the extent grows with the
+    // cursor and the window, so any number here would be both wrong and stale.
+    this.gridEl.setAttribute('aria-rowcount', String(ARIA_UNKNOWN))
+    this.gridEl.setAttribute('aria-colcount', String(ARIA_UNKNOWN))
+    if (s.name) this.gridEl.setAttribute('aria-label', s.name)
+    if (this.store.readOnly) this.gridEl.setAttribute('aria-readonly', 'true')
+    else this.gridEl.removeAttribute('aria-readonly')
     this.wireCanvas(s, rs)
+    this.restoreFocus(hadFocus)
     this.onPaint?.()
   }
 
@@ -1999,10 +2357,12 @@ export class Grid {
     box: { left: number; right: number },
   ): string {
     const pad = padLeft > 0 ? `<div class="dg-cell dg-pad" style="width:${padLeft}px"></div>` : ''
-    let out = `<div class="dg-cell dg-corner" data-all="1" title="${esc(t('Select every cell in the sheet'))}"></div>${pad}`
+    let out = `<div class="dg-cell dg-corner" role="columnheader" aria-colindex="1" tabindex="-1" data-all="1" title="${esc(t('Select every cell in the sheet'))}"></div>${pad}`
     for (let c = c0; c < c1; c++) {
       const on = c >= box.left && c <= box.right ? ' dg-h-on' : ''
-      out += `<div class="dg-cell dg-h dg-ch${on}" data-ci="${c}" style="width:${lefts[c + 1] - lefts[c]}px">` +
+      // NO `aria-sort`: a spreadsheet's columns are not sortable, and `none`
+      // would say they are but are not sorted, which is a different claim.
+      out += `<div class="dg-cell dg-h dg-ch${on}" role="columnheader" aria-colindex="${ariaColIndex(c)}" tabindex="-1" data-ci="${c}" style="width:${lefts[c + 1] - lefts[c]}px">` +
         `<span class="dg-letter" title="${esc(t('Select column'))}">${colToLetters(c)}</span>` +
         `<span class="dg-grip" data-cgrip="${c}" title="${esc(t('Drag to resize the column'))}"></span>` +
         `</div>`
@@ -2069,7 +2429,7 @@ export class Grid {
       el.onmousedown = (e) => {
         if ((e.target as HTMLElement).dataset.rgrip !== undefined) return
         this.sel.selectRow(Number(el.dataset.rowhead))
-        this.paint(); this.announce()
+        this.paint(); this.announce(); this.focusGrid()
       }
     })
     // COLUMN WIDTH and ROW HEIGHT: live on the DOM through the drag, one commit
@@ -2134,7 +2494,7 @@ export class Grid {
         if (e.button !== 0) return
         if (e.shiftKey) this.sel.extendTo(row, ci)
         else this.sel.moveTo(row, ci)
-        this.paint(); this.announce()
+        this.paint(); this.announce(); this.focusGrid()
         const move = (m: MouseEvent) => {
           const x = (m.target as HTMLElement)?.closest?.('.dg-cell[data-ci]') as HTMLElement | null
           if (!x || !x.parentElement?.dataset.row) return
@@ -2394,7 +2754,7 @@ export class Grid {
     this.table.querySelectorAll<HTMLElement>('[data-rowhead]').forEach((el) => {
       el.onmousedown = () => {
         this.sel.selectRow(Number(el.dataset.rowhead))
-        this.paint(); this.announce()
+        this.paint(); this.announce(); this.focusGrid()
       }
     })
     this.head.querySelectorAll<HTMLElement>('[data-retype]').forEach((el) => {
@@ -2405,6 +2765,20 @@ export class Grid {
         if (col) this.onRetype?.(col, r.left, r.bottom)
       }
     })
+    // THE APPENDER'S CELLS. Selecting one is all a click does — the row is not
+    // created until something is typed, so clicking around below the data
+    // cannot grow the file. Double-click means the same as F2 there: make the
+    // row, then edit it.
+    this.table.querySelectorAll<HTMLElement>('.dg-add-row .dg-cell[data-ci]').forEach((el) => {
+      const row = Number(el.parentElement!.dataset.row)
+      const ci = Number(el.dataset.ci)
+      el.onmousedown = (e) => {
+        if (e.button !== 0) return
+        this.sel.moveTo(row, ci)
+        this.paint(); this.announce(); this.focusGrid()
+      }
+      el.ondblclick = () => { this.sel.moveTo(row, ci); this.editActive() }
+    })
     this.table.querySelectorAll<HTMLElement>('.dg-row[data-rid] .dg-cell[data-ci]').forEach((el) => {
       const row = Number(el.parentElement!.dataset.row)
       const ci = Number(el.dataset.ci)
@@ -2413,6 +2787,11 @@ export class Grid {
         if (e.shiftKey) this.sel.extendTo(row, ci)
         else this.sel.moveTo(row, ci)
         this.paint(); this.announce()
+        // A CLICKED CELL TAKES FOCUS. It did not, and `document.activeElement`
+        // was BODY after every click — so a screen reader had no cursor to
+        // report and the roving tabindex had no owner. `paint()` runs first so
+        // the cell this focuses is the freshly-painted one.
+        this.focusGrid()
         // drag to extend
         const move = (m: MouseEvent) => {
           const t = (m.target as HTMLElement)?.closest?.('.dg-cell[data-ci]') as HTMLElement | null
@@ -2569,8 +2948,21 @@ export class Grid {
     }
   }
 
-  /** Keep keystrokes coming to the grid after an edit closes — and after Find closes. */
+  /**
+   * Keep keystrokes coming to the grid after an edit closes — and after Find
+   * closes.
+   *
+   * FOCUS LANDS ON THE CURSOR CELL, not on the scroller. Both keep the keyboard
+   * working (the key handler is on `document`), but only one of them tells a
+   * screen reader WHERE the reader is: focusing the scroller announces "grid"
+   * and nothing else, and after a click it announced nothing at all because
+   * nothing was focused. The scroller stays as the fallback for the moments the
+   * cursor is outside the painted window.
+   */
   focusGrid(): void {
+    const cur = this.sel.cursor
+    const cell = this.cellEl(cur.row, cur.col)
+    if (cell) { cell.tabIndex = 0; cell.focus({ preventScroll: true }); return }
     if (this.scroller.tabIndex < 0) this.scroller.tabIndex = 0
     this.scroller.focus({ preventScroll: true })
   }
@@ -2590,6 +2982,13 @@ export class Grid {
       this.editCanvas(cur.row, cur.col, cell, ch)
       return true
     }
+    // TYPING ON THE APPENDER IS WHAT MAKES IT A ROW. This is the gesture the
+    // whole frontier decision is about: click below the numbers, start typing,
+    // and a real row appears under the caret instead of the last data cell
+    // being silently overwritten. The append is its own commit and the edit
+    // that follows is another, so ⌘Z takes back the text and a second ⌘Z takes
+    // back the row — which is what "I did two things" should undo as.
+    if (!this.materialiseCursorRow()) return false
     const vis = cols(this.sheet)
     const col = vis[this.sel.cursor.col]
     if (!col) return false
@@ -2611,6 +3010,8 @@ export class Grid {
       this.editCanvas(cur.row, cur.col, cell)
       return true
     }
+    // F2 on the appender means the same as typing on it — see `typeInto`.
+    if (!this.materialiseCursorRow()) return false
     const vis = cols(this.sheet)
     const col = vis[this.sel.cursor.col]
     const rid = ridAt(this.store, this.sheet, this.sel.cursor.row)
