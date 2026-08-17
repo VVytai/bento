@@ -165,6 +165,9 @@ console.log('\nthe matrix')
   const dataset: ActionId[] = ['formula', 'chart', 'viz3d', 'pivot', 'story', 'export']
   const workbook: ActionId[] = [
     'dashboard', 'undo', 'redo', 'import', 'import-xlsx', 'export-xlsx',
+    // Print is workbook-scoped: the dialog prints EITHER kind, and its default
+    // scope is the sheet on screen whatever that sheet is.
+    'print',
     'save', 'about', 'help',
   ]
   ok(dataset.every((a) => actionApplies(a, 'table')),

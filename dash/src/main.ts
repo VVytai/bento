@@ -43,6 +43,7 @@ import { setRidBlock } from './rowcol.ts'
 import { importXlsx, exportXlsx, xlsxFileName } from './xlsx.ts'
 import { runPivot, mountPivot, defaultPivot, newPivotSheet, type PivotSpec } from './pivot.ts'
 import { buildSheetPreview } from './preview.ts'
+import { installPrint, openPrintDialog } from './print.ts'
 import './ask.css'
 import { installSaveMenu, adoptOpenedDoc, toast } from './saveui.ts'
 import { dismissSplash, dismissSplashNow } from './splash.ts'
@@ -124,6 +125,11 @@ const ICON = {
   exp: SVG('<path d="M10 11.6V3.1"/><path d="M6.6 6.5L10 3.1l3.4 3.4"/><path d="M4.2 13.6v2.2h11.6v-2.2"/>'),
   save: SVG('<path d="M4.4 3.6h8.3l3.3 3.3v9.5H4.4z"/><path d="M7 3.6v4.2h5V3.6"/><path d="M7 16.4v-4.6h6v4.6"/>'),
   info: SVG('<circle cx="10" cy="10" r="7"/><path d="M10 9.2v4.4"/><path d="M10 6.6h.01"/>'),
+  // A printer: the paper going in at the top, the platen, the sheet coming out.
+  // Not another arrow — Import and Export own those, and a third would make the
+  // menu three rows of the same glyph again.
+  print: SVG('<path d="M6 8V3.6h8V8"/><rect x="3.4" y="8" width="13.2" height="5.4" rx="1.2"/>' +
+    '<path d="M6 11.6h8v4.8H6z"/>'),
   down: SVG('<path d="M6 8l4 4 4-4"/>'),
 } as const
 
@@ -283,6 +289,13 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     `<div class="dx-menu-sep"></div>` +
     barBtn('import-xlsx', ICON.imp, t('Import Excel…'), t('Add sheets from an .xlsx workbook')) +
     barBtn('export-xlsx', ICON.exp, t('Export Excel'), t('Download this workbook as .xlsx')) +
+    `<div class="dx-menu-sep"></div>` +
+    // PAPER IS AN EXPORT, and it belongs with the other three rather than as a
+    // fourteenth flat button — the bar's own rule (see the grouping note
+    // above). It is the only one of them that prints EVERY row of the view
+    // rather than what the windowed grid happens to be showing; print.ts says
+    // why that needed a page builder rather than a stylesheet.
+    barBtn('print', ICON.print, t('Print…'), t('Print the view, or save it as a PDF (⌘P)')) +
     `</div></div>` +
     // Save keeps its label all the way down to a phone: it is the control the
     // user names when it is missing, and an unlabelled floppy is a guess.
@@ -1240,6 +1253,25 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     const sheet = dataset('export')
     if (sheet) exportCsv(store, sheet)
   })
+  // PRINT. `shown` hands over the grid's computed columns for the sheet on
+  // screen and nothing else — a formula column is derived, and recalculating it
+  // a second time behind the grid is how the paper and the screen start to
+  // disagree. The dialog reads `store.order` itself, which is the view vector
+  // the footer, the chart, Find and the status bar all read.
+  const printHost = {
+    store,
+    shown: () => {
+      const s = shownSheet()
+      if (!s) return null
+      return s.kind === 'table'
+        ? { id: s.id, computed: grid.computed }
+        : { id: s.id }
+    },
+  }
+  app.querySelector('[data-act="print"]')!.addEventListener('click', () => openPrintDialog(printHost))
+  // ⌘P, and the browser's own print with it: every route to a printer now
+  // builds the real printout rather than a page of application chrome.
+  installPrint(printHost)
   app.querySelector('[data-act="import"]')!.addEventListener('click', () => {
     void pickCsv(store, findingsEl, grid)
   })

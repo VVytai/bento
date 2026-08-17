@@ -443,6 +443,7 @@ export type ActionId =
   | 'formula' | 'chart' | 'viz3d' | 'pivot' | 'dashboard' | 'story'
   | 'undo' | 'redo'
   | 'import' | 'export' | 'import-xlsx' | 'export-xlsx'
+  | 'print'
   | 'save' | 'about' | 'help'
 
 /**
@@ -511,6 +512,11 @@ export const ACTIONS: Readonly<Record<ActionId, ActionRule>> = {
   import: { on: 'workbook' },
   'import-xlsx': { on: 'workbook' },
   'export-xlsx': { on: 'workbook' },
+  // Print is workbook-scoped even though its default is the sheet on screen:
+  // the dialog offers both, prints EITHER kind, and Excel disables Print on no
+  // worksheet either. A greyed Print button is the one control whose absence a
+  // reader reads as "this app cannot print".
+  print: { on: 'workbook' },
   save: { on: 'workbook' },
   about: { on: 'workbook' },
   help: { on: 'workbook' },
