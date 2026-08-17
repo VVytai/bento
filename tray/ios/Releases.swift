@@ -86,7 +86,7 @@ enum Releases {
     /// passes the signature AND the hash: every byte is authentic, just not the
     /// thing that was requested. Only identity catches a swap between two real
     /// releases. `tray/android` does not check this either — reported.
-    static func release(from raw: String, for app: App) throws -> Release {
+    static func release(from raw: String, for app: App, notBefore floor: String? = nil) throws -> Release {
         let payload = try verify(raw)
 
         // The payload names the app as `bento-<id>`.
@@ -104,16 +104,50 @@ enum Releases {
         guard let sha = (payload["sha256"] as? String)?.lowercased(), !sha.isEmpty else {
             throw Failed(message: "the release is not pinned to a hash")
         }
-        // NOT CHECKED HERE: rollback replay. A stale but genuine manifest passes
-        // every check above, because all of it really was signed and really does
-        // match — it just hands over an older release. Refusing that needs a
-        // per-app high-water mark, and whether to have one is a POLICY call
-        // rather than a straight win: it also refuses a deliberate rollback by
-        // the maintainer, so a pulled release would need a version bump rather
-        // than a re-point. Deferred by Andy pending a decision across all three
-        // hosts; the analysis and the two implementation details that are easy to
-        // get backwards are kept in docs/DECISIONS.md so it is not re-derived.
+        // ROLLBACK REPLAY. A stale but GENUINE manifest passes every check above
+        // — signature, app identity, and the digest of the shell it points at,
+        // because all of it really was signed and really does match. It just
+        // hands over an older release, which is how someone who can re-serve but
+        // not forge pins new documents to a version with a known hole in it.
+        //
+        // `kernel/src/update.ts` already refuses to go backwards; a host that
+        // CREATES documents had no such floor, because it has no version of its
+        // own to compare against. The floor is therefore the highest version
+        // this device has already accepted for this app.
+        //
+        // The cost is honest and worth stating: a deliberate rollback by the
+        // maintainer — pulling a bad release — is refused too, until the version
+        // number moves past it. That is the same trade update.ts makes, so at
+        // least the two agree.
+        if let floor, isOlder(version, than: floor) {
+            throw Failed(message: "the \(app.label) channel offered \(version), older than the \(floor) "
+                       + "this device already accepted — refusing it")
+        }
         return Release(version: version, url: url, sha256: sha)
+    }
+
+    /// Dotted-numeric compare, enough for the versions this project mints. An
+    /// unparsable component sorts as 0 rather than throwing: a strange version
+    /// string should not be able to BLOCK an update, only fail to raise the floor.
+    static func isOlder(_ a: String, than b: String) -> Bool {
+        let x = a.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
+        let y = b.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
+        for i in 0..<max(x.count, y.count) {
+            let l = i < x.count ? x[i] : 0
+            let r = i < y.count ? y[i] : 0
+            if l != r { return l < r }
+        }
+        return false
+    }
+
+    /// The highest version this device has accepted for `app`, if any.
+    static func floor(for app: App) -> String? {
+        UserDefaults.standard.string(forKey: "bento.tray.release-floor.\(app.id)")
+    }
+
+    private static func raiseFloor(_ app: App, to version: String) {
+        if let current = floor(for: app), !isOlder(current, than: version) { return }
+        UserDefaults.standard.set(version, forKey: "bento.tray.release-floor.\(app.id)")
     }
 
     // MARK: - The seed
@@ -131,9 +165,13 @@ enum Releases {
             throw Failed(message: "\(app.label) has not been released yet")
         }
 
-        let release = try release(from: String(decoding: envelope, as: UTF8.self), for: app)
+        let release = try release(from: String(decoding: envelope, as: UTF8.self),
+                                  for: app, notBefore: floor(for: app))
 
-        if let hit = cached(app, release.version) { return hit }
+        if let hit = cached(app, release.version) {
+            raiseFloor(app, to: release.version)
+            return hit
+        }
 
         let shell = try await fetch(release.url)
         let got = SHA256.hash(data: shell).map { String(format: "%02x", $0) }.joined()
@@ -143,7 +181,11 @@ enum Releases {
             throw Failed(message: "the downloaded app did not match its signed hash — refusing it")
         }
 
+        // Only after the bytes have proven themselves. Raising the floor on a
+        // manifest whose download then failed its hash would let a forged
+        // manifest lock the device out of every real release below it.
         store(app, release.version, shell)
+        raiseFloor(app, to: release.version)
         return shell
     }
 

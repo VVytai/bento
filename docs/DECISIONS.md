@@ -102,35 +102,49 @@ against the live server (it reads a top-level `url` from what is actually a
    load-bearing case remains a manifest captured verbatim from bento.page and
    checked against the SHIPPED key with nothing injected — the only check a
    self-consistent fixture cannot fake.
-7. **Rollback replay is a KNOWN GAP, deferred as a policy call — not built.**
+7. **Rollback replay: refuse a genuine release older than one already accepted.**
    A stale but real manifest passes signature, app identity AND digest, because
-   every byte of it is authentic; it just hands over an older shell, which is how
-   someone who can re-serve but not forge pins new documents to a version with a
-   known hole. `kernel/src/update.ts` refuses to go backwards, but a host that
-   CREATES documents has no version of its own to compare against, so it needs a
-   per-app high-water mark instead.
+   every byte of it is authentic — it just hands over an older shell, which is
+   how someone who can re-serve but not forge pins new documents to a version
+   with a known hole. `kernel/src/update.ts` already refuses to go backwards; a
+   host that CREATES documents had no floor, having no version of its own to
+   compare against — so each keeps a per-app high-water mark instead.
 
-   **Deferred by Andy pending a decision across all three hosts**, because it is
-   not a straight win: refusing a rollback also refuses a DELIBERATE one, so
-   pulling a bad release would require a version bump rather than a re-point.
-   Implemented in `tray/ios` and then removed before merge rather than shipping a
-   behaviour the other hosts had not adopted — one host quietly diverging on
-   what a release channel is allowed to do is worse than the gap.
+   **Andy's decision, and taken as a policy call rather than an implementation
+   detail**, because it is not a straight win: refusing a rollback also refuses a
+   DELIBERATE one, so **pulling a bad release requires a version bump rather than
+   a re-point**. That is the accepted cost, and the same trade `update.ts` makes.
 
-   The two details that are easy to get backwards, kept here so they are not
-   re-derived when this is revisited:
+   The route there is worth recording, because it is the argument for deciding
+   this once for every host rather than per PR: built in `tray/ios`, removed again
+   when it looked like one host diverging, then restored when the decision covered
+   all of them. A release-channel rule only some hosts enforce is worse than one
+   nobody does.
+
+   Two details are easy to get backwards, and rigs on both hosts pin them:
    - **Raise the floor only AFTER the downloaded bytes pass their digest.**
      Raising it on a merely-verified manifest lets a forged one lock the device
      out of every real release below it — a failed attack becomes a permanent
      denial of service.
-   - **An EQUAL version must be accepted.** Re-fetching the version you already
-     have is the normal case, and getting it wrong breaks the second creation
-     rather than some exotic edge.
+   - **An EQUAL version must be accepted.** Re-fetching the version already seen
+     is the normal case — the second document somebody creates — so getting it
+     wrong breaks the `+` button on its second use rather than at some exotic edge.
 
-   Both `compareVersions` in `kernel/src/update.ts` and the equivalent in
-   `tray/webext/src/update.js` sort an unparsable component as **0**, not as
-   inconclusive: `Number('1a')` is NaN, but `(pa[i] || 0)` coerces it, since NaN
-   is falsy. Verified by running it. Any floor should match that.
+   Two further choices, matched deliberately: an **unreadable store reads as NO
+   floor** rather than as a refusal (private mode, quota, a migration mid-flight —
+   availability over protection in a case that is not an attack), and an
+   **unparsable version component sorts as 0**, so a strange version can fail to
+   raise the floor but never block a release. That last matches the kernel: both
+   `kernel/src/update.ts` and `tray/webext/src/update.js` do
+   `(pa[i] || 0) - (pb[i] || 0)`, and `Number('1a')` is NaN which is falsy, so it
+   coerces to 0 rather than leaving the comparison inconclusive — verified by
+   running it, after being asserted both ways from reading.
+
+   Implementations: `tray/ios` `Releases.release(from:for:notBefore:)` with
+   `floor(for:)`/`raiseFloor`; `tray/webext` `library.js` `readFloor`/`raiseFloor`
+   keyed `release-floor:<app.id>` (PR #318). **`tray/android` still needs it** —
+   its `Releases.kt` exists only on the unmerged `tray-android-search` branch, so
+   there is nothing on `main` to add it to yet.
 
 ## 2026-08-16 — iOS document search: CoreSpotlight is the surface, and the port is pinned to the LIVE reference
 

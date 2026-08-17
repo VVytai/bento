@@ -77,9 +77,13 @@ for arg in CommandLine.arguments.dropFirst() {
     guard parts.count == 2, let app = Releases.apps.first(where: { $0.id == parts[0] }) else {
         print("REFUSE bad test argument"); continue
     }
-    let raw = (try? String(contentsOfFile: parts[1], encoding: .utf8)) ?? ""
+    // "<app>:<floor-or-none>:<path>" — the floor exercises rollback refusal
+    // without touching UserDefaults, which the app owns.
+    let bits = parts[1].split(separator: ":", maxSplits: 1).map(String.init)
+    let floor = bits[0] == "none" ? nil : bits[0]
+    let raw = (try? String(contentsOfFile: bits[1], encoding: .utf8)) ?? ""
     do {
-        let release = try Releases.release(from: raw, for: app)
+        let release = try Releases.release(from: raw, for: app, notBefore: floor)
         print("ACCEPT \\(release.version)")
     } catch {
         print("REFUSE \\(error.localizedDescription)")
@@ -205,6 +209,27 @@ const cases = [
     why: 'exactly what the old broken reader wanted; refused as a CATEGORY, not as a parse error',
     envelope: JSON.stringify({ app: 'bento-slides', version: '1.0.18', url: 'https://bento.page/x.html', sha256: 'ab' }),
   },
+  {
+    name: 'a genuine but OLDER release, against a newer floor',
+    expect: 'REFUSE',
+    floor: '1.0.99',
+    why: 'rollback replay: every other check passes because every byte is authentic',
+    envelope: JSON.stringify(real),
+  },
+  {
+    name: 'the same release, against an older floor',
+    expect: 'ACCEPT',
+    floor: '1.0.17',
+    why: 'moving forward must still work, or the floor bricks the + button',
+    envelope: JSON.stringify(real),
+  },
+  {
+    name: 'the same release, against an equal floor',
+    expect: 'ACCEPT',
+    floor: '1.0.18',
+    why: 're-fetching the version you already have is normal, not an attack',
+    envelope: JSON.stringify(real),
+  },
 ]
 
 /* The wrong-key envelope: a real ECDSA P-256 signature over the real payload,
@@ -222,7 +247,7 @@ const cases = [
 const paths = cases.map((c, i) => {
   const p = join(dir, `case-${i}.json`)
   writeFileSync(p, c.envelope)
-  return `${c.app ?? 'slides'}:${p}`
+  return `${c.app ?? 'slides'}:${c.floor ?? 'none'}:${p}`
 })
 
 const out = execFileSync(bin, paths).toString().trim().split('\n')
