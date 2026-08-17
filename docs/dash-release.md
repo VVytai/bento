@@ -108,6 +108,23 @@ Still true, and worth knowing before cutting `dash-v0.3.0`:
 - ~~**`Grid.setSheet` clears `filters`/`sorts` but not `store.order[id]`.**~~
   **Done**, as a side effect of the status line — a truthful description of the
   view made the phantom view impossible to leave in.
+- **A DROPPED workbook's read-only flag is not applied.** `adoptOpenedDoc`
+  (saveui.ts) is what locks a read-only workbook and mints a fresh identity for
+  a template, and it is called from exactly ONE place: `main.ts:239`, the boot
+  path. `dropopen.ts` never calls it. Both it and `recovery.ts swapWorkbook`
+  test `host.store.readOnly` — the CURRENT workbook's flag — not the incoming
+  document's. So dropping a read-only workbook onto an editable one gives you
+  an editable copy of a file whose author marked it read-only, and dropping a
+  template keeps the template's identity instead of forking it. Read-only is
+  one of the three file modes; enforcing it on one open path and not the other
+  is the kind of gap that is invisible until someone relies on it.
+  *(Found while adding file write-back, which defends itself by checking
+  `doc.readonly` and `doc.template` directly — but ⌘S does not.)*
+- **`releaseFileHandle()` is missing from the kernel.** Three dash call sites
+  now cast `null as never` into `adoptFileHandle` to let go of a handle. The
+  cast is the same one `dropopen.ts` already documents. It belongs in
+  `kernel/src/save.ts`, and the kernel zone is serialised, so it is a separate
+  change rather than a drive-by.
 - **`dashboard.ts:741` spreads one argument per row.** A 400k-row workbook
   renders, then throws `RangeError: Maximum call stack size exceeded`, and the
   loader paints an opaque error card over a working app. `condfmt.ts:52` already
