@@ -319,6 +319,89 @@ const channel = (manifestRaw: string, shell = SHELL, shellStatus = 200) => async
   ok(/Spaces has not been released yet/.test(msg),
     `an unpublished channel says so, rather than reporting a parse failure (${msg})`)
 }
+// ---- 5. no downgrades -------------------------------------------------------
+// A replayed OLD release passes every other check in this file: genuinely
+// signed, right app, and its shell really does hash to its pin. Every byte
+// authentic, just last month's — which is exactly what survives an origin or
+// CDN compromise where the attacker can re-serve but cannot forge. A document
+// carries no version to be monotonic against, unlike the shell's own update, so
+// the host has to remember. Semantics mirrored from tray/ios (PR #315).
+const floorStore = (initial: string | null = null) => {
+  const box = { value: initial, writes: 0 }
+  return {
+    box,
+    getFloor: async () => box.value,
+    putFloor: async (v: string) => { box.value = v; box.writes++ },
+  }
+}
+{
+  written.clear()
+  const store = floorStore('1.0.18')
+  const chan = channel(await signer.envelope(payloadFor({ version: '1.0.9' })))
+  const msg = await threw(() => newDocument(dirHandle() as any, 'Untitled',
+    { fetch: chan, jwk: signer.jwk, ...store }))
+  ok(/older than the 1\.0\.18/.test(msg), `a signed but OLDER release is refused (${msg})`)
+  ok(written.size === 0, 'and nothing is written — the replay does not become a document')
+}
+{
+  written.clear()
+  const store = floorStore('1.0.18')
+  const chan = channel(await signer.envelope(payloadFor({ version: '1.0.18' })))
+  const made = await newDocument(dirHandle() as any, 'Untitled',
+    { fetch: chan, jwk: signer.jwk, ...store })
+  ok(made.version === '1.0.18' && written.size === 1,
+    'the SAME version is accepted — re-fetching what you already have is the normal '
+    + 'case, and refusing it would break the + button on its second use')
+  ok(store.box.writes === 0, 'and the floor is not rewritten when it has not moved')
+}
+{
+  written.clear()
+  const store = floorStore('1.0.9')
+  const chan = channel(await signer.envelope(payloadFor({ version: '1.0.18' })))
+  await newDocument(dirHandle() as any, 'Untitled', { fetch: chan, jwk: signer.jwk, ...store })
+  ok(store.box.value === '1.0.18', `a newer release raises the floor (${store.box.value})`)
+}
+{
+  // THE DENIAL-OF-SERVICE CASE. A manifest that verifies but whose shell fails
+  // its digest must NOT raise the floor: otherwise one forged-but-unfetchable
+  // release locks this browser out of every real release below it, and a failed
+  // attack becomes a permanent one.
+  written.clear()
+  const store = floorStore('1.0.9')
+  const chan = channel(await signer.envelope(payloadFor({ version: '9.9.9' })), '<html>not the signed bytes</html>')
+  const msg = await threw(() => newDocument(dirHandle() as any, 'Untitled',
+    { fetch: chan, jwk: signer.jwk, ...store }))
+  ok(/does not match the signed release/.test(msg), `the swapped shell is refused (${msg})`)
+  ok(store.box.value === '1.0.9',
+    `and the floor stays at ${store.box.value} — a failed attack must not become a lasting one`)
+}
+{
+  // An unreadable store reads as NO floor. Availability over protection, in a
+  // case that is not an attack: private mode, quota, a migration mid-flight.
+  written.clear()
+  const chan = channel(await signer.envelope(payloadFor()))
+  const made = await newDocument(dirHandle() as any, 'Untitled', {
+    fetch: chan, jwk: signer.jwk,
+    getFloor: async () => { throw new Error('private mode') },
+    putFloor: async () => { throw new Error('private mode') },
+  })
+  ok(made.version === '1.0.18' && written.size === 1,
+    'a store that cannot be read or written still creates the document')
+}
+{
+  // A strange version string must be able to fail to RAISE the floor, never to
+  // block a release. `Number('x')` is NaN and `NaN || 0` is 0, so it sorts as
+  // zero rather than throwing — the same behaviour as kernel/src/update.ts and
+  // tray/ios, verified rather than assumed.
+  written.clear()
+  const store = floorStore('1.0.x')
+  const chan = channel(await signer.envelope(payloadFor({ version: '1.0.18' })))
+  const made = await newDocument(dirHandle() as any, 'Untitled',
+    { fetch: chan, jwk: signer.jwk, ...store })
+  ok(made.version === '1.0.18', 'an unparsable stored floor does not block a real release')
+}
+
+// ---- 6. the app family ------------------------------------------------------
 {
   // Every app must name itself, or its channel silently skips the app check.
   ok(APPS.every((a: any) => /^bento-[a-z]+$/.test(a.appId)),

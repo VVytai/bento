@@ -62,6 +62,31 @@ default to the wildcard; set it anyway, because the default is the platform's
 and not ours. (An earlier note that this was "fixed at the origin" was wrong and
 is retracted — it is live as of this entry.)
 
+**NO DOWNGRADES: every host keeps a per-app version floor.** Decided by Andy on
+2026-08-17, after `tray/ios` implemented one and `tray/webext` held pending the
+call — it is a policy trade, not a pure security win, and three hosts
+half-adopting it would be worse than one landing late. A replayed OLD release
+passes signature, app identity AND digest: it is genuinely signed and its shell
+really does hash to its pin. Only memory catches it, because a document being
+created carries no version to be monotonic against (unlike the shell's own
+update, which measures from its running build). Two details that bite:
+
+- **Raise the floor only AFTER the downloaded bytes pass their hash.** Raising
+  it on a merely-verified manifest lets one forged-but-unfetchable release lock
+  the host out of every real release below it — a failed attack made permanent.
+- **An EQUAL version must be accepted.** Re-fetching the version already held is
+  the normal case (the second document somebody creates), and refusing it breaks
+  creation on its second use rather than at some exotic edge.
+
+An unreadable store reads as NO floor: availability over protection in a case
+that is not an attack. An unparsable version component sorts as 0 rather than
+throwing — verified identical in `kernel/src/update.ts`, `tray/webext`'s
+`compareVersions` and `Releases.swift`, since `Number('x')` is NaN and
+`NaN || 0` is 0. **The accepted cost:** a deliberate maintainer rollback is
+refused until the version moves past the floor. That is the same trade
+`kernel/src/update.ts` already makes, so the whole system is at least
+consistent.
+
 **A 404 on a channel is an ANSWER, not a fault.** Only Slides is published
 today; the app list is aspirational on every host. All three say
 "<App> has not been released yet" rather than surfacing an HTTP status.
