@@ -362,5 +362,69 @@ console.log('\nrestoring a whole workbook is reversible, from both surfaces')
     'Replace-from-JSON still confirms first — a paste has no earlier state worth naming')
 }
 
+// --- a DROPPED workbook is adopted, like a booted one -------------------------
+//
+// `adoptOpenedDoc` is what applies `readonly` and re-mints a template's
+// identity, and it was called from exactly ONE place: main.ts, the boot path.
+// `dropopen.ts` called it zero times. So dropping a read-only workbook onto an
+// editable one handed you an editable copy of a file whose author had marked it
+// read-only — an enforcement gap in one of the three file modes, invisible
+// until somebody relied on it — and dropping a template kept the template's own
+// docId, which is the key recovery and sync are stored under.
+//
+// The ORDERING is the part that will rot if nobody pins it, because both wrong
+// orders still compile and one of them silently does nothing:
+//
+//   · the lock must go on AFTER the swap. `swapWorkbook` returns false when
+//     `store.readOnly` is already set (a frozen workbook is defended by every
+//     caller, since `replaceDoc` is the load path and does not check). Lock
+//     first and the document you were protecting never arrives at all.
+//   · the fork must happen BEFORE it. Re-mint afterwards and the store has
+//     already taken — and can already have autosaved under — the template's
+//     own docId.
+{
+  const { forkTemplate, applyDocLock, adoptOpenedDoc } = await import('../dash/src/saveui.ts')
+  const { Store } = await import('../dash/src/store.ts')
+
+  const tmpl = { ...workbook({}), template: true as const, docId: 'doc-template-original' }
+  forkTemplate(tmpl)
+  ok(!('template' in tmpl), 'forkTemplate drops the flag, so the opened copy is a workbook and not a stencil')
+  ok(tmpl.docId !== 'doc-template-original',
+    'and mints a fresh docId — every copy sharing one key is what makes recovery restore a stranger\'s work')
+
+  const plain = { ...workbook({}), docId: 'doc-plain' }
+  forkTemplate(plain)
+  ok(plain.docId === 'doc-plain', 'a workbook that is not a template keeps its identity')
+
+  const locked = new Store({ ...workbook({}), readonly: true as const })
+  ok(!locked.readOnly, 'a Store does not read `readonly` off the document by itself…')
+  applyDocLock(locked.doc, locked)
+  ok(locked.readOnly, '…so applyDocLock is what actually freezes it')
+
+  const open = new Store(workbook({}))
+  applyDocLock({ ...workbook({}) }, open)
+  ok(!open.readOnly, 'and an ordinary workbook is left editable')
+
+  // Boot must be unchanged: one call, both halves.
+  const booted = new Store({ ...workbook({}), readonly: true as const, template: true as const })
+  const bootedDoc = booted.doc as Record<string, unknown>
+  adoptOpenedDoc(booted.doc, booted)
+  ok(booted.readOnly && !('template' in bootedDoc),
+    'adoptOpenedDoc still does both, so the boot path did not change shape')
+
+  // The drop path, in source, because the ordering is the defect and a
+  // behavioural check here would need the whole drag.
+  const drop = readFileSync(new URL('../dash/src/dropopen.ts', import.meta.url), 'utf8')
+  const iFork = drop.indexOf('forkTemplate(res.doc)')
+  const iSwap = drop.indexOf('swapWorkbook(host, res.doc)')
+  const iLock = drop.indexOf('applyDocLock(res.doc')
+  ok(iFork >= 0, 'the drop path forks a dropped template')
+  ok(iLock >= 0, 'the drop path applies a dropped workbook’s read-only lock')
+  ok(iFork >= 0 && iSwap >= 0 && iFork < iSwap,
+    'and it forks BEFORE the swap, so the store never holds the template’s docId')
+  ok(iLock >= 0 && iSwap >= 0 && iSwap < iLock,
+    'and locks AFTER it, because swapWorkbook refuses to load into an already-locked workbook')
+}
+
 console.log(`\n${checks - failures}/${checks} checks passed`)
 process.exit(failures ? 1 : 0)

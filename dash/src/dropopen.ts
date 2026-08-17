@@ -53,7 +53,7 @@ import { importXlsx } from './xlsx.ts'
 import { parseDoc } from './model.ts'
 import { swapWorkbook, type WorkbookHost } from './recovery.ts'
 import { adoptFileHandle, hasFileHandle, isEncryptionActive } from '../../kernel/src/save.ts'
-import { toast } from './saveui.ts'
+import { toast, forkTemplate, applyDocLock } from './saveui.ts'
 import { t } from './i18n.ts'
 
 // --- routing (pure) ----------------------------------------------------------
@@ -317,10 +317,25 @@ async function openWorkbook(host: DropHost, item: DataTransferItem | undefined, 
       { name, why: 'detail' in res ? res.detail : res.err }))
     return
   }
+  // A DROPPED WORKBOOK IS A FOREIGN DOCUMENT ENTERING THIS WINDOW, so it goes
+  // through the same adoption boot does. It did not, and that was an
+  // enforcement gap rather than a missing nicety: `adoptOpenedDoc` is what
+  // applies `readonly` and forks a template's identity, and it was called from
+  // exactly one place — `main.ts`, the boot path. Dropping a read-only workbook
+  // onto an editable one therefore handed you an editable copy of a file whose
+  // author had marked it read-only, and dropping a template kept the template's
+  // own docId, which is the key recovery and sync are stored under.
+  //
+  // Split across the swap because the halves disagree about ordering: see
+  // `forkTemplate` / `applyDocLock` in saveui.ts. Neither `swapWorkbook`
+  // caller in recovery.ts needs this — those restore the SAME workbook, not a
+  // foreign one.
+  forkTemplate(res.doc)
   if (!swapWorkbook(host, res.doc)) {
     host.notice(t('“{name}” has no table sheet to show, so it was not opened.', { name }))
     return
   }
+  applyDocLock(res.doc, host.store)
   // AFTER the swap, and only on success: the handle decides where ⌘S writes,
   // so touching it earlier would aim the next save at a file whose contents are
   // not what is on screen.

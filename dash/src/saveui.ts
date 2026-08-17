@@ -115,10 +115,34 @@ function confirmBudget(doc: DashDoc): boolean {
  *     write path, and the title field is disabled from the same flag.
  */
 export function adoptOpenedDoc(doc: DashDoc, store: Store): void {
+  forkTemplate(doc)
+  applyDocLock(doc, store)
+}
+
+/**
+ * The two halves, separately, because the DROP path needs them on opposite
+ * sides of the swap and boot does not care.
+ *
+ * `swapWorkbook` refuses to load into a workbook that is already locked (a
+ * frozen workbook has to be defended by every caller, since `replaceDoc` is
+ * the load path and does not check). So on a drop, the lock can only be
+ * applied AFTER the incoming document has landed — apply it first and the
+ * document it was meant to protect never arrives. The template fork has the
+ * opposite constraint: the identity must be re-minted BEFORE the document
+ * reaches the store, or the store briefly holds — and autosaves under — the
+ * template's own docId.
+ *
+ * Boot calls `adoptOpenedDoc` and gets both in the only order that exists
+ * there. Nothing else should call these two directly without saying why.
+ */
+export function forkTemplate(doc: DashDoc): void {
   if (doc.template) {
     delete doc.template
     doc.docId = newDocId()
   }
+}
+
+export function applyDocLock(doc: DashDoc, store: Store): void {
   if (doc.readonly) store.readOnly = true
 }
 
