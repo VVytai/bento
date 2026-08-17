@@ -526,7 +526,6 @@ export const de: Catalog = {
   "A CSV is one header row and one row per row. A spreadsheet has no columns to name — make a range into a dataset first.": "Eine CSV ist eine Kopfzeile und eine Zeile je Zeile. Ein Tabellenblatt hat keine Spalten zu benennen — machen Sie zuerst einen Bereich zu einem Datensatz.",
   "This action needs a dataset sheet, and the sheet on screen is not one.": "Diese Aktion braucht ein Datensatzblatt, und das angezeigte ist keines.",
   "No sheet is open, so there is nothing for this to run on.": "Es ist kein Blatt geöffnet, also gibt es nichts, worauf das laufen könnte.",
-  "The rename box is drawn on the tab, so a sheet this build cannot open cannot be renamed here.": "Das Umbenennen-Feld wird auf dem Register gezeichnet, daher kann ein Blatt, das dieser Build nicht öffnen kann, hier nicht umbenannt werden.",
   "This workbook has no dataset sheet, and .xlsx export writes datasets. Nothing was downloaded.": "Diese Arbeitsmappe hat kein Datensatzblatt, und der .xlsx-Export schreibt Datensätze. Es wurde nichts heruntergeladen.",
   "{n} sheet(s) are not datasets and are not in the .xlsx: {names}.": "{n} Blatt/Blätter sind keine Datensätze und nicht in der .xlsx enthalten: {names}.",
   "Make {range} a dataset": "{range} zu einem Datensatz machen",

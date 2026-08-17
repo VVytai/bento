@@ -526,7 +526,6 @@ export const zhHans: Catalog = {
   "A CSV is one header row and one row per row. A spreadsheet has no columns to name — make a range into a dataset first.": "CSV 由一行表头和每行一行组成。电子表格没有可命名的列 — 请先将某个区域转为数据集。",
   "This action needs a dataset sheet, and the sheet on screen is not one.": "此操作需要数据集工作表，而当前显示的不是。",
   "No sheet is open, so there is nothing for this to run on.": "没有打开任何工作表，因此无处可执行。",
-  "The rename box is drawn on the tab, so a sheet this build cannot open cannot be renamed here.": "重命名框绘制在标签上，因此此版本无法打开的工作表也无法在此重命名。",
   "This workbook has no dataset sheet, and .xlsx export writes datasets. Nothing was downloaded.": "此工作簿没有数据集工作表，而 .xlsx 导出写入的是数据集。未下载任何内容。",
   "{n} sheet(s) are not datasets and are not in the .xlsx: {names}.": "有 {n} 个工作表不是数据集，未包含在 .xlsx 中：{names}。",
   "Make {range} a dataset": "将 {range} 转为数据集",

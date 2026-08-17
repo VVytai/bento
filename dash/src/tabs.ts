@@ -765,13 +765,17 @@ export function mountTabs(host: TabsHost): Tabs {
     const el = tabAt(e)
     if (!el || ro()) return
     const sheet = sheetOf(el)
-    // A NAME IS A NAME WHATEVER THE KIND. Renaming writes `setSheetProps`,
-    // which touches nothing but the name, and the tab strip refused it on a
-    // spreadsheet with the words "Only a table sheet can be renamed in this
-    // build" — a statement about this build that this build contradicts. Sheets
-    // the grid cannot open at all keep the refusal: a name you cannot see
-    // yourself typing is not an edit anyone can check.
-    if (!sheet || !isOpenable(sheet)) return
+    // A NAME IS A NAME WHATEVER THE KIND, and there is no longer any exception.
+    // Renaming writes `setSheetProps`, which touches nothing but the name — but
+    // `applyPatch` narrowed that op to a dataset, so a rename of anything else
+    // built a valid patch and THREW at commit. The strip papered over the throw
+    // by refusing first, in two different voices: "Only a table sheet can be
+    // renamed in this build", and later a refusal for sheets the grid cannot
+    // open, reasoned as "the rename box is drawn on the tab". Neither was the
+    // real reason and the second is not even true — the box is drawn on the
+    // tab, and a pivot has a tab. The narrowing is gone (store.ts), so this is
+    // too.
+    if (!sheet) return
     e.preventDefault()
     startRename(el, sheet)
   })
@@ -799,6 +803,10 @@ export function mountTabs(host: TabsHost): Tabs {
   function startRename(el: HTMLElement, sheet: Sheet): void {
     const label = el.querySelector<HTMLElement>('.dx-tab-name')
     if (!label) return
+    // A tab the grid cannot open answers a CLICK with the menu, so a
+    // double-click on one opens the menu and then starts the rename underneath
+    // it — an input the reader cannot see, taking keystrokes.
+    document.querySelector('.dx-tab-menu')?.remove()
     renaming = true
     const input = document.createElement('input')
     input.className = 'dx-tab-rename'
@@ -954,9 +962,9 @@ export function mountTabs(host: TabsHost): Tabs {
       return
     }
     const at = store.doc.sheets.findIndex((s) => s.id === sheet.id)
-    const open = isOpenable(sheet)
-    menuItem(menu, t('Rename'), () => startRename(el, sheet), !open,
-      open ? '' : t('The rename box is drawn on the tab, so a sheet this build cannot open cannot be renamed here.'))
+    // NEVER DISABLED. Every sheet has a name and every sheet has a tab to draw
+    // the rename box on, including the kinds the grid cannot open.
+    menuItem(menu, t('Rename'), () => startRename(el, sheet))
     menuItem(menu, t('Duplicate'), () => {
       const r = duplicateSheetPatches(store.doc, sheet.id)
       if (!r) return

@@ -526,7 +526,6 @@ export const ja: Catalog = {
   "A CSV is one header row and one row per row. A spreadsheet has no columns to name — make a range into a dataset first.": "CSV はヘッダー 1 行と各行 1 行で構成されます。スプレッドシートには名前を付ける列がないため、まず範囲をデータセットにしてください。",
   "This action needs a dataset sheet, and the sheet on screen is not one.": "この操作にはデータセットのシートが必要ですが、表示中のシートはそれではありません。",
   "No sheet is open, so there is nothing for this to run on.": "シートが開かれていないため、実行する対象がありません。",
-  "The rename box is drawn on the tab, so a sheet this build cannot open cannot be renamed here.": "名前の変更はタブ上で行うため、このビルドで開けないシートはここでは変更できません。",
   "This workbook has no dataset sheet, and .xlsx export writes datasets. Nothing was downloaded.": "このブックにはデータセットのシートがなく、.xlsx 書き出しはデータセットを書き出します。ダウンロードは行われませんでした。",
   "{n} sheet(s) are not datasets and are not in the .xlsx: {names}.": "{n} 件のシートはデータセットではないため .xlsx に含まれていません: {names}。",
   "Make {range} a dataset": "{range} をデータセットにする",

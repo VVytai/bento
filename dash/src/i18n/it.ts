@@ -526,7 +526,6 @@ export const it: Catalog = {
   "A CSV is one header row and one row per row. A spreadsheet has no columns to name — make a range into a dataset first.": "Un CSV è una riga di intestazione e una riga per riga. Un foglio di calcolo non ha colonne da nominare: converti prima un intervallo in un set di dati.",
   "This action needs a dataset sheet, and the sheet on screen is not one.": "Questa azione richiede un foglio set di dati, e quello a schermo non lo è.",
   "No sheet is open, so there is nothing for this to run on.": "Nessun foglio è aperto, quindi non c’è nulla su cui eseguirlo.",
-  "The rename box is drawn on the tab, so a sheet this build cannot open cannot be renamed here.": "La casella di rinomina è disegnata sulla scheda, quindi un foglio che questa build non può aprire non può essere rinominato qui.",
   "This workbook has no dataset sheet, and .xlsx export writes datasets. Nothing was downloaded.": "Questa cartella di lavoro non ha fogli set di dati, e l’esportazione .xlsx scrive set di dati. Non è stato scaricato nulla.",
   "{n} sheet(s) are not datasets and are not in the .xlsx: {names}.": "{n} foglio/i non sono set di dati e non sono nel file .xlsx: {names}.",
   "Make {range} a dataset": "Trasforma {range} in un set di dati",

@@ -341,6 +341,21 @@ const table = (doc: DashDoc, id: string): TableSheet => {
   return s
 }
 
+/**
+ * The sheet by id, WHATEVER ITS KIND — for the ops that are about a sheet
+ * rather than about a dataset. `setSheetProps` is the one today (a name, and
+ * later anything else every kind has); `setComment` says the same thing inline
+ * because a remark on a pivot is a remark.
+ *
+ * Still throws when the id names nothing: an op that cannot find its target is
+ * an edit the user believes landed, and applyPatch's rule is to refuse loudly.
+ */
+const anySheet = (doc: DashDoc, id: string): Sheet => {
+  const s = doc.sheets.find((x: Sheet) => x.id === id)
+  if (!s) throw new Error(`no sheet ${id}`)
+  return s
+}
+
 const canvas = (doc: DashDoc, id: string): CanvasSheet => {
   const s = doc.sheets.find((x: Sheet) => x.id === id)
   if (!s || s.kind !== 'canvas') throw new Error(`no spreadsheet sheet ${id}`)
@@ -738,7 +753,17 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
       // The writer lives in rowcol.ts beside `freezeAt`, which is what emits
       // these, and is covered there. Two copies of one op is how the inverse
       // and the forward drift apart.
-      return applySheetProps(table(doc, p.sheet), p)
+      //
+      // `anySheet`, NOT `table`. This narrowed to a dataset and threw on
+      // everything else, which made the SHEET NAME — the one property every
+      // kind has — writable on datasets alone: renaming a spreadsheet tab built
+      // a valid patch and died here with `no table sheet`, and the tab strip
+      // shipped a disabled Rename for the kinds it could not reach. The op's
+      // own writer never looked at a column or a rid; the narrowing was the
+      // whole of the restriction. (`applySheetProps` still refuses every
+      // structural key, so widening the kind does not widen what can be
+      // written.)
+      return applySheetProps(anySheet(doc, p.sheet), p)
 
     case 'setTitle': {
       const was = doc.title

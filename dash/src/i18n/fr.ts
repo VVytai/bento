@@ -526,7 +526,6 @@ export const fr: Catalog = {
   "A CSV is one header row and one row per row. A spreadsheet has no columns to name — make a range into a dataset first.": "Un CSV, c’est une ligne d’en-tête et une ligne par ligne. Une feuille de calcul n’a aucune colonne à nommer — transformez d’abord une plage en jeu de données.",
   "This action needs a dataset sheet, and the sheet on screen is not one.": "Cette action nécessite une feuille de jeu de données, et celle affichée n’en est pas une.",
   "No sheet is open, so there is nothing for this to run on.": "Aucune feuille n’est ouverte : il n’y a rien sur quoi l’exécuter.",
-  "The rename box is drawn on the tab, so a sheet this build cannot open cannot be renamed here.": "La zone de renommage est dessinée sur l’onglet : une feuille que cette version ne peut pas ouvrir ne peut donc pas être renommée ici.",
   "This workbook has no dataset sheet, and .xlsx export writes datasets. Nothing was downloaded.": "Ce classeur n’a aucune feuille de jeu de données, et l’export .xlsx écrit des jeux de données. Rien n’a été téléchargé.",
   "{n} sheet(s) are not datasets and are not in the .xlsx: {names}.": "{n} feuille(s) ne sont pas des jeux de données et ne figurent pas dans le .xlsx : {names}.",
   "Make {range} a dataset": "Faire de {range} un jeu de données",

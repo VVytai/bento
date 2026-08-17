@@ -356,6 +356,68 @@ console.log('\nrename')
 }
 roundTrip('rename', (d) => renameSheetPatch(d.sheets[0] as TableSheet, 'Renamed')!)
 
+// ============================================ rename reaches EVERY sheet kind
+//
+// A NAME IS THE ONE PROPERTY EVERY KIND HAS, and until this commit it was
+// writable on a dataset alone. `applyPatch`'s `setSheetProps` case narrowed
+// through `table(doc, id)`, so a rename of a spreadsheet or a pivot built a
+// perfectly valid patch and then THREW `no table sheet` at commit. The strip
+// hid the throw by refusing first — a disabled Rename item whose stated reason
+// ("the rename box is drawn on the tab") was not the real one and was not even
+// true, since a pivot has a tab.
+//
+// This is checked through the STORE rather than against `renameSheetPatch`,
+// because the patch factory was never the broken half: it is kind-agnostic
+// already and always was. Asserting on it would have passed throughout the
+// whole life of the bug, which is why nothing caught this.
+console.log('\na name belongs to a SHEET, not to a dataset')
+{
+  const withKinds = (): DashDoc => {
+    const d = fresh()
+    const r = parseDoc(JSON.stringify({
+      ...d,
+      sheets: [...d.sheets, { id: 'ss', name: 'Scratch', kind: 'canvas', cells: { A1: { v: 1 } } }],
+    }))
+    if (!r.ok) throw new Error('fixture does not parse')
+    return r.doc
+  }
+  const nameOf = (d: DashDoc, id: string): string | undefined =>
+    d.sheets.find((s) => s.id === id)?.name
+
+  for (const [id, kind] of [['ss', 'spreadsheet'], ['p', 'pivot'], ['a', 'dataset']] as const) {
+    const st = new Store(withKinds())
+    const sheet = st.doc.sheets.find((s) => s.id === id)!
+    const p = renameSheetPatch(sheet, 'Renamed')!
+    let threw: unknown = null
+    try { st.commit(p) } catch (e) { threw = e }
+    ok(threw === null && nameOf(st.doc, id) === 'Renamed',
+      `a ${kind} sheet renames${threw ? ` — threw ${(threw as Error).message}` : ''}`)
+    st.undo()
+    ok(nameOf(st.doc, id) === (kind === 'spreadsheet' ? 'Scratch' : kind === 'pivot' ? 'Summary' : 'Alpha'),
+      `and one undo puts the ${kind}'s old name back`)
+  }
+
+  // The widening is of the KIND, not of what may be written. Every structural
+  // key is still refused, and `cells` is the one that matters here: it is the
+  // spreadsheet's whole content, it was only ever unreachable because the op
+  // could not name a spreadsheet at all, and a props write of it would put a
+  // document-sized inverse into a byte-capped history.
+  const st = new Store(withKinds())
+  const refuses = (p: Patch): boolean => {
+    try { st.commit(p); return false } catch { return true }
+  }
+  ok(refuses({ op: 'setSheetProps', sheet: 'ss', props: { cells: {} } }),
+    'a spreadsheet\'s `cells` is still refused — the kind widened, the key list did not')
+  ok(refuses({ op: 'setSheetProps', sheet: 'ss', props: { cols: { A: 200 } } }),
+    'and so are its column widths, which have a typed patch of their own (setCanvasSizes)')
+  ok(refuses({ op: 'setSheetProps', sheet: 'ss', props: { rows: { 1: 40 } } }),
+    'and its row heights, for the same reason')
+  ok(refuses({ op: 'setSheetProps', sheet: 'ss', props: { kind: 'table' } }),
+    'and a sheet cannot change kind through a props write')
+  ok(refuses({ op: 'setSheetProps', sheet: 'nope', props: { name: 'X' } }),
+    'a sheet that is not in the workbook is still refused LOUDLY — a silent no-op is an edit the user believes landed')
+}
+
 // ============================================================ what a tab says
 
 console.log('\nnon-table sheets are named as what they are')

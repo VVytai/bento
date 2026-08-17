@@ -2610,7 +2610,14 @@ export function committable(doc: DashDoc, p: Patch): boolean {
       const s = table(p.sheet)
       return !!s && p.order.length === s.columns.length && p.order.every((id) => s.columns.some((c) => c.id === id))
     }
-    case 'setSheetProps': return !!table(p.sheet)
+    // ANY KIND, matching `applyPatch`. This asked `table(p.sheet)` — the same
+    // narrowing store.ts had — so under a live session a rename of a
+    // spreadsheet or a pivot was FILTERED OUT of the commit as uncommittable
+    // and reported as `patch-refused`: the edit vanished locally as well as
+    // remotely, which is worse than the throw it was mirroring. The question
+    // this gate asks is "is the target still there?", and for a sheet-level op
+    // the target is a sheet.
+    case 'setSheetProps': return doc.sheets.some((s) => s.id === p.sheet)
     default: return true
   }
 }
