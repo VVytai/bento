@@ -246,6 +246,31 @@ const numbersIn = (v: Vec): number[] => {
  */
 const COUNTING = new Set(['COUNT', 'COUNTA', 'COUNTBLANK', 'COUNTUNIQUE'])
 
+/**
+ * Smallest / largest of a number list, WITHOUT a spread.
+ *
+ * `Math.min(...n)` is one ARGUMENT per element and throws `RangeError: Maximum
+ * call stack size exceeded` somewhere past ~125k of them (condfmt.ts:52 states
+ * the same rule; dashboard.ts's axis hit it for real). A range is exactly where
+ * this bites: `=MIN(A1:A400000)` is an ordinary thing to write on a sheet this
+ * format is sized for, and the failure is not a `#NUM!` a reader could act on —
+ * it is a throw out of the recalc, which takes the grid down with it.
+ *
+ * Callers guarantee a non-empty list; empty is the caller's own answer to give
+ * (Excel's MIN of nothing is 0, which is not this function's business).
+ */
+const smallest = (n: number[]): number => {
+  let lo = n[0]
+  for (let i = 1; i < n.length; i++) if (n[i] < lo) lo = n[i]
+  return lo
+}
+
+const largest = (n: number[]): number => {
+  let hi = n[0]
+  for (let i = 1; i < n.length; i++) if (n[i] > hi) hi = n[i]
+  return hi
+}
+
 const REF = '#REF!'
 
 const AGG: Record<string, (v: Vec) => Cell> = {
@@ -268,8 +293,8 @@ const AGG: Record<string, (v: Vec) => Cell> = {
   },
   SUM: (v) => numbersIn(v).reduce((a, b) => a + b, 0),
   AVERAGE: (v) => { const n = numbersIn(v); return n.length ? n.reduce((a, b) => a + b, 0) / n.length : ERR.div0() },
-  MIN: (v) => { const n = numbersIn(v); return n.length ? Math.min(...n) : 0 },
-  MAX: (v) => { const n = numbersIn(v); return n.length ? Math.max(...n) : 0 },
+  MIN: (v) => { const n = numbersIn(v); return n.length ? smallest(n) : 0 },
+  MAX: (v) => { const n = numbersIn(v); return n.length ? largest(n) : 0 },
   COUNT: (v) => numbersIn(v).length,
   COUNTA: (v) => v.filter((x) => x != null && x !== '').length,
   COUNTBLANK: (v) => v.filter((x) => x == null || x === '').length,
@@ -762,7 +787,10 @@ function callFn(node: Node & { k: 'call' }, ctx: EvalCtx): Cell | Vec {
     if (name === 'SUMIFS') return vals.reduce((a, b) => a + b, 0)
     if (!vals.length) return name === 'AVERAGEIFS' ? ERR.div0() : 0
     if (name === 'AVERAGEIFS') return vals.reduce((a, b) => a + b, 0) / vals.length
-    return name === 'MINIFS' ? Math.min(...vals) : Math.max(...vals)
+    // `smallest`/`largest`, never a spread: `vals` is one entry per SURVIVING
+    // row, so a criterion that keeps most of a large sheet is exactly the shape
+    // that overflows the argument list.
+    return name === 'MINIFS' ? smallest(vals) : largest(vals)
   }
 
   if (LOOKUPS.has(name)) {
