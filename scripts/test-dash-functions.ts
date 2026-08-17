@@ -162,6 +162,44 @@ const T = { region: REGION, stage: STAGE, value: VALUE }
   ok(isErr(ev('EOMONTH("not a date", 0)')), 'a non-date is an error rather than 1970')
 }
 
+// ------------------------------------------------ MIN/MAX at the row target
+//
+// `=MIN(A1:A400000)` is an ordinary thing to write on a sheet this format is
+// sized for, and `Math.min(...n)` is one ARGUMENT per cell. Past the engine's
+// argument limit it does not return `#NUM!` — it THROWS out of the recalc,
+// which takes the grid down with it. condfmt.ts:52 wrote the rule down; MIN,
+// MAX, MINIFS and MAXIFS were four sites that had not read it. The dashboard's
+// axis is the same bug and cost a 400k-row workbook an opaque error card over a
+// working app.
+//
+// The size here is the size that broke. A check over five numbers proves
+// nothing at all about an argument-list limit, so the first assertion below
+// establishes that the spread really does throw in this engine — without it,
+// the ones under it could pass on an engine with no limit and nobody would know
+// the rig had stopped testing anything.
+{
+  const N = 400_000
+  const col: number[] = new Array(N)
+  for (let i = 0; i < N; i++) col[i] = 500 + ((i * 7919) % 1000)
+  col[N >> 1] = -42       // the true minimum, in the middle where an end-read misses it
+  col[(N >> 1) + 1] = 9999 // and the true maximum
+
+  let threw = false
+  try { Math.min(...col) } catch (e) { threw = e instanceof RangeError }
+  ok(threw, `Math.min(...) over ${N} arguments still throws a RangeError here — the hazard is not hypothetical`)
+
+  const big = { v: col as Vec, keep: col.map(() => 'y') as Vec }
+  ok(ev('MIN(v)', big) === -42, `MIN walks ${N} cells without a spread and finds the real minimum`)
+  ok(ev('MAX(v)', big) === 9999, 'and MAX finds the real maximum')
+  ok(ev('MINIFS(v, keep, "y")', big) === -42, 'MINIFS survives a criterion that keeps every row')
+  ok(ev('MAXIFS(v, keep, "y")', big) === 9999, 'and so does MAXIFS')
+
+  // Empty is still Excel's answer, not an accident of the seed value: a loop
+  // seeded at Infinity would happily return Infinity for a range of blanks.
+  ok(ev('MIN(e)', { e: [null, '', null] as Vec }) === 0, 'MIN of nothing is 0, as it always was')
+  ok(ev('MAX(e)', { e: [null, '', null] as Vec }) === 0, 'and so is MAX of nothing')
+}
+
 // ---------------------------------------------------------- registration
 {
   for (const f of ['XLOOKUP', 'VLOOKUP', 'MATCH', 'INDEX', 'SUMIFS', 'COUNTIFS',

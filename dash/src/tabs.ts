@@ -33,9 +33,12 @@
 //    which a drag handle alone never does.
 //
 // EVERY WRITE IS A PATCH. Sheet order is document data: readers must agree on
-// it, so a reorder is an undoable `setSheet` pair (remove, re-insert), never a
-// splice. The one op in store.ts's union that reaches the sheet LIST is
-// `setSheet`, and its inverse carries the POSITION for exactly this reason.
+// it, so a reorder is an undoable `reorderSheets` — a permutation of the ids —
+// never a splice. It was a `setSheet` PAIR (remove, then re-insert at the new
+// index), which was correct in both directions and cost the whole SHEET in the
+// undo entry's byte accounting; see `moveSheetPatches`. Two ops in store.ts's
+// union reach the sheet LIST: `setSheet` for adding and removing one, and
+// `reorderSheets` for the order.
 
 import './tabs.css'
 import { t } from './i18n.ts'
@@ -172,27 +175,35 @@ export function dropIndex(from: number, insertBefore: number): number {
 /**
  * Move a sheet to position `dest`, counted in the list WITHOUT it.
  *
- * TWO PATCHES IN ONE COMMIT, and it has to be both: `setSheet` with a sheet
- * that is already in the document REPLACES it in place (store.ts), so a single
- * patch cannot express a move. Removing first and re-inserting at `dest` can —
- * and `commit` records one entry whose inverse is [remove, re-insert at the
- * ORIGINAL index], so one ⌘Z puts the tab back exactly where it was rather
- * than at the end.
+ * ONE `reorderSheets`, carrying the ids. This used to be TWO `setSheet`
+ * patches in one commit — remove, then re-insert at `dest` — because
+ * `setSheet` on a sheet already in the document REPLACES it in place, so no
+ * single patch could express a move. That was correct, including its inverse:
+ * [remove, re-insert at the ORIGINAL index], so one ⌘Z put the tab back where
+ * it was rather than at the end.
  *
- * The sheet object is passed by REFERENCE, so this costs nothing in memory; it
- * is the undo entry's byte accounting (`JSON.stringify` of the inverse) that
- * pays for the sheet's size, exactly as a delete already does.
+ * It was not CHEAP. The sheet travelled by reference, which costs nothing in
+ * memory — but the undo history is bounded by BYTES and the accounting is
+ * `JSON.stringify` of the inverse, so a re-insert's inverse stringified the
+ * whole sheet. On a 12MB workbook one drag spent 12MB of a 24MB budget and
+ * evicted every earlier entry. `reorderSheets` pays for the ID LIST instead:
+ * twenty sheets is about 200 bytes, whatever the workbook weighs.
+ *
+ * A second thing falls out of it. tabs.ts's own `beforePatch` hook reads a
+ * `setSheet` whose sheet is `undefined` as "the sheet on screen is about to be
+ * removed" and jumps the grid to a neighbour — which is right for a delete and
+ * was pure noise inside a move, papered over by the drag handler re-selecting
+ * the tab afterwards. A reorder removes nothing, so nothing flees.
  */
 export function moveSheetPatches(doc: DashDoc, id: string, dest: number): Patch[] {
   const from = doc.sheets.findIndex((s) => s.id === id)
   if (from < 0) return []
-  const sheet = doc.sheets[from]
   const to = Math.max(0, Math.min(dest, doc.sheets.length - 1))
   if (to === from) return []
-  return [
-    { op: 'setSheet', id, sheet: undefined },
-    { op: 'setSheet', id, sheet, at: to },
-  ]
+  const order = doc.sheets.map((s) => s.id)
+  order.splice(from, 1)
+  order.splice(to, 0, id)
+  return [{ op: 'reorderSheets', order }]
 }
 
 /** Move one place left or right. What the context menu offers when there is no
@@ -771,13 +782,17 @@ export function mountTabs(host: TabsHost): Tabs {
     const el = tabAt(e)
     if (!el || ro()) return
     const sheet = sheetOf(el)
-    // A NAME IS A NAME WHATEVER THE KIND. Renaming writes `setSheetProps`,
-    // which touches nothing but the name, and the tab strip refused it on a
-    // spreadsheet with the words "Only a table sheet can be renamed in this
-    // build" — a statement about this build that this build contradicts. Sheets
-    // the grid cannot open at all keep the refusal: a name you cannot see
-    // yourself typing is not an edit anyone can check.
-    if (!sheet || !isOpenable(sheet)) return
+    // A NAME IS A NAME WHATEVER THE KIND, and there is no longer any exception.
+    // Renaming writes `setSheetProps`, which touches nothing but the name — but
+    // `applyPatch` narrowed that op to a dataset, so a rename of anything else
+    // built a valid patch and THREW at commit. The strip papered over the throw
+    // by refusing first, in two different voices: "Only a table sheet can be
+    // renamed in this build", and later a refusal for sheets the grid cannot
+    // open, reasoned as "the rename box is drawn on the tab". Neither was the
+    // real reason and the second is not even true — the box is drawn on the
+    // tab, and a pivot has a tab. The narrowing is gone (store.ts), so this is
+    // too.
+    if (!sheet) return
     e.preventDefault()
     startRename(el, sheet)
   })
@@ -805,6 +820,10 @@ export function mountTabs(host: TabsHost): Tabs {
   function startRename(el: HTMLElement, sheet: Sheet): void {
     const label = el.querySelector<HTMLElement>('.dx-tab-name')
     if (!label) return
+    // A tab the grid cannot open answers a CLICK with the menu, so a
+    // double-click on one opens the menu and then starts the rename underneath
+    // it — an input the reader cannot see, taking keystrokes.
+    document.querySelector('.dx-tab-menu')?.remove()
     renaming = true
     const input = document.createElement('input')
     input.className = 'dx-tab-rename'
@@ -960,9 +979,9 @@ export function mountTabs(host: TabsHost): Tabs {
       return
     }
     const at = store.doc.sheets.findIndex((s) => s.id === sheet.id)
-    const open = isOpenable(sheet)
-    menuItem(menu, t('Rename'), () => startRename(el, sheet), !open,
-      open ? '' : t('The rename box is drawn on the tab, so a sheet this build cannot open cannot be renamed here.'))
+    // NEVER DISABLED. Every sheet has a name and every sheet has a tab to draw
+    // the rename box on, including the kinds the grid cannot open.
+    menuItem(menu, t('Rename'), () => startRename(el, sheet))
     menuItem(menu, t('Duplicate'), () => {
       const r = duplicateSheetPatches(store.doc, sheet.id)
       if (!r) return

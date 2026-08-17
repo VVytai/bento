@@ -507,15 +507,35 @@ export type SheetPatch = Patch | SetSheetProps
  * would be an unbounded edit carrying an unbounded inverse, and the byte-capped
  * history exists precisely to prevent that.
  */
-const STRUCTURAL = new Set(['id', 'kind', 'columns', 'data', 'rids', 'cells', 'steps'])
+const STRUCTURAL = new Set([
+  'id', 'kind', 'columns', 'data', 'rids', 'cells', 'steps',
+  // The SPREADSHEET kind's column widths and row heights, listed here for the
+  // same reason and only reachable since this op stopped being dataset-only:
+  // both are unbounded maps with a typed patch of their own (`setCanvasSizes`,
+  // which creates and removes the container and inverts one key at a time).
+  // Writing them wholesale here would put a document-sized inverse into a
+  // byte-capped history — exactly what this list exists to prevent.
+  'cols', 'rows',
+])
 
 /**
  * The store case body for `setSheetProps` — the ONLY function in this file that
  * writes, and it writes because `applyPatch` does. Returns the inverse, built
  * from what it displaced, in the shape `applyPatch` returns.
+ *
+ * ANY SHEET KIND, and that is not a widening for its own sake. The body has
+ * never looked at a column or a rid — it displaces named keys on an object and
+ * refuses the structural ones — but the parameter said `TableSheet`, so
+ * `applyPatch` narrowed with `table(doc, id)` and THREW on everything else.
+ * A name is a property of a SHEET, not of a dataset: renaming a spreadsheet tab
+ * built a perfectly good patch and then died at commit with `no table sheet`,
+ * and the tab strip's context menu shipped a deliberately disabled Rename item
+ * describing a limitation of the rename box rather than the real one. Frozen
+ * panes, filters and `totals` are still dataset concepts; they are simply not
+ * concepts this function has ever known about.
  */
 export function applySheetProps(
-  sheet: TableSheet, p: SetSheetProps,
+  sheet: { id: string }, p: SetSheetProps,
 ): { inverse: SetSheetProps; touched: Touched } {
   const s = sheet as unknown as Record<string, unknown>
   const props: Record<string, unknown> = {}

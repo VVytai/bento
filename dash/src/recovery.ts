@@ -32,10 +32,19 @@
 // RESTORING IS NOT ⌘Z-ABLE, and that is dash's shape rather than a shortcut:
 // `Store.replaceDoc` empties both undo stacks (store.ts) because history here
 // is typed inverses, not document snapshots, and an inverse minted against
-// another document is meaningless. So the banner holds the pre-restore document
+// another document is meaningless. So the caller holds the pre-restore document
 // itself and offers ONE explicit "Undo restore" — which is the guarantee the
 // user actually wants, spelled where they can see it, rather than a keystroke
 // that would silently do nothing.
+//
+// THAT OFFER IS `offerUndoRestore`, AND IT IS EXPORTED. About's version history
+// is the other surface that replaces a whole workbook, and it used to disagree
+// with this one about whether that could be taken back: it asked a `confirm()`
+// reading "this cannot be undone" and then made that true, because nothing kept
+// the document it was replacing. Two answers to one question is a bug on its
+// own, and `confirm()` is the weaker of them regardless — it asks BEFORE, when
+// the reader cannot yet see what they would be agreeing to. One function, two
+// callers, so they cannot drift apart again.
 
 import './recovery.css'
 import { getRecovery, clearRecovery, type Snapshot } from '../../kernel/src/autosave.ts'
@@ -233,10 +242,7 @@ function showBanner(host: WorkbookHost, recovered: DashDoc, at: number): void {
 
   const restore = btn(t('Restore'), 'dxr-primary')
   const discard = btn(t('Discard'))
-  // ONE dismiss button for the banner's whole life. Appending a fresh one after
-  // a restore left two ✕ side by side — measured in the browser, and exactly
-  // the kind of thing that only shows up after the second state is reached.
-  const x = closeBtn(bar)
+  const x = closeBtn(bar, t('Dismiss — the changes stay in this browser'))
 
   restore.addEventListener('click', () => {
     // Held BEFORE the swap: `replaceDoc` empties the undo stacks, so this
@@ -251,15 +257,15 @@ function showBanner(host: WorkbookHost, recovered: DashDoc, at: number): void {
     // be wrong and the window is closed without saving, the next open must
     // still find it — clearing here would burn the only copy at the exact
     // moment the user is least sure.
-    msg.textContent = t('Restored the unsaved changes from {when}.', { when })
-    restore.remove()
-    discard.remove()
-    const undo = btn(t('Undo restore'))
-    undo.addEventListener('click', () => {
-      swapWorkbook(host, before)
-      bar.remove()
-    })
-    bar.insertBefore(undo, x)
+    //
+    // A WHOLE NEW BAR, not this one edited. Mutating it in place meant removing
+    // two buttons and splicing a third in before the ✕, and the ✕ was the one
+    // node that had to survive the transition — appending a fresh one left two
+    // side by side (measured in the browser, and exactly the kind of thing that
+    // only shows up once the second state is reached). Building the offer from
+    // scratch has no transition to get wrong, and it is the same call About's
+    // version restore makes, which is the point.
+    offerUndoRestore(host, before, t('Restored the unsaved changes from {when}.', { when }))
   })
 
   discard.addEventListener('click', () => {
@@ -276,13 +282,64 @@ function showBanner(host: WorkbookHost, recovered: DashDoc, at: number): void {
  * "not now". Discard deletes the snapshot; ✕ leaves it where it is, so the
  * offer comes back on the next open. A banner whose only exit is destructive
  * gets clicked by people who meant "go away".
+ *
+ * The title is passed in because the two bars are dismissing different things:
+ * on the offer it means "the changes stay in this browser", and on the
+ * post-restore bar it means "I am keeping the restore". One string for both
+ * would be wrong on one of them.
  */
-function closeBtn(bar: HTMLElement): HTMLElement {
+function closeBtn(bar: HTMLElement, title: string): HTMLElement {
   const b = btn('✕', 'dxr-x')
-  b.title = t('Dismiss — the changes stay in this browser')
-  b.setAttribute('aria-label', b.title)
+  b.title = title
+  b.setAttribute('aria-label', title)
   b.addEventListener('click', () => bar.remove())
   return b
+}
+
+// --- the way back from a restore ---------------------------------------------
+
+/**
+ * A workbook was just swapped in; here is the ONE way back.
+ *
+ * SHARED WITH ABOUT'S VERSION HISTORY, and that is the whole reason it is
+ * exported. The two paths that replace a whole document used to disagree about
+ * whether doing so was reversible: the recovery banner held the pre-restore
+ * document and offered "Undo restore", while About asked a `confirm()` reading
+ * "this cannot be undone" and then made it true. Two answers to one question,
+ * and `confirm()` is the weaker of them regardless — it asks BEFORE, when the
+ * reader cannot yet see what they are agreeing to, instead of offering a way
+ * back AFTER, when they can.
+ *
+ * `Store.replaceDoc` empties both undo stacks (store.ts) because history here
+ * is typed inverses and an inverse minted against another document is
+ * meaningless — so ⌘Z genuinely does not reach across a restore, and the caller
+ * holding `before` is the only route back. This makes that route a button.
+ *
+ * The bar REPLACES whatever `.dxr-bar` is on screen. It is dismissible and
+ * never auto-hides: a reader who has just had their whole workbook replaced
+ * should not be racing a timer to change their mind.
+ */
+export function offerUndoRestore(host: WorkbookHost, before: DashDoc, message: string): void {
+  document.querySelector('.dxr-bar')?.remove()
+  const bar = document.createElement('div')
+  bar.className = 'dxr-bar'
+  bar.setAttribute('role', 'status')
+
+  const msg = document.createElement('span')
+  msg.className = 'dxr-msg'
+  msg.textContent = message
+
+  const undo = btn(t('Undo restore'))
+  undo.addEventListener('click', () => {
+    // If this fails there is nothing useful left to say and nothing to retry —
+    // the document on screen is the restored one either way — so the bar goes
+    // rather than sitting there with a button that does nothing.
+    swapWorkbook(host, before)
+    bar.remove()
+  })
+
+  bar.append(msg, undo, closeBtn(bar, t('Dismiss — keep the restored workbook')))
+  document.body.append(bar)
 }
 
 function btn(label: string, cls = ''): HTMLButtonElement {

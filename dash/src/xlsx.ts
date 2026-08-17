@@ -1486,10 +1486,24 @@ function writeSheet(
         const n = typeof raw === 'number' ? raw : Number(raw)
         if (Number.isFinite(n) && raw !== null && raw !== '') nums.push(n)
       }
+      // MIN/MAX BY LOOP, never `Math.min(...nums)`: `nums` holds one entry per
+      // ROW, a spread is one argument per entry, and the engine throws
+      // `RangeError: Maximum call stack size exceeded` past ~125k of them
+      // (condfmt.ts:52). Exporting a large workbook is precisely when this
+      // fires, and the throw escapes the whole export rather than spoiling one
+      // total. Seeded at ±Infinity so an all-blank column still reduces to the
+      // non-finite value the `shown` line below already turns into 0.
+      const extreme = (want: 'MIN' | 'MAX'): number => {
+        let acc = want === 'MIN' ? Infinity : -Infinity
+        for (const n of nums) {
+          if (want === 'MIN' ? n < acc : n > acc) acc = n
+        }
+        return acc
+      }
       const value = fn === 'SUM' ? nums.reduce((a, b) => a + b, 0)
         : fn === 'AVERAGE' ? (nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0)
           : fn === 'COUNT' ? nums.length
-            : fn === 'MIN' ? Math.min(...nums) : Math.max(...nums)
+            : fn === 'MIN' ? extreme('MIN') : extreme('MAX')
       const shown = Number.isFinite(value) ? value : 0
       cells.push(`<c r="${ref}" s="${colStyle[i]}"><f>${fn}(${range})</f><v>${shown}</v></c>`)
     })

@@ -197,10 +197,107 @@ console.log('\nreorder — order is data, so a move is a patch and undo is exact
   ok(moveSheetPatches(d, 'a', 0).length === 0, 'a move to where it already is mints nothing — no undo entry for a gesture that changed nothing')
   ok(moveSheetPatches(d, 'nope', 1).length === 0, 'an unknown sheet mints nothing rather than throwing')
   ok(order(d) === 'abpc', 'minting a patch never touches the document')
-  ok(moveSheetPatches(d, 'a', 99).length === 2, 'an out-of-range destination is CLAMPED, not refused — a drag past the end is an ordinary gesture')
+  ok(moveSheetPatches(d, 'a', 99).length === 1, 'an out-of-range destination is CLAMPED, not refused — a drag past the end is an ordinary gesture')
   const st = new Store(fresh())
   st.commit(moveSheetPatches(st.doc, 'a', 99))
   ok(order(st.doc) === 'bpca', 'and it lands at the end')
+}
+{
+  // ONE PATCH, and it names every sheet. A move used to be two `setSheet`
+  // patches (remove, re-insert) because `setSheet` on a sheet already present
+  // REPLACES it in place. That shape is what made the inverse expensive.
+  const d = fresh()
+  const [p] = moveSheetPatches(d, 'a', 2)
+  ok(p.op === 'reorderSheets', 'a move is ONE reorderSheets, not a remove-and-re-insert pair')
+  ok(p.op === 'reorderSheets' && j(p.order) === j(['b', 'p', 'a', 'c']),
+    'and it carries the whole resulting order, by id')
+  ok(!JSON.stringify(p).includes('"columns"'),
+    'the patch carries no sheet BODY at all — which is the point of the op')
+}
+{
+  // A REORDER THAT DOES NOT NAME EVERY SHEET IS A DELETE. `reorderColumns`
+  // drops ids it cannot find, which is survivable for a column list; here it
+  // would remove a sheet from the workbook inside an operation that claims
+  // only to change an order, so applyPatch refuses all three malformed shapes
+  // rather than doing something reasonable-looking with them.
+  const bad = (order: string[]): boolean => {
+    const st = new Store(fresh())
+    try { st.commit({ op: 'reorderSheets', order }); return false } catch { return true }
+  }
+  ok(bad(['a', 'b', 'p']), 'an order that leaves a sheet out is refused — that is a delete, not a reorder')
+  ok(bad(['a', 'b', 'p', 'c', 'zz']), 'an order naming a sheet that is not there is refused')
+  ok(bad(['a', 'a', 'p', 'c']), 'and an order naming one sheet twice is refused — two tabs would share one sheet\'s arrays')
+  const st = new Store(fresh())
+  st.commit({ op: 'reorderSheets', order: ['a', 'b', 'p', 'c'] })
+  ok(order(st.doc) === 'abpc', 'a reorder to the order it is already in is legal and changes nothing')
+}
+
+// ============================================ what a reorder COSTS the history
+//
+// THE WHOLE POINT OF THE OP. Undo here is bounded by BYTES, not by entries
+// (store.ts `UNDO_BYTES`), and the accounting is `JSON.stringify` of the
+// inverse. A move's inverse used to be [remove, re-insert at the original
+// index] — and the re-insert carried the SHEET, so dragging a tab on a 12MB
+// workbook spent 12MB of a 24MB budget and evicted every earlier undo entry.
+// Two drags and the history was two drags long.
+//
+// So the cost is checked as a cost, not just as a behaviour: an inverse that
+// scales with the sheet would still pass every correctness check above.
+console.log('\na reorder costs its ID LIST, not its sheets')
+{
+  /** A sheet whose stringified body is unmistakably large. */
+  const heavy = (id: string, name: string, rows: number): unknown => ({
+    id, name, kind: 'table',
+    rids: [[1, rows]],
+    columns: [{ id: `${id}-v`, name: 'V', type: 'number' }],
+    data: { [`${id}-v`]: { enc: 'raw', v: Array.from({ length: rows }, (_, i) => i * 1.5) } },
+    steps: [],
+  })
+  const bulky = (): DashDoc => {
+    const r = parseDoc(JSON.stringify({
+      format: 'bento/dash', version: 1, policy: 'bento-dash-1',
+      docId: 'd', title: 'test',
+      sheets: [heavy('a', 'Alpha', 20_000), heavy('b', 'Beta', 20_000), heavy('c', 'Gamma', 20_000)],
+    }))
+    if (!r.ok) throw new Error('fixture does not parse')
+    return r.doc
+  }
+
+  const st = new Store(bulky())
+  const sheetBytes = JSON.stringify(st.doc.sheets[0]).length
+  st.commit(moveSheetPatches(st.doc, 'a', 2))
+  const cost = st.historyBytes
+  ok(order(st.doc) === 'bca', 'the heavy fixture reorders')
+  ok(sheetBytes > 100_000, `each sheet is genuinely bulky (${sheetBytes} bytes stringified)`)
+  // Generous by two orders of magnitude on purpose: this is an assertion about
+  // the SHAPE of the inverse, not a byte-exact measurement that would have to
+  // be edited every time a comment moves.
+  ok(cost < 1000,
+    `and one undo entry costs ${cost} bytes — the id list, not the ${sheetBytes}-byte sheet it moved`)
+  ok(cost < sheetBytes / 100,
+    'which is under a hundredth of one sheet: the cost does not scale with the workbook')
+
+  // And it is still EXACT, which is the property the cheap inverse must not
+  // have bought its way out of.
+  st.undo()
+  ok(order(st.doc) === 'abc', 'one undo puts the dragged tab back where it was, not at the end')
+  st.redo()
+  ok(order(st.doc) === 'bca', 'and redo re-applies it')
+
+  // The cost is flat in the SIZE of the workbook, which a single measurement
+  // cannot show. Ten times the rows must not mean ten times the entry.
+  const bigger = new Store((() => {
+    const r = parseDoc(JSON.stringify({
+      format: 'bento/dash', version: 1, policy: 'bento-dash-1',
+      docId: 'd', title: 'test',
+      sheets: [heavy('a', 'Alpha', 200_000), heavy('b', 'Beta', 20_000), heavy('c', 'Gamma', 20_000)],
+    }))
+    if (!r.ok) throw new Error('fixture does not parse')
+    return r.doc
+  })())
+  bigger.commit(moveSheetPatches(bigger.doc, 'a', 2))
+  ok(bigger.historyBytes === cost,
+    `a ten-times-larger sheet reorders for the SAME ${cost} bytes — flat in the workbook, linear only in the number of tabs`)
 }
 {
   // A PIVOT REORDERS TOO. It is a sheet like any other in the list; only
@@ -355,6 +452,68 @@ console.log('\nrename')
   ok(renameSheetPatch(s, 'Alpha') === null, 'and renaming to the same name mints nothing')
 }
 roundTrip('rename', (d) => renameSheetPatch(d.sheets[0] as TableSheet, 'Renamed')!)
+
+// ============================================ rename reaches EVERY sheet kind
+//
+// A NAME IS THE ONE PROPERTY EVERY KIND HAS, and until this commit it was
+// writable on a dataset alone. `applyPatch`'s `setSheetProps` case narrowed
+// through `table(doc, id)`, so a rename of a spreadsheet or a pivot built a
+// perfectly valid patch and then THREW `no table sheet` at commit. The strip
+// hid the throw by refusing first — a disabled Rename item whose stated reason
+// ("the rename box is drawn on the tab") was not the real one and was not even
+// true, since a pivot has a tab.
+//
+// This is checked through the STORE rather than against `renameSheetPatch`,
+// because the patch factory was never the broken half: it is kind-agnostic
+// already and always was. Asserting on it would have passed throughout the
+// whole life of the bug, which is why nothing caught this.
+console.log('\na name belongs to a SHEET, not to a dataset')
+{
+  const withKinds = (): DashDoc => {
+    const d = fresh()
+    const r = parseDoc(JSON.stringify({
+      ...d,
+      sheets: [...d.sheets, { id: 'ss', name: 'Scratch', kind: 'canvas', cells: { A1: { v: 1 } } }],
+    }))
+    if (!r.ok) throw new Error('fixture does not parse')
+    return r.doc
+  }
+  const nameOf = (d: DashDoc, id: string): string | undefined =>
+    d.sheets.find((s) => s.id === id)?.name
+
+  for (const [id, kind] of [['ss', 'spreadsheet'], ['p', 'pivot'], ['a', 'dataset']] as const) {
+    const st = new Store(withKinds())
+    const sheet = st.doc.sheets.find((s) => s.id === id)!
+    const p = renameSheetPatch(sheet, 'Renamed')!
+    let threw: unknown = null
+    try { st.commit(p) } catch (e) { threw = e }
+    ok(threw === null && nameOf(st.doc, id) === 'Renamed',
+      `a ${kind} sheet renames${threw ? ` — threw ${(threw as Error).message}` : ''}`)
+    st.undo()
+    ok(nameOf(st.doc, id) === (kind === 'spreadsheet' ? 'Scratch' : kind === 'pivot' ? 'Summary' : 'Alpha'),
+      `and one undo puts the ${kind}'s old name back`)
+  }
+
+  // The widening is of the KIND, not of what may be written. Every structural
+  // key is still refused, and `cells` is the one that matters here: it is the
+  // spreadsheet's whole content, it was only ever unreachable because the op
+  // could not name a spreadsheet at all, and a props write of it would put a
+  // document-sized inverse into a byte-capped history.
+  const st = new Store(withKinds())
+  const refuses = (p: Patch): boolean => {
+    try { st.commit(p); return false } catch { return true }
+  }
+  ok(refuses({ op: 'setSheetProps', sheet: 'ss', props: { cells: {} } }),
+    'a spreadsheet\'s `cells` is still refused — the kind widened, the key list did not')
+  ok(refuses({ op: 'setSheetProps', sheet: 'ss', props: { cols: { A: 200 } } }),
+    'and so are its column widths, which have a typed patch of their own (setCanvasSizes)')
+  ok(refuses({ op: 'setSheetProps', sheet: 'ss', props: { rows: { 1: 40 } } }),
+    'and its row heights, for the same reason')
+  ok(refuses({ op: 'setSheetProps', sheet: 'ss', props: { kind: 'table' } }),
+    'and a sheet cannot change kind through a props write')
+  ok(refuses({ op: 'setSheetProps', sheet: 'nope', props: { name: 'X' } }),
+    'a sheet that is not in the workbook is still refused LOUDLY — a silent no-op is an edit the user believes landed')
+}
 
 // ============================================================ what a tab says
 

@@ -2610,7 +2610,22 @@ export function committable(doc: DashDoc, p: Patch): boolean {
       const s = table(p.sheet)
       return !!s && p.order.length === s.columns.length && p.order.every((id) => s.columns.some((c) => c.id === id))
     }
-    case 'setSheetProps': return !!table(p.sheet)
+    // ANY KIND, matching `applyPatch`. This asked `table(p.sheet)` — the same
+    // narrowing store.ts had — so under a live session a rename of a
+    // spreadsheet or a pivot was FILTERED OUT of the commit as uncommittable
+    // and reported as `patch-refused`: the edit vanished locally as well as
+    // remotely, which is worse than the throw it was mirroring. The question
+    // this gate asks is "is the target still there?", and for a sheet-level op
+    // the target is a sheet.
+    case 'setSheetProps': return doc.sheets.some((s) => s.id === p.sheet)
+    // `applyPatch` REFUSES a `reorderSheets` that is not a permutation of the
+    // current list, and it is right to — an id left out would delete a sheet.
+    // But an undo replaying an order minted before a collaborator added or
+    // removed a sheet is exactly that, and a throw out of `commit` is worse
+    // than a lost undo step. Refused here, as `reorderColumns` already is.
+    case 'reorderSheets':
+      return p.order.length === doc.sheets.length &&
+        p.order.every((id) => doc.sheets.some((s) => s.id === id))
     default: return true
   }
 }

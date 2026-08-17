@@ -951,6 +951,46 @@ const cellAt = (r: Replica, col: string, rid: number): unknown => {
   console.log('row node ids stay composite (sheet-scoped rids)…')
   ok(rowNode('s1', 7) !== rowNode('s2', 7), 'the same rid on two sheets is two nodes')
 }
+{
+  // A SHEET-LEVEL OP ASKS ABOUT A SHEET, NOT ABOUT A DATASET.
+  //
+  // `committable` gated `setSheetProps` on `tableOf(doc, sheet)` — the same
+  // narrowing `applyPatch` had. Under a live session that is WORSE than the
+  // throw it mirrored: session.localPatches FILTERS an uncommittable patch out
+  // of the commit and reports `patch-refused`, so renaming a spreadsheet or a
+  // pivot did not merely fail to reach the peers, it never landed locally
+  // either — the tab simply snapped back to its old name.
+  //
+  // The gate's real question is "is the target still there?", so a sheet a
+  // collaborator has DELETED must still be refused. Both halves are checked;
+  // only the first was wrong.
+  console.log('a sheet-level op is committable for every sheet kind…')
+  const doc = baseDoc()
+  doc.sheets.push({ id: 's3', name: 'Scratch', kind: 'canvas', cells: {} } as never)
+  doc.sheets.push({ id: 's4', name: 'Summary', kind: 'pivot', spec: { from: 's1' } } as never)
+  const rename = (sheet: string): Patch =>
+    ({ op: 'setSheetProps', sheet, props: { name: 'Renamed' } }) as unknown as Patch
+  ok(committable(doc, rename('s1')), 'renaming a dataset is committable')
+  ok(committable(doc, rename('s3')), 'renaming a SPREADSHEET is committable — it was refused as "not a table"')
+  ok(committable(doc, rename('s4')), 'and so is renaming a PIVOT')
+  ok(!committable(doc, rename('gone')),
+    'a sheet that is no longer in the document is still refused — you cannot edit what is not there')
+
+  // A REORDER IS A PERMUTATION OF THE LIST IT WAS MINTED AGAINST.
+  //
+  // `applyPatch` refuses one that is not — an id left out would DELETE a sheet
+  // — and it is right to. But an undo replaying an order minted before a
+  // collaborator added or removed a sheet is exactly that shape, and a throw
+  // out of `commit` is worse than a lost undo step. Same gate `reorderColumns`
+  // already has, for the same reason.
+  const ids = doc.sheets.map((s) => s.id)
+  const order = (o: string[]): Patch => ({ op: 'reorderSheets', order: o }) as unknown as Patch
+  ok(committable(doc, order([...ids].reverse())), 'a genuine permutation is committable')
+  ok(!committable(doc, order(ids.slice(1))),
+    'an order minted before a collaborator ADDED a sheet is refused rather than thrown on')
+  ok(!committable(doc, order([...ids, 'ghost'])),
+    'and one naming a sheet a collaborator has since removed is refused too')
+}
 
 console.log(failures === 0 ? `\nALL PASS (${checks} checks)` : `\n${failures} FAILURES of ${checks} checks`)
 process.exit(failures ? 1 : 0)
