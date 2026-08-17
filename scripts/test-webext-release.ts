@@ -79,6 +79,25 @@ const threw = async (fn: () => Promise<unknown>): Promise<string> => {
     + 'key is right and the envelope format has not moved')
 }
 {
+  // A valid signature under a key we do not trust — and NO test seam: the REAL
+  // payload, re-signed with a throwaway key, handed to the shipped verifier
+  // using the SHIPPED key. It must refuse.
+  //
+  // Distinct from bending a signature, which any bug-free crypto call rejects.
+  // This one validates perfectly; it is simply not ours. It is what catches a
+  // verifier that imported the wrong key, or one that would trust a key
+  // travelling in the envelope alongside the signature — a verifier like that
+  // passes every tampering test ever written. (tray/ios's construction, from
+  // PR #315; it is better than the seam-based version I had.)
+  const real = JSON.parse(realManifest())
+  const impostor = await releaseSigner()
+  const forged = JSON.parse(await impostor.envelope(JSON.parse(real.payload)))
+  ok(forged.payload === real.payload, 'the impostor signs the genuine payload, byte for byte')
+  const msg = await threw(() => verifySigned(JSON.stringify(forged), 'release manifest'))
+  ok(/INVALID/.test(msg),
+    `a real payload re-signed by another key is refused against the shipped key (${msg})`)
+}
+{
   // Mirrored code has one failure mode: drift. Pin both ends.
   const kernel = readFileSync(new URL('../kernel/src/update.ts', import.meta.url), 'utf8')
   // From the declaration onward, and `\b` on the coordinate names — `kty: 'EC'`
@@ -186,6 +205,22 @@ const netFor = (body: string, status = 200) => async () => ({
 {
   const msg = await threw(() => fetchPinned(netFor(SHELL), 'https://x/s.html', ''))
   ok(/not pinned/.test(msg), 'an unpinned release is refused rather than fetched and hoped over')
+}
+{
+  // The header is load-bearing, and its absence is silent. Measured 2026-08-17:
+  // the live release URL serves 689,675 bytes to a browser-shaped Accept and
+  // 689,316 — the signed ones — to the wildcard, the difference being an
+  // analytics beacon the edge injects into anything it reads as a page. Asking
+  // for a page here would mean the digest check refuses every real download.
+  const seen: any[] = []
+  const net = async (_u: string, init: any) => {
+    seen.push(init)
+    return { ok: true, status: 200, async arrayBuffer() { return new TextEncoder().encode(SHELL).buffer } }
+  }
+  await fetchPinned(net, 'https://x/s.html', shellHash)
+  ok(seen[0]?.headers?.Accept === '*/*',
+    `the shell is fetched asking for BYTES, not for a page (${JSON.stringify(seen[0]?.headers)})`)
+  ok(seen[0]?.cache === 'no-store', 'and uncached — a stale shell is a stale document')
 }
 {
   // Hex case is a presentation choice, not a difference.

@@ -18,7 +18,7 @@
 
 import { CACHE, get, put, prefixes } from './db.js'
 import { getGrants } from './status.js'
-import { verifyManifest, fetchPinned } from './release.js'
+import { verifyManifest, fetchPinned, ACCEPT_BYTES } from './release.js'
 
 /** How deep to look, and how many documents to show. A folder of documents is
  *  not a filesystem; someone who granted a home directory should get a useful
@@ -396,7 +396,11 @@ export async function newDocument(dir, wantedBase = 'Untitled', deps = {}) {
   // hand-written to the shape the code expected rather than to the shape the
   // server sends. It is checked against a real captured manifest now
   // (scripts/test-webext-release.ts).
-  const res = await net(app.manifest, { cache: 'no-store' })
+  // ACCEPT_BYTES on the manifest too. The edge injection measured on the shell
+  // targets things it reads as pages, so a JSON manifest is not today's victim
+  // — but "ask for bytes on the one request we remembered" is a rule that only
+  // holds until somebody adds a third fetch.
+  const res = await net(app.manifest, { cache: 'no-store', headers: ACCEPT_BYTES })
   // Only Slides has a published channel today, so a 404 here is an EXPECTED
   // answer rather than a fault, and an HTTP status is the wrong way to say it.
   // The wording matches tray/ios (and tray/android is following): the app list

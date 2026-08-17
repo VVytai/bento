@@ -49,6 +49,30 @@ export const RELEASE_KEY = {
   y: 'flFNzbdXCmJN8RQYCeG71rBZnnbN-MCEnp1EbCLFrj0',
 }
 
+// Ask for BYTES, not for a page — explicitly, rather than inheriting whatever
+// the platform's default happens to be.
+//
+// Not hypothetical. Measured against the live release URL on 2026-08-17: the
+// SAME url answers differently depending on this one header. Asking with the
+// wildcard returns 689,316 bytes, which match the signed pin. Asking with a
+// browser's own header (text/html, application/xhtml+xml, …) returns 689,675,
+// which do not.
+//
+// The 359-byte difference is a Cloudflare Web Analytics beacon the edge injects
+// before the closing body tag, for anything it reads as a page being browsed.
+// The URL and its `.bento.html` extension are identical either way, so the
+// trigger is the header — the good outcome, since a path-keyed injection could
+// not be avoided by any host.
+//
+// An extension's `fetch` already defaults to the wildcard, so this changes
+// nothing today. Set anyway: the default belongs to the browser, not to this
+// code, and if it ever moves the symptom is a `+` button that refuses every
+// download. The digest check catching that IS the system working, but it is
+// better not to depend on the catch.
+//
+// Found by tray/android, measured by tray/ios, reproduced here.
+export const ACCEPT_BYTES = { Accept: '*/*' }
+
 const b64ToBytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('')
 
@@ -133,7 +157,7 @@ export async function verifyManifest(raw, appId, jwk) {
  */
 export async function fetchPinned(net, url, sha256) {
   if (!/^[0-9a-f]{64}$/i.test(sha256 ?? '')) throw new Error('the release is not pinned to a digest')
-  const res = await net(url, { cache: 'no-store' })
+  const res = await net(url, { cache: 'no-store', headers: ACCEPT_BYTES })
   if (!res.ok) throw new Error(`could not download the app (${res.status})`)
   const bytes = await res.arrayBuffer()
   if ((await sha256Hex(bytes)) !== sha256.toLowerCase())

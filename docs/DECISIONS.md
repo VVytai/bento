@@ -50,6 +50,18 @@ against the payload's own claim about itself, and an ABSENT `app` must not read
 as a match. (`tray/ios` found both native hosts missing this while reviewing
 webext's rig — PR #315, PR #318.)
 
+**Ask for BYTES: send `Accept: */*` explicitly on every release fetch.**
+Measured against the live shell URL on 2026-08-17, independently by tray/ios and
+tray/webext: the wildcard returns 689,316 bytes and matches the signed pin; a
+browser's own `Accept: text/html,…` returns 689,675 and does not. The extra 359
+bytes are a Cloudflare Web Analytics beacon the edge injects before `</body>`
+into anything it reads as a page being browsed. Same URL, same `.bento.html`
+extension both times, so the trigger is the header — fortunate, because a
+path-keyed injection could not be avoided by any host. Most platforms already
+default to the wildcard; set it anyway, because the default is the platform's
+and not ours. (An earlier note that this was "fixed at the origin" was wrong and
+is retracted — it is live as of this entry.)
+
 **A 404 on a channel is an ANSWER, not a fault.** Only Slides is published
 today; the app list is aspirational on every host. All three say
 "<App> has not been released yet" rather than surfacing an HTTP status.
