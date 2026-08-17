@@ -1286,6 +1286,37 @@ html, body {
 /* the cursor cell no longer needs its own ring — the outline draws it */
 .dg-cell.dg-cursor { box-shadow: none; background: var(--bg) !important; }
 .dg-scroll:focus { outline: none; }
+/* …and neither does a FOCUSED cell, for the same reason: focus and the cursor
+   are the same cell by construction (see Grid.restoreFocus), so a focus ring on
+   top of the selection outline would draw the same rectangle twice, 2px apart.
+   The one case where they differ is the scroller holding focus because the
+   cursor is scrolled out of the window, and that has nothing on screen to ring. */
+.dg-cell:focus, .dg-cell:focus-visible { outline: none; }
+
+/* ————— the appender: the dataset's whole frontier —————
+   ONE row past the data, and it must not look like a row of data. The gutter
+   carries `+` where a row number would be and the cells are empty and muted;
+   the ruled lattice (painted by Grid.paintEmptyGrid) now stops immediately
+   below it, so what is under the sheet is plain background rather than a
+   picture of rows that do not exist. */
+.dg-add-row .dg-cell { color: var(--muted); cursor: cell; }
+.dg-add-gutter { font-weight: 700; }
+.dg-add-row:hover .dg-cell { background: var(--hover); }
+
+/* Text for assistive technology only. Not `display:none` and not
+   `visibility:hidden` — both remove the node from the accessibility tree, which
+   is the one place this text is FOR. */
+.dg-a11y {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* Frozen columns stay put while the rest scrolls under them, so they need an
    opaque background (the cells behind would show through) and an edge that
