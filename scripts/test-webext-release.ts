@@ -146,6 +146,18 @@ const payloadFor = (over: Record<string, unknown> = {}) => ({
     `a correctly signed manifest for ANOTHER app is refused on the wrong channel (${msg})`)
 }
 {
+  // An ABSENT app must not read as a match. `undefined !== 'bento-slides'` gets
+  // this right, but only by construction — a later refactor to something like
+  // `info.app && info.app !== appId` would turn a missing field into a pass,
+  // and no other check would notice: signature and digest are both happy.
+  // (tray/ios raised this on PR #315; the same case, from the other direction.)
+  const raw = await signer.envelope({
+    version: '1.0.18', sha256: shellHash, url: 'https://bento.page/x.bento.html',
+  })
+  const msg = await threw(() => verifyManifest(raw, 'bento-slides', signer.jwk))
+  ok(/malformed/.test(msg), `a payload naming no app at all is refused (${msg})`)
+}
+{
   const raw = await signer.envelope(payloadFor({ sha256: 'not-a-digest' }))
   const msg = await threw(() => verifyManifest(raw, 'bento-slides', signer.jwk))
   ok(/malformed/.test(msg), `a payload that pins nothing is refused (${msg})`)
@@ -269,7 +281,7 @@ const channel = (manifestRaw: string, shell = SHELL, shellStatus = 200) => async
     app: 'spaces', jwk: signer.jwk,
     fetch: async () => ({ ok: false, status: 404, async text() { return '<html>404</html>' } }),
   }))
-  ok(/no Spaces release has been published yet/.test(msg),
+  ok(/Spaces has not been released yet/.test(msg),
     `an unpublished channel says so, rather than reporting a parse failure (${msg})`)
 }
 {

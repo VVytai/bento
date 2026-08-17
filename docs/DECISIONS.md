@@ -38,8 +38,25 @@ the release origin — compromised host, bad CDN edge, hostile-network proxy —
 chooses what code the user creates. Signature over the pin, pin over the bytes;
 neither half is worth anything alone.
 
+Step 3 is the one that is invisible to the other two, so it is the one that gets
+skipped: a `bento-slides` manifest and a `bento-dash` manifest are both
+genuinely signed by the same key, and the shell each points at really does hash
+to what its payload pins. Serving one on the other's channel passes the
+signature AND the digest — every byte authentic, just not what was asked for.
+Only identity catches a swap between two REAL releases, which is exactly what
+survives an origin or CDN compromise where the attacker cannot forge but can
+re-serve. The check must be made against the app that was **requested**, not
+against the payload's own claim about itself, and an ABSENT `app` must not read
+as a match. (`tray/ios` found both native hosts missing this while reviewing
+webext's rig — PR #315, PR #318.)
+
+**A 404 on a channel is an ANSWER, not a fault.** Only Slides is published
+today; the app list is aspirational on every host. All three say
+"<App> has not been released yet" rather than surfacing an HTTP status.
+
 **Status.** `tray/webext` done (`src/release.js`, used by `library.js
-newDocument`); `tray/android` in progress; `tray/ios` asked to follow.
+newDocument`); `tray/ios` done (`Releases.swift`, PR #315); `tray/android` in
+progress.
 
 **Pointers.** `kernel/src/update.ts` is the reference implementation
 (`verifySigned` / `fetchPinned` / `verifyManifest`) and hosts should reuse it

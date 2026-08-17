@@ -397,8 +397,11 @@ export async function newDocument(dir, wantedBase = 'Untitled', deps = {}) {
   // server sends. It is checked against a real captured manifest now
   // (scripts/test-webext-release.ts).
   const res = await net(app.manifest, { cache: 'no-store' })
-  if (res.status === 404)
-    throw new Error(`no ${app.name} release has been published yet`)
+  // Only Slides has a published channel today, so a 404 here is an EXPECTED
+  // answer rather than a fault, and an HTTP status is the wrong way to say it.
+  // The wording matches tray/ios (and tray/android is following): the app list
+  // is aspirational on all three hosts, so all three phrase this identically.
+  if (res.status === 404) throw new Error(`${app.name} has not been released yet`)
   if (!res.ok) throw new Error(`could not reach the ${app.name} release server (${res.status})`)
   const release = await verifyManifest(await res.text(), app.appId, deps.jwk)
 
