@@ -159,6 +159,32 @@ export type Patch =
    */
   | { op: 'setSheet'; id: string; sheet?: Sheet; at?: number }
   /**
+   * Sheet ORDER, as a permutation of the ids. The tab strip's drag, and
+   * `Move left` / `Move right`.
+   *
+   * WHY THIS EXISTS RATHER THAN TWO `setSheet`s. A move used to be a remove
+   * followed by a re-insert, which is correct — `setSheet` on a sheet already
+   * in the document REPLACES it in place, so one patch could not express a
+   * move — and its inverse was correct too, carrying the sheet and its original
+   * index so one ⌘Z put the tab back where it was rather than at the end.
+   *
+   * What it was not is CHEAP. This history is bounded by BYTES (see the header
+   * and `UNDO_BYTES`), and the accounting is `JSON.stringify` of the inverse —
+   * so the inverse of a re-insert stringified the WHOLE SHEET. Dragging a tab
+   * on a 12MB workbook spent 12MB of a 24MB budget and evicted every earlier
+   * entry: two drags and the undo stack was two drags long. O(sheet) for an
+   * operation that changes an ARRAY ORDER, which is O(number of sheets) —
+   * twenty ids, about 200 bytes, whatever the workbook weighs.
+   *
+   * MUST BE A PERMUTATION. `reorderColumns` drops ids it cannot find, which is
+   * survivable for a column list; here an id left out of `order` would DELETE
+   * a sheet, and a delete arriving inside a reorder is the kind of data loss
+   * nobody thinks to look for. It is refused loudly instead, and
+   * `crdt.committable` refuses it BEFORE the commit when a collaborator has
+   * changed the sheet list underneath it.
+   */
+  | { op: 'reorderSheets'; order: string[] }
+  /**
    * One comment thread, by id. `comment: undefined` removes it.
    *
    * Per-thread rather than rewriting `Sheet.comments` through `setSheetProps`:
@@ -699,6 +725,28 @@ export function applyPatch(doc: DashDoc, p: Patch): { inverse: Patch; touched: T
         inverse: { op: 'setSheet', id: p.id, sheet: was, at: at < 0 ? undefined : at },
         touched: { all: true },
       }
+    }
+
+    case 'reorderSheets': {
+      const was = doc.sheets.map((s) => s.id)
+      const by = new Map(doc.sheets.map((s) => [s.id, s]))
+      // A PERMUTATION, checked all three ways — same length, every id known,
+      // no id twice. Anything else and the map below would silently drop or
+      // duplicate a sheet, which is a delete (or a second tab sharing one
+      // sheet's arrays) arriving inside an operation that only claims to
+      // change an order.
+      if (
+        p.order.length !== was.length ||
+        new Set(p.order).size !== p.order.length ||
+        p.order.some((id) => !by.has(id))
+      ) {
+        throw new Error('reorderSheets must name every sheet in the workbook exactly once')
+      }
+      doc.sheets = p.order.map((id) => by.get(id)!)
+      // `all`, as `setSheet` is: the tab strip, the grid and every panel read
+      // the sheet list. The INVERSE is what this op exists for — a list of ids,
+      // not a sheet.
+      return { inverse: { op: 'reorderSheets', order: was }, touched: { all: true } }
     }
 
     case 'setView': {

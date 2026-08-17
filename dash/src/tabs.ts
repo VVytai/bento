@@ -33,9 +33,12 @@
 //    which a drag handle alone never does.
 //
 // EVERY WRITE IS A PATCH. Sheet order is document data: readers must agree on
-// it, so a reorder is an undoable `setSheet` pair (remove, re-insert), never a
-// splice. The one op in store.ts's union that reaches the sheet LIST is
-// `setSheet`, and its inverse carries the POSITION for exactly this reason.
+// it, so a reorder is an undoable `reorderSheets` — a permutation of the ids —
+// never a splice. It was a `setSheet` PAIR (remove, then re-insert at the new
+// index), which was correct in both directions and cost the whole SHEET in the
+// undo entry's byte accounting; see `moveSheetPatches`. Two ops in store.ts's
+// union reach the sheet LIST: `setSheet` for adding and removing one, and
+// `reorderSheets` for the order.
 
 import './tabs.css'
 import { t } from './i18n.ts'
@@ -172,27 +175,35 @@ export function dropIndex(from: number, insertBefore: number): number {
 /**
  * Move a sheet to position `dest`, counted in the list WITHOUT it.
  *
- * TWO PATCHES IN ONE COMMIT, and it has to be both: `setSheet` with a sheet
- * that is already in the document REPLACES it in place (store.ts), so a single
- * patch cannot express a move. Removing first and re-inserting at `dest` can —
- * and `commit` records one entry whose inverse is [remove, re-insert at the
- * ORIGINAL index], so one ⌘Z puts the tab back exactly where it was rather
- * than at the end.
+ * ONE `reorderSheets`, carrying the ids. This used to be TWO `setSheet`
+ * patches in one commit — remove, then re-insert at `dest` — because
+ * `setSheet` on a sheet already in the document REPLACES it in place, so no
+ * single patch could express a move. That was correct, including its inverse:
+ * [remove, re-insert at the ORIGINAL index], so one ⌘Z put the tab back where
+ * it was rather than at the end.
  *
- * The sheet object is passed by REFERENCE, so this costs nothing in memory; it
- * is the undo entry's byte accounting (`JSON.stringify` of the inverse) that
- * pays for the sheet's size, exactly as a delete already does.
+ * It was not CHEAP. The sheet travelled by reference, which costs nothing in
+ * memory — but the undo history is bounded by BYTES and the accounting is
+ * `JSON.stringify` of the inverse, so a re-insert's inverse stringified the
+ * whole sheet. On a 12MB workbook one drag spent 12MB of a 24MB budget and
+ * evicted every earlier entry. `reorderSheets` pays for the ID LIST instead:
+ * twenty sheets is about 200 bytes, whatever the workbook weighs.
+ *
+ * A second thing falls out of it. tabs.ts's own `beforePatch` hook reads a
+ * `setSheet` whose sheet is `undefined` as "the sheet on screen is about to be
+ * removed" and jumps the grid to a neighbour — which is right for a delete and
+ * was pure noise inside a move, papered over by the drag handler re-selecting
+ * the tab afterwards. A reorder removes nothing, so nothing flees.
  */
 export function moveSheetPatches(doc: DashDoc, id: string, dest: number): Patch[] {
   const from = doc.sheets.findIndex((s) => s.id === id)
   if (from < 0) return []
-  const sheet = doc.sheets[from]
   const to = Math.max(0, Math.min(dest, doc.sheets.length - 1))
   if (to === from) return []
-  return [
-    { op: 'setSheet', id, sheet: undefined },
-    { op: 'setSheet', id, sheet, at: to },
-  ]
+  const order = doc.sheets.map((s) => s.id)
+  order.splice(from, 1)
+  order.splice(to, 0, id)
+  return [{ op: 'reorderSheets', order }]
 }
 
 /** Move one place left or right. What the context menu offers when there is no

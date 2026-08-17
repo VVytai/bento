@@ -975,6 +975,21 @@ const cellAt = (r: Replica, col: string, rid: number): unknown => {
   ok(committable(doc, rename('s4')), 'and so is renaming a PIVOT')
   ok(!committable(doc, rename('gone')),
     'a sheet that is no longer in the document is still refused — you cannot edit what is not there')
+
+  // A REORDER IS A PERMUTATION OF THE LIST IT WAS MINTED AGAINST.
+  //
+  // `applyPatch` refuses one that is not — an id left out would DELETE a sheet
+  // — and it is right to. But an undo replaying an order minted before a
+  // collaborator added or removed a sheet is exactly that shape, and a throw
+  // out of `commit` is worse than a lost undo step. Same gate `reorderColumns`
+  // already has, for the same reason.
+  const ids = doc.sheets.map((s) => s.id)
+  const order = (o: string[]): Patch => ({ op: 'reorderSheets', order: o }) as unknown as Patch
+  ok(committable(doc, order([...ids].reverse())), 'a genuine permutation is committable')
+  ok(!committable(doc, order(ids.slice(1))),
+    'an order minted before a collaborator ADDED a sheet is refused rather than thrown on')
+  ok(!committable(doc, order([...ids, 'ghost'])),
+    'and one naming a sheet a collaborator has since removed is refused too')
 }
 
 console.log(failures === 0 ? `\nALL PASS (${checks} checks)` : `\n${failures} FAILURES of ${checks} checks`)

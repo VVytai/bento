@@ -2618,6 +2618,14 @@ export function committable(doc: DashDoc, p: Patch): boolean {
     // this gate asks is "is the target still there?", and for a sheet-level op
     // the target is a sheet.
     case 'setSheetProps': return doc.sheets.some((s) => s.id === p.sheet)
+    // `applyPatch` REFUSES a `reorderSheets` that is not a permutation of the
+    // current list, and it is right to — an id left out would delete a sheet.
+    // But an undo replaying an order minted before a collaborator added or
+    // removed a sheet is exactly that, and a throw out of `commit` is worse
+    // than a lost undo step. Refused here, as `reorderColumns` already is.
+    case 'reorderSheets':
+      return p.order.length === doc.sheets.length &&
+        p.order.every((id) => doc.sheets.some((s) => s.id === id))
     default: return true
   }
 }
