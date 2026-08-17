@@ -314,7 +314,17 @@ html, body {
   letter-spacing: -0.01em;
   white-space: nowrap;
   flex: 0 0 auto;
+  /* the mark and the wordmark are ONE control — both open About, and a gap
+     between them that is not clickable is a target with a hole in it */
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
 }
+/* The glyph does NOT take the theme. It is a logo: four fixed fills, the same
+   in light and dark, the same as slides'. A mark that changes colour with the
+   interface is not a mark. */
+.dx-mark-svg { flex: 0 0 auto; display: block; }
+.dx-mark-t { white-space: nowrap; }
 .dx-slash { color: var(--slash); }
 .dx-title {
   font: inherit;
@@ -659,7 +669,9 @@ html, body {
 }
 
 @media (max-width: 760px) {
-  .dx-mark-b { display: none; } /* "/dash" — the peach slash IS the mark */
+  /* "bento" goes first; the glyph plus "/dash" still says which app this is,
+     and slides collapses its wordmark at the same width for the same reason. */
+  .dx-mark-b { display: none; }
 }
 
 @media (max-width: 700px) {
@@ -697,7 +709,11 @@ html, body {
    lives, is precisely what it was standing in front of. So the brand goes and
    the button stays. Everything else here is load-bearing. */
 @media (max-width: 380px) {
-  .dx-mark { display: none; }
+  /* The TEXT goes and the glyph STAYS. This rung used to drop the brand
+     entirely, when the brand was only text and 380px could not afford it; a
+     20px logo can be afforded, and it leaves the narrowest bar with an
+     identity and an About target instead of a blank corner. */
+  .dx-mark-t { display: none; }
   /* …and the bar has since grown a ? button, which put it back over the edge:
      MEASURED at 351px the bar came to 382px against a 351px viewport, with ?
      hanging 31px past the right edge — Save and About still reachable, but the

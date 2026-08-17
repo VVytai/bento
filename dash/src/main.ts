@@ -264,7 +264,23 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     // ONE menu at every width — four buttons for something done twice a
     // session is what pushed Save off screen in the first place.
     `<header class="dx-bar">` +
-    `<span class="dx-mark"><span class="dx-mark-b">bento</span><span class="dx-slash">/</span>dash</span>` +
+    // THE MARK IS THE SAME GLYPH IN EVERY BENTO APP — a bento box, one tall
+    // compartment and two stacked — because it is the SUITE's mark and the
+    // wordmark beside it is what says which app you are in. Copied from
+    // slides' `ed-logo` rather than re-drawn: two hand-maintained copies of a
+    // logo drift, and the peach is already `--slash` here.
+    // It is also the piece that SURVIVES the responsive collapse (see the
+    // rungs in styles.css): 20px of mark costs less than "bento/dash" in text
+    // and leaves a phone-width bar with an identity instead of a blank corner.
+    `<span class="dx-mark">` +
+    `<svg class="dx-mark-svg" viewBox="0 0 32 32" width="20" height="20" aria-hidden="true">` +
+    `<rect width="32" height="32" rx="7" fill="#16273E"/>` +
+    `<rect x="5" y="5" width="7" height="22" rx="2.5" fill="#5E7699"/>` +
+    `<rect x="14" y="5" width="13" height="10" rx="2.5" fill="#FF9E8A"/>` +
+    `<rect x="14" y="17" width="13" height="10" rx="2.5" fill="#F0EBE0"/>` +
+    `</svg>` +
+    `<span class="dx-mark-t"><span class="dx-mark-b">bento</span><span class="dx-slash">/</span>dash</span>` +
+    `</span>` +
     `<input class="dx-title" value="">` +
     // Insert group. `display: contents` at wide widths (the six buttons sit in
     // the bar); a real dropdown below 1040px, where they do not fit. No JS
