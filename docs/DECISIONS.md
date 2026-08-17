@@ -14,6 +14,52 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-16 — Starter decks are NEVER bundled, in any host
+
+**Decision (Andy).** No bento/tray host ships a starter deck. "New document"
+fetches the current signed shell from that app's release channel instead.
+
+**Why, and it is the multi-app half that settles it.** Starter decks change
+often, and there are already three Bento apps — slides, spaces, dash — with more
+coming. Bundling therefore means either picking one arbitrarily or shipping
+several copies of Bento inside the app, each stale from the moment it is built.
+Fetching scales to N apps for free and means a document created in a host is the
+version everyone else has that day.
+
+**Measured on Android before the change:** the single bundled slides seed was
+517,161 bytes — **81% of a 630,851-byte release APK**. Removing it took the
+release build to 117,940 bytes.
+
+**What it costs, stated rather than hidden.** The host now makes ONE network
+request on its own account, when creating a new document. `docs/PLATFORM.md` §1
+requires no network to OPEN, EDIT, PRESENT or SAVE, and none of those touch it;
+creating from a template is a different act, and `tray/webext` already drew the
+line in the same place. The fetched shell is cached, so only the first "New" of
+a release needs a connection.
+
+**THE FETCH MUST BE VERIFIED, BOTH HALVES.** These bytes become an executable
+document on the user's disk that they will afterwards trust, so an unverified
+download lets anyone in the path choose what they create. Do it as
+`kernel/src/update.ts` does: ECDSA P-256 over the EXACT payload string (no
+canonicalisation) against the embedded public key, then the shell's `sha256` as
+pinned by that signed payload.
+
+Do **not** copy `tray/webext`'s `newDocument()`. It reads a top-level `url` that
+does not exist on the `{payload, sig}` envelope, so it throws every time — the
+feature has apparently never worked — and it verifies nothing. Raised separately.
+
+**Two traps, both of which fail silently and look like tampering.**
+- WebCrypto emits ECDSA signatures as raw `r‖s`; Java expects DER, so the 64
+  bytes must be converted. Swift's CryptoKit takes the raw form directly
+  (`P256.Signing.ECDSASignature(rawRepresentation:)`), so iOS is spared this one.
+- Ask for bytes, not a page: `Accept: */*`. A browser-shaped `Accept` invites
+  CDN HTML rewriting, which is exactly how a beacon injected 359 extra bytes and
+  failed the hash check — correctly. The hash check is the defence; the header
+  only avoids a known rewrite.
+
+**Status.** Done in `tray/android` (`Releases.kt`). `tray/ios` still bundles and
+must follow. `tray/webext` fetches already but neither works nor verifies.
+
 ## 2026-08-16 — Document search: the list stays native, the indexer is shared by FIXTURE
 
 **Decision.** When the native hosts grow a document library, each keeps its own
