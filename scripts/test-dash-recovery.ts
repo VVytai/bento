@@ -29,6 +29,7 @@
 // FileSystemHandle adoption — need a real browser and a real drag, and are
 // called out as unverified in the report rather than faked here.
 
+import { readFileSync } from 'node:fs'
 import { registerHooks } from 'node:module'
 
 // recovery.ts imports its own stylesheet (and dropopen.ts reaches it through
@@ -220,6 +221,145 @@ function loaded(extra: Partial<DashDoc> = {}): DashDoc {
   ok(/xlsx/i.test(refusalFor('legacy.xls')) && refusalFor('legacy.xls') !== refusalFor('photo.png'),
     'a .xls gets its own line: the fix is one Save As, not "this is not supported"')
   ok(refusalFor('sheet.numbers') !== refusalFor('photo.png'), 'so does a Numbers file')
+}
+
+// ------------------------------------------- restoring is REVERSIBLE, both ways
+//
+// TWO PATHS REPLACE A WHOLE WORKBOOK, and they used to disagree about whether
+// doing so could be taken back. The recovery banner held the pre-restore
+// document and offered "Undo restore". About's version history asked a
+// `confirm()` reading "this cannot be undone" — and then made that true, since
+// `Store.replaceDoc` empties both undo stacks and the only object that could
+// have got you back was never kept.
+//
+// `confirm()` is the weaker answer even where it is honest: it asks BEFORE,
+// when the reader cannot yet see what they would be agreeing to, rather than
+// offering a way back AFTER, when they can. So both paths now call one
+// function, and this checks the function and then checks that both callers
+// reach it.
+//
+// The DOM here is a shim, not jsdom: `offerUndoRestore` touches six methods and
+// a rig that has to install a browser to prove a button calls a function is a
+// rig nobody runs. What it cannot prove is layout, and the banner's position is
+// already called out as browser-verified above.
+console.log('\nrestoring a whole workbook is reversible, from both surfaces')
+{
+  interface FakeNode {
+    tag: string; className: string; textContent: string; title: string; type: string
+    children: FakeNode[]; parent: FakeNode | null
+    setAttribute(k: string, v: string): void
+    addEventListener(ev: string, fn: () => void): void
+    append(...n: FakeNode[]): void
+    remove(): void
+    click(): void
+  }
+  const all: FakeNode[] = []
+  const make = (tag: string): FakeNode => {
+    const handlers: Record<string, Array<() => void>> = {}
+    const n: FakeNode = {
+      tag, className: '', textContent: '', title: '', type: '',
+      children: [], parent: null,
+      setAttribute() { /* aria only — nothing here reads it back */ },
+      addEventListener(ev, fn) { (handlers[ev] ??= []).push(fn) },
+      append(...kids) { for (const k of kids) { k.parent = n; n.children.push(k) } },
+      remove() {
+        if (n.parent) n.parent.children = n.parent.children.filter((c) => c !== n)
+        n.parent = null
+      },
+      click() { for (const fn of handlers.click ?? []) fn() },
+    }
+    all.push(n)
+    return n
+  }
+  const body = make('body')
+  const walk = (n: FakeNode, out: FakeNode[] = []): FakeNode[] => {
+    for (const c of n.children) { out.push(c); walk(c, out) }
+    return out
+  }
+  ;(globalThis as Record<string, unknown>).document = {
+    createElement: make,
+    body,
+    querySelector: (sel: string) =>
+      walk(body).find((n) => n.className.split(' ').includes(sel.replace('.', ''))) ?? null,
+  }
+
+  const { offerUndoRestore, swapWorkbook } = await import('../dash/src/recovery.ts')
+  const { Store } = await import('../dash/src/store.ts')
+
+  const original = workbook({ title: 'What is on screen' })
+  const restored = workbook({ title: 'The old version' })
+  const store = new Store(original)
+  let showing = 'sheet-1'
+  const host = { store, showingSheet: () => showing, showSheet: (id: string) => { showing = id } }
+
+  ok(swapWorkbook(host, restored) && store.doc.title === 'The old version',
+    'a restore swaps the workbook in')
+
+  const bars = () => walk(body).filter((n) => n.className.includes('dxr-bar'))
+  offerUndoRestore(host, original, 'Restored the version from Aug 3, 14:02.')
+  ok(bars().length === 1, 'and puts ONE bar on screen offering the way back')
+  ok(walk(body).some((n) => n.textContent === 'Restored the version from Aug 3, 14:02.'),
+    'which says what was restored, and when — not merely that something happened')
+
+  // A SECOND OFFER REPLACES THE FIRST. Two restores in a session must not
+  // leave two bars stacked, each holding a different "before".
+  offerUndoRestore(host, original, 'Restored again.')
+  ok(bars().length === 1, 'a second restore replaces the bar rather than stacking one on top')
+
+  const undo = walk(body).find((n) => n.textContent === 'Undo restore')
+  ok(!!undo, 'the bar carries an Undo restore button')
+  undo!.click()
+  ok(store.doc.title === 'What is on screen',
+    'and clicking it puts the workbook that was on screen back — which is the whole claim')
+  ok(bars().length === 0, 'the bar goes with it: the offer was taken')
+
+  // ✕ IS NOT UNDO. A reader who means "yes, keep this" must have an exit that
+  // is not the one that reverts their restore.
+  const store2 = new Store(workbook({ title: 'Live' }))
+  const host2 = { store: store2, showingSheet: () => 'sheet-1', showSheet: () => {} }
+  swapWorkbook(host2, workbook({ title: 'Restored' }))
+  offerUndoRestore(host2, workbook({ title: 'Live' }), 'Restored.')
+  const x = walk(body).find((n) => n.textContent === '✕')
+  x!.click()
+  ok(bars().length === 0 && store2.doc.title === 'Restored',
+    'dismissing with ✕ keeps the restored workbook — it is not a second Undo')
+
+  delete (globalThis as Record<string, unknown>).document
+}
+
+// ------------------------------------ and BOTH callers actually reach it
+//
+// The function above is only worth anything if both restore paths go through
+// it. Checked against the SOURCE, the way test-dash-actions.ts checks main.ts's
+// markup, because the alternative is standing up the whole About dialog to
+// prove one call site — and the failure being guarded against is somebody
+// reintroducing a `confirm()` in a hurry, which a source check catches exactly.
+{
+  const readSrc = (rel: string): string =>
+    readFileSync(new URL(`../dash/src/${rel}`, import.meta.url), 'utf8')
+  const about = readSrc('about.ts')
+  const recovery = readSrc('recovery.ts')
+
+  ok(about.includes("import { offerUndoRestore } from './recovery.ts'"),
+    'about.ts imports the shared offer rather than growing a second one')
+  ok(about.includes('offerUndoRestore(hooks, before,'),
+    'and its version restore calls it, holding the pre-restore document')
+  ok(!/confirm\(t\('Restore this version/.test(about),
+    'the "this cannot be undone" confirm() is gone — it asked before, and was not even true afterwards')
+  // The NOTE under the version list, not the whole section — the section still
+  // explains in a comment what the confirm() used to say, and that prose is
+  // the record of why this changed.
+  ok(/t\('Versions are kept in this browser only[^']*offers one undo\.'\)/.test(about),
+    'and the version-history note no longer tells the reader restoring is irreversible')
+  ok(recovery.includes('offerUndoRestore(host, before,'),
+    'the recovery banner reaches the same function, so the two cannot drift apart')
+
+  // The replace-from-JSON path KEEPS its confirm, and that is not an
+  // inconsistency: it is fed by a paste of arbitrary text with nothing behind
+  // it to offer back, and its own comment says so. Pinned here so a later sweep
+  // for confirm() does not remove the one that is load-bearing.
+  ok(/confirm\(t\('Replace this workbook with the pasted JSON/.test(about),
+    'Replace-from-JSON still confirms first — a paste has no earlier state worth naming')
 }
 
 console.log(`\n${checks - failures}/${checks} checks passed`)

@@ -34,6 +34,14 @@ import {
 import {
   addVersion, clearRecovery, clearVersions, listVersions,
 } from '../../kernel/src/autosave.ts'
+// CIRCULAR, DELIBERATELY, and safe: recovery.ts imports `planReplace` from
+// here. Both directions are used only inside function bodies — nothing at
+// module scope reads across the cycle — so the live bindings are resolved by
+// the time either is called, under Node's loader and Vite's bundler alike.
+// The alternative was a third module for one banner, or a hook wired through
+// main.ts that a future edit could quietly forget to pass, which would put the
+// two restore paths straight back into disagreeing about reversibility.
+import { offerUndoRestore } from './recovery.ts'
 import { t, locale, localeChoices, setLocale } from './i18n.ts'
 import { docBudget, docBytes, parseDoc, rowCount, type DashDoc, type DocMeta } from './model.ts'
 import type { Store } from './store.ts'
@@ -666,7 +674,7 @@ export function openAbout(hooks: AboutHooks): void {
   const versions = document.createElement('div')
   versions.className = 'dx-about-vers'
   card.append(versions)
-  card.append(note(t('Versions are kept in this browser only — never in the file, never online. Restoring replaces the whole workbook and cannot be undone.')))
+  card.append(note(t('Versions are kept in this browser only — never in the file, never online. Restoring replaces the whole workbook, and offers one undo.')))
   void listVersions(store.doc.docId).then((list) => {
     if (!list.length) {
       versions.replaceChildren(note(t('No versions kept yet — they accumulate as you edit.')))
@@ -676,10 +684,11 @@ export function openAbout(hooks: AboutHooks): void {
       const b = document.createElement('button')
       b.className = 'dx-about-ver'
       b.disabled = store.readOnly
-      const when = document.createElement('span')
-      when.textContent = new Date(snap.at).toLocaleString([], {
+      const stamp = new Date(snap.at).toLocaleString([], {
         month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-      }) + (i === 0 ? ` · ${t('most recent')}` : '')
+      })
+      const when = document.createElement('span')
+      when.textContent = stamp + (i === 0 ? ` · ${t('most recent')}` : '')
       const doIt = document.createElement('span')
       doIt.textContent = t('Restore')
       b.append(when, doIt)
@@ -688,9 +697,21 @@ export function openAbout(hooks: AboutHooks): void {
         // trusted: it may predate an id repair, or a sheet this build refuses.
         const res = parseDoc(snap.json)
         if (!res.ok) { alert(t('That version could not be read.')); return }
-        if (!confirm(t('Restore this version? The current workbook is replaced and this cannot be undone.'))) return
-        if (replaceWorkbook(hooks, res.doc)) close()
-        else alert(t('That version has no table sheet to show.'))
+        // Held BEFORE the swap: `replaceDoc` empties both undo stacks, so this
+        // object is the only route back to the workbook on screen right now.
+        const before = store.doc
+        if (!replaceWorkbook(hooks, res.doc)) {
+          alert(t('That version has no table sheet to show.'))
+          return
+        }
+        close()
+        // THE SAME OFFER THE RECOVERY BANNER MAKES, from the same function.
+        // This was a `confirm()` reading "this cannot be undone" — which was a
+        // second answer to a question the app had already answered one way, and
+        // the weaker one: it asks BEFORE, when the reader cannot yet see what
+        // they would be agreeing to, instead of handing them a way back AFTER,
+        // when they can.
+        offerUndoRestore(hooks, before, t('Restored the version from {when}.', { when: stamp }))
       })
       return b
     }))
