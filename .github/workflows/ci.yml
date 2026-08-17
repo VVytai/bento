@@ -623,6 +623,86 @@ jobs:
         # diffed against slides' :root so the two cannot drift one grey at a
         # time again.
         run: node scripts/test-dash-theme.ts
+
+      - name: dash file write-back
+        # The single biggest data-loss risk dash shipped with: an IndexedDB
+        # snapshot was the only thing catching an hour of typing, and it is
+        # invisible, uncopyable and cleared by browsers on their own schedule.
+        # The checks that matter are the bookkeeping ones. A FAILED write must
+        # not be recorded as a baseline — record the intent and the next cycle
+        # reads "unchanged", so a permanent failure is reported once and then
+        # silently skipped forever. Also: two cycles never open concurrent
+        # writables on one handle, nothing is rethrown out of a setTimeout
+        # nobody awaits, and the refusals (read-only, template, no-handle) are
+        # ORDERED, so a read-only workbook reports the permanent reason rather
+        # than the incidental one.
+        run: node scripts/test-dash-autosave.ts
+
+      - name: dash print
+        # Every failure mode here is silent: the page that comes out has a
+        # header, a body and a total, and looks finished whatever is missing
+        # from it. The grid is windowed at ~46 rows, so the first check builds
+        # a 5,000-row sheet and counts what reaches the paper — measured in a
+        # browser too: 3,001 printed rows from a grid holding 46. The rest pin
+        # that the printout is of the VIEW VECTOR, that the totals row is the
+        # FILTERED total from the very grid.aggregate the footer calls, that no
+        # column is ever clipped off the right edge at any wide-sheet setting,
+        # and that author data reaching markup is escaped — a workbook is
+        # untrusted input, and this path builds HTML by concatenation.
+        run: node scripts/test-dash-print.ts
+
+      - name: dash grid frontier
+        # What exists below a dataset's last row: exactly one appender, with
+        # the ruled lattice stopping at the data. The grid used to LOOK like an
+        # infinite canvas and behave like a table — pressing "=" below the
+        # numbers opened the editor on the last DATA cell, so the universal
+        # spreadsheet gesture silently targeted real data. Typing on the
+        # frontier must append, and append ONCE: zero times restores the
+        # original bug, per-keystroke is a different one. Clicking must NOT
+        # append, since a control that grows the file when you look at it is
+        # worse than one that does nothing.
+        run: node scripts/test-dash-frontier.ts
+
+      - name: dash accessibility
+        # All of these fail silently to a sighted developer. The load-bearing
+        # check is aria-rowindex under virtualisation: about forty rows of a
+        # 5,000-row view exist in the DOM, so a row's position among its
+        # siblings is meaningless and the index must state its place in the
+        # FULL view. Get it wrong and a screen reader confidently announces
+        # "row 3 of 40" in a five-thousand-row sheet, which is worse than
+        # silence because it is trusted. Also guarded: activeElement after a
+        # click and after a repaint (every paint replaces innerHTML, so without
+        # restoration focus drops to BODY), one roving tab stop, and that
+        # nothing here is a live region.
+        run: node scripts/test-dash-a11y.ts
+
+      - name: dash per-cell appearance
+        # Appearance on BOTH sheet kinds, which had drifted: the format always
+        # carried bold/colour on a spreadsheet cell and a dataset cell could
+        # carry none of it. The check worth naming mounts the REAL grid and
+        # reads the emitted markup, because the pure-function checks did not
+        # need the grid to call appearanceCss at all — measured, deleting both
+        # paint calls left 69 and 123 checks green with the feature invisible
+        # on screen. This repo shipped that shape once already (--accent-ink
+        # was a token the stylesheet never declared). Also pins that appearance
+        # cannot smuggle a value or a type onto a dataset, where the COLUMN
+        # type is authoritative, and that the CRDT splits content from
+        # presentation so bolding a cell beside a concurrent retype keeps both.
+        run: node scripts/test-dash-cellfmt.ts
+
+      - name: every rig is actually run
+        # A rig nobody runs is worse than no rig, and it fails flatteringly: the
+        # file is there, the checks in it are good, git log shows it being
+        # maintained, and anyone counting coverage counts it. It just never
+        # executes, so nothing goes red and nothing says so. Five rigs landed in
+        # one afternoon — write-back, print, frontier, a11y, appearance — each
+        # written by a different agent told to write one, none of them knowing
+        # where this list lives; all five passed on disk and none were here.
+        # Also checks the reverse, since a step pointing at a deleted script
+        # fails every push for a reason unrelated to the change that triggered
+        # it, and prints the deliberate-exemption list on every run so it stays
+        # something people look at rather than somewhere failures go to hide.
+        run: node scripts/test-ci-registered.ts
       - name: Theme token gate
         # Every failure this catches is INVISIBLE in the light theme, which is
         # the one the author is looking at. A chrome surface pinned to white
