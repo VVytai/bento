@@ -68,6 +68,45 @@ enum Releases {
         var errorDescription: String? { message }
     }
 
+    // MARK: - The release
+
+    struct Release {
+        let version: String
+        let url: String
+        let sha256: String
+    }
+
+    /// Verify an envelope and pull out what a download needs — including that it
+    /// is a release of the app we ASKED for.
+    ///
+    /// That last check is not redundant with the signature, and it was missing
+    /// here until `tray/webext`'s own verification (PR #318) tested for it. Both
+    /// a `bento-slides` manifest and a `bento-dash` one are genuinely signed by
+    /// the same maintainer key, so serving the former on the latter's channel
+    /// passes the signature AND the hash: every byte is authentic, just not the
+    /// thing that was requested. Only identity catches a swap between two real
+    /// releases. `tray/android` does not check this either — reported.
+    static func release(from raw: String, for app: App) throws -> Release {
+        let payload = try verify(raw)
+
+        // The payload names the app as `bento-<id>`.
+        let want = "bento-\(app.id)"
+        guard let named = payload["app"] as? String, named == want else {
+            let got = (payload["app"] as? String) ?? "nothing"
+            throw Failed(message: "the \(app.label) channel served a release for \(got) — refusing it")
+        }
+        guard let version = payload["version"] as? String, !version.isEmpty else {
+            throw Failed(message: "the release server did not name a version")
+        }
+        guard let url = payload["url"] as? String, !url.isEmpty else {
+            throw Failed(message: "the release server did not offer a build")
+        }
+        guard let sha = (payload["sha256"] as? String)?.lowercased(), !sha.isEmpty else {
+            throw Failed(message: "the release is not pinned to a hash")
+        }
+        return Release(version: version, url: url, sha256: sha)
+    }
+
     // MARK: - The seed
 
     /// The current signed shell for `app`, from cache when we already have it.
@@ -83,29 +122,19 @@ enum Releases {
             throw Failed(message: "\(app.label) has not been released yet")
         }
 
-        let payload = try verify(String(decoding: envelope, as: UTF8.self))
+        let release = try release(from: String(decoding: envelope, as: UTF8.self), for: app)
 
-        guard let version = payload["version"] as? String, !version.isEmpty else {
-            throw Failed(message: "the release server did not name a version")
-        }
-        guard let url = payload["url"] as? String, !url.isEmpty else {
-            throw Failed(message: "the release server did not offer a build")
-        }
-        guard let want = (payload["sha256"] as? String)?.lowercased(), !want.isEmpty else {
-            throw Failed(message: "the release is not pinned to a hash")
-        }
+        if let hit = cached(app, release.version) { return hit }
 
-        if let hit = cached(app, version) { return hit }
-
-        let shell = try await fetch(url)
+        let shell = try await fetch(release.url)
         let got = SHA256.hash(data: shell).map { String(format: "%02x", $0) }.joined()
         // The signed payload pins this. A mismatch means the bytes are not the
         // release the maintainer signed, whatever the server said.
-        guard got == want else {
+        guard got == release.sha256 else {
             throw Failed(message: "the downloaded app did not match its signed hash — refusing it")
         }
 
-        store(app, version, shell)
+        store(app, release.version, shell)
         return shell
     }
 

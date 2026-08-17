@@ -62,10 +62,18 @@ against the live server (it reads a top-level `url` from what is actually a
    check correctly refused. Fixed at the origin since; the header stays because
    the class of rewrite does not go away. The hash check is the defence.
 3. **Prove the verifier REFUSES.** `scripts/test-tray-releases.mjs` runs the
-   Swift verifier against a captured real manifest plus seven tampered ones
-   (payload edited, signature bent, a valid signature over different bytes, no
-   signature, captive-portal HTML). Watching it accept the live manifest proves
-   nothing — `return true` passes that test.
+   Swift verifier against a captured real manifest plus ten bad ones (payload
+   edited, signature bent, a valid signature over different bytes, no signature,
+   captive-portal HTML, and the cross-app case below). Watching it accept the
+   live manifest proves nothing — `return true` passes that test.
+4. **Check the payload names the app you ASKED for.** This is NOT redundant with
+   the signature, and both native hosts shipped without it until `tray/webext`'s
+   own verification (PR #318) turned out to test for it. A `bento-slides`
+   manifest and a `bento-dash` manifest are both genuinely signed by the same
+   key, so serving one on the other's channel passes the signature AND the hash
+   — every byte authentic, just not what was requested. Only identity catches a
+   swap between two real releases. Fixed in `Releases.swift`
+   (`release(from:for:)`); **`tray/android`'s `Releases.kt` still needs it.**
 
 ## 2026-08-16 — iOS document search: CoreSpotlight is the surface, and the port is pinned to the LIVE reference
 

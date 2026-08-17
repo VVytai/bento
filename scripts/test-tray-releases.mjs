@@ -68,15 +68,19 @@ if (!haveCryptoKit()) {
 const MAIN = `
 import Foundation
 
-// Reads one envelope per argument (as a file path) and reports whether the
-// verifier accepted it. Any throw is a refusal, which is the correct answer for
-// every case here except the first.
-for path in CommandLine.arguments.dropFirst() {
-    let raw = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+// Each argument is "<app-id>:<path>" — the app the caller ASKED for, and the
+// envelope the channel served. Going through \`release(from:for:)\` rather than
+// \`verify\` alone is deliberate: the app-identity check lives there, and it is
+// the one that catches a swap between two genuinely signed releases.
+for arg in CommandLine.arguments.dropFirst() {
+    let parts = arg.split(separator: ":", maxSplits: 1).map(String.init)
+    guard parts.count == 2, let app = Releases.apps.first(where: { $0.id == parts[0] }) else {
+        print("REFUSE bad test argument"); continue
+    }
+    let raw = (try? String(contentsOfFile: parts[1], encoding: .utf8)) ?? ""
     do {
-        let payload = try Releases.verify(raw)
-        let version = (payload["version"] as? String) ?? "?"
-        print("ACCEPT \\(version)")
+        let release = try Releases.release(from: raw, for: app)
+        print("ACCEPT \\(release.version)")
     } catch {
         print("REFUSE \\(error.localizedDescription)")
     }
@@ -158,12 +162,37 @@ const cases = [
     why: 'a captive-portal HTML page is what a fetch returns on hotel wifi',
     envelope: '<html><body>Sign in to continue</body></html>',
   },
+  {
+    // Found by reading tray/webext's own verification tests (PR #318), which
+    // had this case when neither native host did. Both manifests are GENUINELY
+    // signed by the maintainer, so the signature passes and the hash passes —
+    // every byte is authentic, just not the thing that was asked for. Only
+    // identity catches a swap between two real releases.
+    name: 'a real slides manifest served on the DASH channel',
+    expect: 'REFUSE',
+    app: 'dash',
+    why: 'signature and hash both pass; only the app check catches this',
+    envelope: JSON.stringify(real),
+  },
+  {
+    name: 'the same manifest on its OWN channel',
+    expect: 'ACCEPT',
+    app: 'slides',
+    why: 'the identity check must not reject the legitimate case',
+    envelope: JSON.stringify(real),
+  },
+  {
+    name: 'payload naming no app at all',
+    expect: 'REFUSE',
+    why: 'an absent field must not read as a match',
+    envelope: JSON.stringify({ ...real, payload: real.payload.replace(/"app":"[^"]*",/, '') }),
+  },
 ]
 
 const paths = cases.map((c, i) => {
   const p = join(dir, `case-${i}.json`)
   writeFileSync(p, c.envelope)
-  return p
+  return `${c.app ?? 'slides'}:${p}`
 })
 
 const out = execFileSync(bin, paths).toString().trim().split('\n')
