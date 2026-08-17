@@ -77,9 +77,13 @@ for arg in CommandLine.arguments.dropFirst() {
     guard parts.count == 2, let app = Releases.apps.first(where: { $0.id == parts[0] }) else {
         print("REFUSE bad test argument"); continue
     }
-    let raw = (try? String(contentsOfFile: parts[1], encoding: .utf8)) ?? ""
+    // "<app>:<floor-or-none>:<path>" — the floor exercises rollback refusal
+    // without touching UserDefaults, which the app owns.
+    let bits = parts[1].split(separator: ":", maxSplits: 1).map(String.init)
+    let floor = bits[0] == "none" ? nil : bits[0]
+    let raw = (try? String(contentsOfFile: bits[1], encoding: .utf8)) ?? ""
     do {
-        let release = try Releases.release(from: raw, for: app)
+        let release = try Releases.release(from: raw, for: app, notBefore: floor)
         print("ACCEPT \\(release.version)")
     } catch {
         print("REFUSE \\(error.localizedDescription)")
@@ -187,12 +191,63 @@ const cases = [
     why: 'an absent field must not read as a match',
     envelope: JSON.stringify({ ...real, payload: real.payload.replace(/"app":"[^"]*",/, '') }),
   },
+  {
+    // The webext session's point, and it is a good one: bending bytes only
+    // proves the verifier rejects a signature that does not validate. This
+    // rejects one that validates PERFECTLY — under the wrong key. That is what
+    // catches a verifier which imported the wrong key, or which would trust a
+    // key travelling in the manifest. No seam is needed to test it: sign with a
+    // throwaway key and hand it to the shipped verifier, which must refuse.
+    name: 'signed perfectly, by somebody else',
+    expect: 'REFUSE',
+    why: 'a valid signature under an untrusted key is the wrong-key failure mode',
+    envelope: null, // built below — needs async WebCrypto
+  },
+  {
+    name: 'a flat unsigned manifest',
+    expect: 'REFUSE',
+    why: 'exactly what the old broken reader wanted; refused as a CATEGORY, not as a parse error',
+    envelope: JSON.stringify({ app: 'bento-slides', version: '1.0.18', url: 'https://bento.page/x.html', sha256: 'ab' }),
+  },
+  {
+    name: 'a genuine but OLDER release, against a newer floor',
+    expect: 'REFUSE',
+    floor: '1.0.99',
+    why: 'rollback replay: every other check passes because every byte is authentic',
+    envelope: JSON.stringify(real),
+  },
+  {
+    name: 'the same release, against an older floor',
+    expect: 'ACCEPT',
+    floor: '1.0.17',
+    why: 'moving forward must still work, or the floor bricks the + button',
+    envelope: JSON.stringify(real),
+  },
+  {
+    name: 'the same release, against an equal floor',
+    expect: 'ACCEPT',
+    floor: '1.0.18',
+    why: 're-fetching the version you already have is normal, not an attack',
+    envelope: JSON.stringify(real),
+  },
 ]
+
+/* The wrong-key envelope: a real ECDSA P-256 signature over the real payload,
+ * made with a key the app has never heard of. */
+{
+  const { webcrypto } = await import('node:crypto')
+  const pair = await webcrypto.subtle.generateKey(
+    { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
+  const sig = await webcrypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, Buffer.from(real.payload, 'utf8'))
+  const c = cases.find((k) => k.envelope === null)
+  c.envelope = JSON.stringify({ payload: real.payload, sig: Buffer.from(sig).toString('base64') })
+}
 
 const paths = cases.map((c, i) => {
   const p = join(dir, `case-${i}.json`)
   writeFileSync(p, c.envelope)
-  return `${c.app ?? 'slides'}:${p}`
+  return `${c.app ?? 'slides'}:${c.floor ?? 'none'}:${p}`
 })
 
 const out = execFileSync(bin, paths).toString().trim().split('\n')

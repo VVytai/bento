@@ -56,11 +56,23 @@ against the live server (it reads a top-level `url` from what is actually a
    `SHA256withECDSA` wants DER and silently reports a bad signature otherwise —
    indistinguishable from tampering. Check which your platform expects before
    concluding the manifest is wrong.
-2. **Ask for bytes, not a page** (`Accept: */*`). A browser-shaped Accept header
-   got the artifact treated as a page being browsed and a CDN injected a tracking
-   beacon into it — 359 bytes longer than the signed release, which the hash
-   check correctly refused. Fixed at the origin since; the header stays because
-   the class of rewrite does not go away. The hash check is the defence.
+2. **Ask for bytes, not a page** (`Accept: */*`). This header is LOAD-BEARING,
+   and an earlier version of this entry got it wrong by repeating a second-hand
+   "fixed at the origin". Measured against the live server 2026-08-17:
+
+   | request | bytes | matches the signed pin |
+   |---|---|---|
+   | `Accept: */*` | 689,316 | yes |
+   | `Accept: text/html,…,*/*;q=0.8` | 689,675 | **no** |
+
+   Same URL, same `.bento.html` path, 359 bytes apart. bento.page's CDN injects a
+   Cloudflare analytics beacon before `</body>` when it believes the response is
+   a page being browsed. **The trigger is the Accept header, not the extension**
+   — which is the part worth knowing, because if it were the path then no header
+   would fix it for any host. The injected file still carries an intact
+   `id="bento-doc"`, so it looks like a perfectly good document and only the hash
+   tells them apart. The hash check remains the defence; the header avoids a
+   known rewrite.
 3. **Prove the verifier REFUSES.** `scripts/test-tray-releases.mjs` runs the
    Swift verifier against a captured real manifest plus ten bad ones (payload
    edited, signature bent, a valid signature over different bytes, no signature,
@@ -74,6 +86,34 @@ against the live server (it reads a top-level `url` from what is actually a
    — every byte authentic, just not what was requested. Only identity catches a
    swap between two real releases. Fixed in `Releases.swift`
    (`release(from:for:)`); **`tray/android`'s `Releases.kt` still needs it.**
+   An ABSENT `app` field must not read as a match either — `undefined !== x`
+   passes by construction, and a plausible tidy-up to `info.app && info.app !== x`
+   silently turns a missing field into a pass.
+5. **Refuse an unsigned manifest as a CATEGORY**, not as a parse error. A flat
+   `{url: …}` is exactly the shape the old broken reader was reaching for, so
+   "malformed" invites someone later to add a lenient fallback for it as a
+   compatibility gap. It is not a gap.
+6. **A valid signature under the WRONG key is a different test from a bent one.**
+   Bending bytes proves only that a non-validating signature is rejected — almost
+   any bug-free crypto call passes that. A signature that validates *perfectly*
+   under an untrusted key is what catches a verifier that imported the wrong key,
+   or that would trust a key travelling inside the manifest. No test seam is
+   needed: sign with a throwaway key and hand it to the shipped verifier. The
+   load-bearing case remains a manifest captured verbatim from bento.page and
+   checked against the SHIPPED key with nothing injected — the only check a
+   self-consistent fixture cannot fake.
+7. **Rollback replay: refuse a genuine release older than one already accepted.**
+   A stale but real manifest passes signature, app identity AND digest, because
+   every byte of it is authentic — it just hands over an older shell, which is
+   how someone who can re-serve but not forge pins new documents to a version
+   with a known hole. `kernel/src/update.ts` already refuses to go backwards; a
+   host that CREATES documents had no floor, having no version of its own to
+   compare against. `Releases.swift` keeps a per-app high-water mark, raised only
+   AFTER the downloaded bytes pass their hash (raising it on an unproven manifest
+   would let a forgery lock the device out of every real release below it).
+   The cost, stated: a deliberate maintainer rollback is refused too, until the
+   version number moves past it — the same trade `update.ts` makes.
+   **Neither `tray/webext` nor `tray/android` has this yet.**
 
 ## 2026-08-16 — iOS document search: CoreSpotlight is the surface, and the port is pinned to the LIVE reference
 
