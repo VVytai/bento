@@ -542,4 +542,7 @@ export const de: Catalog = {
   "A flat, cell-by-cell COPY, for the one calculation a column cannot express. The dataset stays the live one.": "Eine flache Kopie, Zelle für Zelle, für die eine Berechnung, die eine Spalte nicht ausdrücken kann. Der Datensatz bleibt der lebende.",
   "The spreadsheet keeps these cells. Formulas pointing into the range still work, and the dataset is a copy taken now.": "Das Tabellenblatt behält diese Zellen. Formeln, die in den Bereich zeigen, funktionieren weiter, und der Datensatz ist eine jetzt genommene Kopie.",
   "A COPY, as the dataset is right now. Editing it does not change the dataset, and the dataset does not update it.": "Eine KOPIE, so wie der Datensatz gerade ist. Sie zu bearbeiten ändert den Datensatz nicht, und der Datensatz aktualisiert sie nicht.",
+  "The last automatic save to the file failed. Press ⌘S.": "Das letzte automatische Speichern in die Datei ist fehlgeschlagen. Drücken Sie ⌘S.",
+  "Could not save to the file automatically — {why}. Your changes are still here; press ⌘S.": "Automatisches Speichern in die Datei nicht möglich — {why}. Ihre Änderungen sind noch da; drücken Sie ⌘S.",
+  "Saved to the file — automatic saving is working again.": "In die Datei gespeichert — das automatische Speichern funktioniert wieder.",
 }

@@ -542,4 +542,7 @@ export const ja: Catalog = {
   "A flat, cell-by-cell COPY, for the one calculation a column cannot express. The dataset stays the live one.": "1 列の式では表せない計算のための、セル単位のフラットなコピーです。実データはデータセットのままです。",
   "The spreadsheet keeps these cells. Formulas pointing into the range still work, and the dataset is a copy taken now.": "スプレッドシートのセルはそのまま残ります。範囲を参照している数式は引き続き機能し、データセットは今この時点のコピーです。",
   "A COPY, as the dataset is right now. Editing it does not change the dataset, and the dataset does not update it.": "現時点のデータセットのコピーです。これを編集してもデータセットは変わらず、データセットの変更もここには反映されません。",
+  "The last automatic save to the file failed. Press ⌘S.": "ファイルへの最後の自動保存に失敗しました。⌘S を押してください。",
+  "Could not save to the file automatically — {why}. Your changes are still here; press ⌘S.": "ファイルへ自動保存できませんでした — {why}。変更はここに残っています。⌘S を押してください。",
+  "Saved to the file — automatic saving is working again.": "ファイルに保存しました — 自動保存が再び機能しています。",
 }

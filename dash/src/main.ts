@@ -29,6 +29,7 @@ import {
   currentFileName,
 } from '../../kernel/src/save.ts'
 import { putRecovery, pruneOld } from '../../kernel/src/autosave.ts'
+import { FileWriteBack } from './writeback.ts'
 import { APP_VERSION } from '../../kernel/src/update.ts'
 import { mountAbout, openAbout, rememberVersion, checkAtLaunch } from './about.ts'
 import { runSql, sqlRows } from './sql.ts'
@@ -288,7 +289,14 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     // The unsaved dot badges its corner rather than floating loose in the bar,
     // where it explained nothing (slides made the same move).
     `<button class="dx-btn dx-btn-save" data-act="save" title="${esc(t('Save this workbook (⌘S)'))}">` +
-    `${ICON.save}<span class="dx-save-lab">${t('Save')}</span><span class="dx-dirty" hidden></span></button>` +
+    `${ICON.save}<span class="dx-save-lab">${t('Save')}</span><span class="dx-dirty" hidden></span>` +
+    // The write-back tag. Visible if you look, ignorable if you don't — the
+    // whole promise of automatic saving is that you stop watching for it, so a
+    // toast every 2.5s would be the wrong shape (a failure gets the toast).
+    // INSIDE the button because `.dx-btn-save` is the only `position: relative`
+    // box here, and the tag must be absolutely positioned: appearing must not
+    // move Save, which is the control that has to survive every width.
+    `<span class="dx-wb" hidden></span></button>` +
     barBtn('about', ICON.info, t('About'), t('About this workbook')) +
     `<span class="dx-ver">v${APP_VERSION}</span>` +
     `</div>` +
@@ -1006,9 +1014,62 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
         // it refuses an encrypted workbook for the same reason putRecovery does
         void rememberVersion(store.doc)
       }
+      // …AND THE FILE ITSELF. Deliberately outside the `isEncryptionActive`
+      // guard above: that guard is about writing PLAINTEXT into IndexedDB,
+      // and this writes the workbook's own file through the encryption-aware
+      // `serializeAuto`. See writeback.ts's header — two channels, two rules.
+      void runWriteBack()
     }, 2500)
   }
   let warnedNoBackstop = false
+
+  // --- write-back to the real file
+  //
+  // The single biggest data-loss risk dash shipped with: the IndexedDB
+  // snapshot above was the ONLY thing catching an hour of typing, and it is
+  // invisible, uncopyable and cleared by browsers on their own schedule.
+  //
+  // It rides the SAME debounce as the snapshot rather than owning a timer.
+  // Two timers over one stream of edits means two serializations of a workbook
+  // that can be tens of MB, and they would race for the one file handle.
+  //
+  // NO `stamp` DEP, deliberately. slides stamps `session.stampInto(doc)` into
+  // every write-back so a copy edited offline rejoins as a fork (PLATFORM §5);
+  // dash calls `stampInto` from nowhere at all — not even ⌘S. Wiring it here
+  // and only here would make the automatic save write a DIFFERENT document
+  // from the manual one, which is a worse bug than the one it fixes. Write-back
+  // writes exactly what ⌘S writes. Stamping is dash's to add on both paths at
+  // once; the dep exists in writeback.ts so that change is one line here.
+  const writeBack = new FileWriteBack()
+  let wbTag: HTMLElement | null = null
+  async function runWriteBack(): Promise<void> {
+    const { notice } = await writeBack.run(store.doc, store.readOnly)
+    if (!notice) return
+    if (notice.say === 'failed') {
+      // INTERRUPTS, unlike a success. The file on disk is now older than the
+      // screen and the author has no other way to find that out — the unsaved
+      // dot cannot distinguish "not written yet" from "cannot be written".
+      dirty = true
+      dirtyEl.hidden = false
+      dirtyEl.title = t('The last automatic save to the file failed. Press ⌘S.')
+      toast(t('Could not save to the file automatically — {why}. Your changes are still here; press ⌘S.')
+        .replace('{why}', notice.why))
+      return
+    }
+    // The bytes are on disk. Clearing the dot here is the whole point: it is
+    // the same claim ⌘S makes, and it is now true without one.
+    dirty = false
+    dirtyEl.hidden = true
+    dirtyEl.title = ''
+    if (notice.say === 'recovered') toast(t('Saved to the file — automatic saving is working again.'))
+    wbTag ??= app.querySelector<HTMLElement>('.dx-wb')
+    if (!wbTag) return
+    wbTag.textContent = t('Saved')
+    wbTag.hidden = false
+    clearTimeout(wbTimer)
+    wbTimer = window.setTimeout(() => { if (wbTag) wbTag.hidden = true }, 1800)
+  }
+  let wbTimer: number | undefined
   // --- live collaboration.
   //
   // The session is CONSTRUCTED for every workbook but connects to nothing
@@ -1256,6 +1317,15 @@ function boot(doc: DashDoc, repaired: number, frozen?: 'policy' | 'version', sav
     if (r === 'cancelled') return          // they closed the picker; they know
     dirty = false
     dirtyEl.hidden = true
+    dirtyEl.title = ''
+    // These bytes ARE the file now, so write-back must not immediately rewrite
+    // them — and a manual save that succeeded through the same handle clears
+    // any standing "automatic saving failed" warning, which would otherwise sit
+    // there contradicting the toast that is about to appear. Not for a
+    // DOWNLOAD: that wrote a copy to Downloads and left the open file stale, so
+    // adopting it would tell the next cycle the file is current when it is the
+    // one thing that is not.
+    if (r !== 'downloaded') writeBack.adopt(store.doc)
     const name = currentFileName()
     if (r === 'downloaded') {
       toast(t('This browser cannot write files in place, so a copy was saved to your Downloads. The file open here is unchanged.'))

@@ -542,4 +542,7 @@ export const zhHans: Catalog = {
   "A flat, cell-by-cell COPY, for the one calculation a column cannot express. The dataset stays the live one.": "逐个单元格的扁平副本，用于列表达式无法表示的那一处计算。数据集仍是实时的那一个。",
   "The spreadsheet keeps these cells. Formulas pointing into the range still work, and the dataset is a copy taken now.": "电子表格保留这些单元格。指向该区域的公式仍然有效，数据集是此刻取得的副本。",
   "A COPY, as the dataset is right now. Editing it does not change the dataset, and the dataset does not update it.": "这是数据集此刻的副本。编辑它不会改变数据集，数据集也不会更新它。",
+  "The last automatic save to the file failed. Press ⌘S.": "上次自动保存到文件失败。请按 ⌘S。",
+  "Could not save to the file automatically — {why}. Your changes are still here; press ⌘S.": "无法自动保存到文件 — {why}。您的更改仍在这里；请按 ⌘S。",
+  "Saved to the file — automatic saving is working again.": "已保存到文件 — 自动保存恢复正常。",
 }

@@ -40,7 +40,7 @@
 
 import './saveui.css'
 import {
-  saveFile, serializeAuto, writeUpdatedFileAs, canWriteInPlace,
+  saveFile, serializeAuto, writeUpdatedFileAs, canWriteInPlace, adoptFileHandle,
 } from '../../kernel/src/save.ts'
 import { docBytes, docBudget, type DashDoc } from './model.ts'
 import type { Store } from './store.ts'
@@ -201,9 +201,24 @@ export function installSaveMenu(host: SaveMenuHost): void {
         delete next.collab
         store.replaceDoc(next)
         const r = await saveFile(store.doc, true)
-        toast(r === 'cancelled'
-          ? t('This is now a new workbook — save it under a new name')
-          : t('Saved as a new workbook'))
+        if (r === 'cancelled') {
+          // THE FORK IS ALREADY IN MEMORY and the picker was closed, so the
+          // held handle still points at the ANCESTOR — a file this document is
+          // no longer a version of. ⌘S would overwrite it; automatic write-back
+          // (writeback.ts) would do the same thing 2.5s later with no gesture at
+          // all, which is how the original quietly becomes the fork. Releasing
+          // puts both back on the picker, which is merely inconvenient.
+          //
+          // The `null` cast is the same KERNEL GAP dropopen.ts names: nothing
+          // needed to RELEASE a handle until a document could stop belonging to
+          // its file, `adoptFileHandle` types its argument non-null, and the
+          // implementation is a bare assignment. The fix is a
+          // `releaseFileHandle()` beside it in kernel/src/save.ts.
+          adoptFileHandle(null as never)
+          toast(t('This is now a new workbook — save it under a new name'))
+        } else {
+          toast(t('Saved as a new workbook'))
+        }
       })
 
     menu.appendChild(Object.assign(document.createElement('div'), { className: 'dxs-sep' }))

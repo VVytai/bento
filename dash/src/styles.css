@@ -448,6 +448,30 @@ html, body {
 }
 .dx-bar .dx-btn-save > .dx-dirty[hidden] { display: none; }
 
+/* The write-back tag: "Saved", for ~1.8s, under the Save button.
+   Same specificity ladder as the dot above, and for the same reason — the
+   narrow-window rule hides bare spans inside bar buttons, and this one has to
+   survive every width because it is the ONLY confirmation that the automatic
+   save landed. Absolutely positioned and pointer-transparent so it can never
+   shift the bar or eat the click on Save it is sitting under. */
+.dx-bar .dx-btn-save > .dx-wb {
+  display: block;
+  position: absolute;
+  top: calc(100% + 4px);
+  inset-inline-end: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+}
+.dx-bar .dx-btn-save > .dx-wb[hidden] { display: none; }
+
 /* ————— top-bar dropdowns —————
    One panel style, shared with .dx-pop and the save menu. */
 .dx-dd { position: relative; flex: 0 0 auto; }
