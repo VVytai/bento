@@ -199,8 +199,31 @@ export class Editor {
     })
 
     const more = this.dropdown('more', '', t('More'), (menu, close) => {
+      // On a PHONE the ⋯ menu also carries the history pair and the other ways
+      // to save. Measured at 390px with a coarse pointer: eleven bar controls
+      // wanted 467px of a 390px viewport, and Save — the one action that must
+      // never be off-screen — ended at x = 426. Undo/redo (84px), the wordmark
+      // (35px) and the save caret (48px) are what a phone gives up so that the
+      // document title beside them is still wide enough to read. Nothing is
+      // lost: they are all one tap away, here.
+      if (this.isPhone()) {
+        menu.append(this.menuItem('undo', t('Undo (⌘Z)'), '', () => {
+          close(); this.store.undo(); this.repaint()
+        }, !this.store.canUndo))
+        menu.append(this.menuItem('redo', t('Redo (⇧⌘Z)'), '', () => {
+          close(); this.store.redo(); this.repaint()
+        }, !this.store.canRedo))
+      }
       for (const a of secondary) {
         menu.append(this.menuItem(a.icon, a.label, a.hint, () => { close(); a.run() }))
+      }
+      if (this.isPhone()) {
+        menu.append(this.menuItem('copy', t('Save a copy…'), t('A second file — the original is left alone'), () => {
+          close(); void this.saveAs('copy')
+        }))
+        menu.append(this.menuItem('markdown', t('Export as Markdown…'), t('Every page, as one .md file'), () => {
+          close(); this.exportMarkdown()
+        }))
       }
     })
     more.classList.add('sp-more', 'sp-dd-end')
@@ -321,7 +344,10 @@ export class Editor {
     b.className = 'sp-btn'
     b.type = 'button'
     b.innerHTML = ICONS[icon]
-    if (label) b.append(document.createTextNode(label))
+    // The word is a SPAN, not a bare text node, so a narrow bar can drop it and
+    // keep the icon — slides' rule, and the only way to collapse a labelled
+    // control without also losing it.
+    if (label) b.append(el('span', 'sp-btnlabel', label))
     b.title = tip
     b.setAttribute('aria-label', tip)
     b.setAttribute('aria-haspopup', 'menu')
@@ -342,10 +368,11 @@ export class Editor {
     return wrap
   }
 
-  private menuItem(icon: IconName, label: string, hint: string, onClick: () => void): HTMLElement {
+  private menuItem(icon: IconName, label: string, hint: string, onClick: () => void, off = false): HTMLElement {
     const b = document.createElement('button')
-    b.className = 'sp-dditem'
+    b.className = 'sp-dditem' + (off ? ' sp-off' : '')
     b.type = 'button'
+    if (off) b.setAttribute('aria-disabled', 'true')
     b.setAttribute('role', 'menuitem')
     b.innerHTML = `<span class="sp-result-ico">${ICONS[icon]}</span>` +
       `<span class="sp-result-txt"><strong>${escapeHtml(label)}</strong>` +
@@ -439,6 +466,17 @@ export class Editor {
   }
 
   /**
+   * A PHONE, not merely a narrow window: the width below which the topbar has
+   * dropped the wordmark, the history pair and the save caret (styles.css, the
+   * "phone topbar" block). The number is duplicated between here and the
+   * stylesheet on purpose — the alternative is a menu that offers Undo while
+   * Undo is also sitting in the bar two centimetres away.
+   */
+  private isPhone(): boolean {
+    return window.matchMedia('(max-width: 600px)').matches
+  }
+
+  /**
    * Dismiss the PHONE DRAWER after navigating. On anything wider this does
    * nothing, deliberately.
    *
@@ -474,7 +512,16 @@ export class Editor {
     this.statusEl.textContent = msg
     this.statusEl.classList.add('sp-on')
     clearTimeout((this.statusEl as any)._t)
-    ;(this.statusEl as any)._t = setTimeout(() => this.statusEl.classList.remove('sp-on'), 1800)
+    ;(this.statusEl as any)._t = setTimeout(() => {
+      this.statusEl.classList.remove('sp-on')
+      // The word must LEAVE the bar, not just fade out of it. This span is
+      // nowrap, so once "Edited" had been written once it held ~40px of the
+      // topbar for the rest of the session — and on a phone that width came
+      // out of the controls beside it. Cleared after the fade, never during.
+      setTimeout(() => {
+        if (!this.statusEl.classList.contains('sp-on')) this.statusEl.textContent = ''
+      }, 260)
+    }, 1800)
   }
 
   // ---- the page tree ------------------------------------------------------
@@ -672,7 +719,9 @@ export class Editor {
   private addGutter(node: HTMLElement, blockId: string): void {
     const g = el('div', 'sp-gutter')
     const add = document.createElement('button')
-    add.className = 'sp-ghost'
+    // Named, because a phone drops it: there is only room for ONE control in a
+    // 44px margin, and "Add below" is the second item of the grip's own menu.
+    add.className = 'sp-ghost sp-ghost-add'
     add.type = 'button'
     add.innerHTML = ICONS.plus
     add.title = t('Add a block below')
