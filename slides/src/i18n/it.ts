@@ -551,7 +551,7 @@ export const it: Catalog = {
   "Drag to draw a curve — then drag its points; double-click to add or remove one": "Trascina per una curva — sposta i punti; doppio clic per aggiungerne o toglierne",
   "Draw by hand — the stroke smooths into an editable curve": "Disegna a mano — il tratto si leviga in una curva modificabile",
   "Editor": "Editor",
-  "Editor copy saved — recipients join live with edit access": "Editor",
+  "Editor copy saved — recipients join live with edit access": "Copia editor salvata — chi la riceve entra live con accesso in modifica",
   "Event": "Evento",
   "Fills this tab instead of going fullscreen — handy for testing or sharing a window": "Riempie questa scheda invece dello schermo intero — utile per test o condivisione finestra",
   "First slide": "Prima diapositiva",

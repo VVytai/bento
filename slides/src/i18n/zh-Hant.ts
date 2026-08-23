@@ -551,7 +551,7 @@ export const zhHant: Catalog = {
   "Drag to draw a curve — then drag its points; double-click to add or remove one": "拖曳繪製曲線 — 拖曳控制點調整；連按兩下新增或刪除點",
   "Draw by hand — the stroke smooths into an editable curve": "手繪 — 筆跡會平滑為可編輯的曲線",
   "Editor": "編輯者",
-  "Editor copy saved — recipients join live with edit access": "編輯者",
+  "Editor copy saved — recipients join live with edit access": "編輯者副本已儲存 — 收到的人可帶編輯權限加入即時會話",
   "Event": "活動",
   "Fills this tab instead of going fullscreen — handy for testing or sharing a window": "以填滿分頁代替全螢幕 — 便於測試或分享視窗",
   "First slide": "第一張投影片",
