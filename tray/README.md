@@ -483,10 +483,12 @@ here rather than discovered later.
 | write access to an opened document | always | **may be read-only** | platform-forced |
 | status bar while editing | hidden on iPad | always shown | **known gap** |
 | whole-folder grant | folder-mode `UIDocumentPickerViewController` | `ACTION_OPEN_DOCUMENT_TREE` | same capability |
-| text extracted from a document | `BentoIndex.swift` | (in progress) | ported per platform |
-| finding a document by its contents | ✓ search screen + Spotlight | — | **gap on Android**, see below |
+| text extracted from a document | `BentoIndex.swift` | `DocumentIndex.kt` | ported per platform, one corpus |
+| finding a document by its contents | ✓ search screen + Spotlight | ✓ search over a folder index | same |
 
-Two gaps, both named rather than quietly left out.
+One gap left, named rather than quietly left out. (Search was the other, on
+whichever host you read this from — `tray/ios` and `tray/android` landed it a day
+apart, from opposite directions, each believing the other still lacked it.)
 
 **The status bar.** iOS hides it on iPad because nothing else keeps the page off
 the whole screen there; the Android equivalent would be to hide it on tablets
@@ -494,57 +496,44 @@ the whole screen there; the Android equivalent would be to hide it on tablets
 tablet target, and shipping an untested behaviour is worse than naming an
 untested one.
 
-**Search.** `tray/webext` scans every granted folder and searches **the document's
-own prose**, so a deck is findable by a phrase on a slide rather than by what
-somebody named the file. iOS has that now; Android does not yet.
+**Search.** All three hosts have it now. `tray/webext` always did; `tray/ios` and
+`tray/android` landed it a day apart, from opposite directions — which is why the
+parity table above briefly claimed the gap in both directions at once.
 
-On iOS it is three pieces, following `docs/DECISIONS.md` (2026-08-16):
+A deck is findable by **a phrase on one of its slides** rather than only by what
+somebody called the file. Each host does it the same way, and the sameness is
+enforced rather than hoped for:
 
-- a **whole-folder grant** through the folder-mode document picker, persisted as
-  a security-scoped bookmark — the app could previously open one file at a time
-  and could not enumerate anything;
-- **`BentoIndex.swift`**, a port of the extension's `extractText`: up to 40KB of
-  prose per document pulled out of the `#bento-doc` block as string values, data
-  URIs stripped first, encrypted documents never read at all;
-- a **search screen** beside the document browser, and the same prose donated to
-  **CoreSpotlight** so results turn up in system search too.
+- a **whole-folder grant** — folder-mode `UIDocumentPickerViewController` on iOS
+  persisted as a security-scoped bookmark, `ACTION_OPEN_DOCUMENT_TREE` on Android
+  persisted as a URI permission. Both hosts could previously open one file at a
+  time and enumerate nothing.
+- **the extraction, ported per platform** — `BentoIndex.swift` and
+  `DocumentIndex.kt`, both from the reference in `tray/doc-index.mjs`: up to 40KB
+  of prose per document pulled out of the `#bento-doc` block as string values,
+  data URIs stripped first.
+- **one shared corpus** — `tray/fixtures/`, 11 cases, run from each host's own
+  rig (`node scripts/test-doc-index.mjs`, `./gradlew :app:testDebugUnitTest`).
+  The guarantee is deliberately "cannot diverge SILENTLY" rather than "cannot
+  diverge", which is the weaker promise that fits string scanning — unlike
+  `tray/bridge.js`, shared outright because a divergence there wrote documents
+  out as zero bytes.
 
-The browser stays the root. It is not a list but a surface — iCloud Drive, every
-File Provider on the device, drag-and-drop, rename in place, favourites and tags
-— so search is one button away from it rather than in place of it.
-
-The port is held in place by `scripts/test-tray-index.mjs`, which runs two checks
-because they fail for different reasons:
-
-- the **shared corpus** in `tray/fixtures/` — the same cases and answer key every
-  host answers, budgets included. Skipped, not failed, when that directory is
-  absent, since it arrives with the Android work.
-- a diff against the **live `library.js`**, imported and run rather than copied,
-  over generated edge cases and every document in the tree. A frozen answer key
-  pins a port to a snapshot; when the reference moves, static expectations go
-  stale silently and every host stays green while drifting.
-
-That is what makes "each host carries its own copy" safe: a divergence is a
-failing rig rather than a document that is findable on one platform and not
-another. The one deviation currently accepted is written down in
-`BentoIndex.swift` — JavaScript can hold half a surrogate pair at the 40KB cut
-and Swift cannot, so the port drops it.
-
-Indexing prose into CoreSpotlight is a deliberate reach beyond the app, so two
-rules are enforced in code rather than described: an encrypted document yields no
-text and no preview, and revoking a folder deletes everything indexed from it.
-
-**Not built yet, on iOS.** The `data-bento-preview` slice is extracted and stored
-— it is free, the same read produces it — but the results list shows no
-thumbnail, because turning that HTML into an image means snapshotting a WebView
-per row. The document browser already thumbnails these documents; the search
-list does not.
+The shape is settled in `docs/DECISIONS.md` (2026-08-16): **native list UI on
+each host**, not the extension's HTML library screen in a WebView — measured at
+~0.5s of extra cold start, and it would have cost iOS its system document
+browser.
 
 **One thing the extraction inherits from the reference**, visible in snippets: it
 pulls string VALUES, so style values (`sans-serif`, `#EAF4FF`, `rgba(…)`) sit in
 the prose alongside real words. That is what makes it format-agnostic, and it is
 the extension's behaviour too — narrowing it is a change to all three ports and
 belongs in `docs/DECISIONS.md`, not in one host.
+
+Two properties the corpus pinned that reasoning had not: a single JSON string
+value **over 400 characters is not indexed at all** (the value regex is capped
+`{1,400}`), and **JS `\s` is Unicode-aware where Java's is not**. Both are held
+in place so a port cannot quietly "fix" them into divergence.
 
 ### What is genuinely different
 
@@ -639,6 +628,232 @@ At 72 it exactly filled the visible area, so every launcher mask cut its corners
 off and the navy frame that makes the mark read was never drawn at all.
 
 
+### Document search
+
+Grant a folder once and every Bento document inside it is indexed, so a deck is
+findable by **a phrase on one of its slides**. This is what `tray/webext` has
+always had and what neither native host did.
+
+- **The grant** is `ACTION_OPEN_DOCUMENT_TREE` plus a persistable permission —
+  the analogue of the extension's `showDirectoryPicker`. Note that Android
+  refuses to grant some directories outright (the root of shared storage, and
+  `Download` on current versions): the picker says "Can't use this folder" and
+  the user has to pick a subfolder. That is the platform's rule, not ours.
+- **Nothing is copied.** The index holds extracted text and the first-page
+  preview; the documents stay where the user put them.
+- **A rescan is nearly free.** Rows are keyed by size and timestamp, so an
+  unchanged folder costs one directory listing per folder and no reads at all —
+  the expensive step was never the walk, it is pulling 40KB of prose out of a
+  megabyte of document.
+- **The name is not the test.** Any `.html` is opened and the marker inside it
+  decides, so a deck renamed to `deck.html` to email it is still found — and a
+  stray web page that merely contains the word you searched for is not.
+- **SQLite, not a JSON file**, because the prose budget is 40KB *each*: a few
+  hundred documents is megabytes, which is fine on disk and ruinous to parse
+  into memory on every launch.
+- **Encrypted documents are indexed as encrypted and nothing more** — no text,
+  no preview. A privacy rule, not an optimisation.
+- `MAX_FILES` (5000) bounds a scan, and hitting it is **reported**: a library
+  that quietly stops at N is a library that lies about what it holds.
+
+**Thumbnails**, rendered once and cached. The other two hosts get these free and
+differently: iOS renders nothing at all — `UIDocumentBrowserViewController` asks
+the SYSTEM to thumbnail the file, and the iOS thumbnailer draws the
+`[data-bento-preview]` block because it runs no JavaScript, which is exactly what
+that block exists for. `tray/webext` sets `iframe.srcdoc`. Android has neither a
+system HTML thumbnailer nor a browser for a list, so it renders the block itself:
+**one offscreen WebView, at index time**, into a bitmap cached in `cacheDir`
+(which Android empties under storage pressure — right for something
+reconstructible). The list stays plain `ImageView`s, so nothing here touches cold
+start or accessibility.
+
+Three traps, all of which produced a *plausible-looking wrong picture* rather
+than an error, and all worth knowing before touching `Thumbnails.kt`:
+
+1. **A detached WebView draws the wrong thing, not nothing.** `measure`/`layout`
+   on a view with no window never reaches the renderer, so the CSS viewport stays
+   at WebView's default. It must be attached.
+2. **The viewport has to be the capture box.** The preview's outer element is
+   `position:fixed; width:100%; height:100%` — it covers the VIEWPORT by design,
+   since a thumbnailer injects it into a real document. `width=device-width`
+   means the SCREEN, not the view, so the block rendered far wider than the box
+   and the capture was a magnified crop of its corner. `width=1280` — the width
+   decks are authored at — plus `loadWithOverviewMode` scales the whole slide to
+   fit, with no density arithmetic.
+3. **WebView lays out in DP; the capture is in PIXELS.** Ignoring that renders
+   everything `density` times too large and captures a crop — on a 2.75× device
+   the slide's title filled the frame with three letters of it. The render box is
+   sized in DP and the bitmap is downscaled after, which also gives crisper text
+   than rendering at final size.
+
+Because the preview is already stored in the index, adding this needed **no
+rescan** — existing rows thumbnailed on the spot.
+
+### New documents are fetched, never bundled
+
+Starter decks change often, and there are three Bento apps with more coming — so
+bundling one means picking arbitrarily, and bundling all of them means shipping
+several copies of Bento inside the app, each stale from the moment it was built.
+
+Measured on Android before this changed: the single bundled slides seed was
+**517,161 bytes, 81% of a 630,851-byte release APK**. Removing it took the
+release build to **117,940 bytes**, and the only asset left is `bridge.js`.
+
+So "New" asks which app you want and fetches that app's current signed shell
+(`Releases.kt`), the same channel a document uses to update itself — which also
+means a document created here is the version everyone else has, the same day.
+The shell is cached in `filesDir`, so only the first "New" of a given release
+needs a connection. `tray/webext` already worked this way in principle;
+`tray/ios` still bundles and should follow.
+
+This is the **one** request the host makes on its own account — no launch check,
+no telemetry. `docs/PLATFORM.md` §1 requires no network to open, edit, present or
+save; creating from a template is none of those.
+
+**Both halves are verified**, exactly as `kernel/src/update.ts` does it: the
+manifest's ECDSA P-256 signature over the exact payload bytes, then the shell's
+`sha256` as pinned by that signed payload. These bytes become an executable
+document the user afterwards trusts, so an unverified download would let anyone
+in the path choose what they create.
+
+**Two more checks, and neither is optional** — both catch an attacker who can
+re-serve but cannot forge, which is what an origin or CDN compromise looks like:
+
+- **App identity.** A genuinely signed `bento-slides` manifest served on the
+  dash channel passes the signature AND the digest: every byte authentic, just
+  not what was asked for. Checked against the app the CALLER requested, never
+  against what the payload says about itself — and an ABSENT field must not read
+  as a match, which is the hole `tray/webext` had before PR #318.
+- **A rollback floor**, a per-app high-water mark. A stale but genuine manifest
+  passes everything, because every byte of it really was signed and really does
+  match; it just hands over an older release. `kernel/src/update.ts` refuses to
+  go backwards using its own build version, but a host that CREATES documents
+  has nothing to compare against except what it has seen.
+
+  Two details that are easy to get backwards, and both turn a failed attack into
+  a permanent one if you do. The floor is raised **only after the downloaded
+  bytes pass their digest** — raising it on a merely-verified manifest would let
+  one forged-but-unfetchable release naming 9.9.9 lock the device out of every
+  real release below it. And an **equal version is accepted**: re-fetching the
+  version already seen is the normal case, so treating equal as a downgrade
+  breaks the + button on its second use, not at some edge.
+
+  Accepted cost, taken deliberately: a maintainer's own rollback is refused too,
+  so pulling a bad release needs a version bump rather than a re-point.
+
+  An unreadable store reads as NO floor rather than a refusal — being unable to
+  remember must not mean being unable to create a document — and an unparsable
+  version component sorts as 0, so a strange version can fail to raise the floor
+  but never blocks a release. That last one matches the kernel exactly, including
+  the detail that `Number('1a')` is NaN and NaN is falsy, so `(pa[i] || 0)`
+  coerces it to 0 rather than propagating.
+
+Two traps worth keeping:
+
+- **WebCrypto emits ECDSA signatures as raw `r‖s`; Java expects DER.** The
+  manifest is signed through WebCrypto by `scripts/sign-release.mjs`, so handing
+  its 64 bytes to `SHA256withECDSA` unconverted is simply a bad signature —
+  silent, and indistinguishable from tampering.
+- **Ask for bytes, not a page.** `HttpURLConnection` sends a browser-shaped
+  `Accept` by default, and the release host rewrites responses it believes are
+  pages — see the note below. `Accept: */*` avoids the rewrite; the hash check is
+  what actually makes the bytes trustworthy, and stays regardless.
+
+### Grid or list, and a theme you can override
+
+The documents screen offers both, with the choice remembered. **Grid is the
+default**, matching `tray/webext`, whose home screen has always been a grid of
+thumbnail cards — and it is what makes rendering thumbnails worth the trouble.
+iOS gets the same choice free from the system document browser.
+
+The **theme override** is offered only on API 31+, where
+`UiModeManager.setApplicationNightMode` exists; below it there is no way to
+override the system theme without AndroidX, so the control is not shown at all.
+A button that silently does nothing is worse than no button. Both this and the
+view mode are VIEWER preferences kept on the device — the same shape as the
+runtime's own locale and reduce-motion settings, which default to the OS and
+never enter a document.
+
+### Typography and the mark
+
+The system font, deliberately, because that is what `slides` and `tray/webext`
+both use (`-apple-system, …, Roboto, …`) — on Android the system font IS Roboto,
+so the chrome already matches the apps. The brand faces (`Fraunces`,
+`Instrument Sans`) belong to the marketing site, not to app chrome, and
+bundling them would cost a few hundred KB on a 122 KB app.
+
+What did transfer: the extension's `-.015em` heading tracking (Android's
+`letterSpacing` is already in ems, so the number moves across unchanged) and its
+`font-weight: 600` emphasis — real 600 from API 28, bold below it. The **mark**
+in the header is generated from `tray/assets/tray-logo.svg` by the same script
+as the launcher icon, so the two cannot drift.
+
+### Material 3, dynamic colour, and adaptive layout
+
+The documents screen is Material 3 now, and the reason is specific: **dynamic
+colour** and **adaptive large-screen behaviour** are what Play's editorial
+surfaces reward, and neither can be hand-rolled. Dynamic colour means the app
+adopts the user's wallpaper palette on Android 12+ — so the Bento palette below
+is the FALLBACK for older devices rather than the intent. The brand stays present
+through the mark and the thumbnails, which is the right place for it.
+
+Measured cost, since the earlier decision turned on it: **+1.26 MB**, dominated
+by `resources.arsc` growing 24× — applying an M3 theme references the library's
+whole style and attribute graph and resource shrinking cannot prove any of it
+unused. That ratio was the argument against it while tray was positioned as a
+thin courier; it is worth paying once the goal includes being featured.
+
+`EditorActivity` stays OFF Material on its own plain theme. It hosts one
+full-screen WebView, the document supplies its own chrome, and Material would
+only add inflation requirements.
+
+**Adaptive layout keys off `smallestScreenWidthDp >= 600`, not `screenWidthDp`,**
+and the difference is the whole lesson. A Pixel in landscape reports 873dp wide
+and passes a width test — but it is only ~390dp tall, so a two-pane layout left
+the grid **299px high**: a worse phone layout wearing a tablet's clothes. The
+smallest dimension is the one that means "room in both directions", which is why
+`sw600dp` is the platform's own tablet qualifier. A foldable reports the folded
+width closed and the unfolded width open, and unfolding recreates the activity,
+so it lands on the right layout with no listener.
+
+On a tablet the grid shares the window with a **detail pane**: a large
+first-page render, title, app, folder and date, and Open. That render at 400px is
+the whole argument for having thumbnails at all — at 64×36 in a list row it is a
+hint; at this size it is the document.
+
+Column count comes from the available width, and the card's thumbnail height is
+measured from the GRID rather than the screen — the screen is wrong twice over,
+once because a hardcoded column count sizes every card for a phone, and again
+because with a detail pane the grid is only part of the width.
+
+### What the hand-rolled theme established (superseded by Material, kept for the reasoning)
+
+The documents screen is ours to design — unlike iOS, where the root screen is
+the system document browser — so it carries the same tokens as `tray/webext`
+rather than framework defaults. Palette, radii and the button variants come
+straight from `tray/webext/src/ui.css`, including its dark set: `values/` and
+`values-night/` define the same colour names twice and the `-night` resource
+qualifier switches them, so **dark mode needs no library and no runtime branch**.
+
+It stays dependency-free, and that is now true rather than an excuse. An earlier
+version of this file justified framework defaults with "every dependency this
+screen does not have is one that cannot drift out of step with the WebView
+work" — an argument about dependency risk in the part of the app where risk
+actually lives, misapplied to the cosmetic part.
+
+Material Components was measured rather than argued about: **+1.26 MB**, taking
+a 616 KB app to 1.83 MB. The largest single line was `resources.arsc` growing
+24× (26 KB → 619 KB), because applying an M3 theme references the library's
+whole style and attribute graph and resource shrinking cannot prove any of it
+unused — styles and attrs resolve by name at runtime. For an app whose logic is
+136 KB of dex that is roughly 7× the app to style one screen. It would be the
+right call for a bigger app, and if tray grows settings or onboarding screens it
+becomes one; today it is not.
+
+What that costs: pressed/focus states, minimum touch targets and the dark
+palette are hand-rolled here rather than inherited. `<ripple>` drawables and an
+explicit `48dp` minimum cover the first two.
+
 ### State: the document cycle works, on an emulator only
 
 Verified end to end on a Pixel 7 / Android 16 emulator, driven through the real
@@ -654,6 +869,15 @@ UI rather than a harness:
   present, well-formed from `<!DOCTYPE html>` to `</body></html>`, `docId` minted
 - the document reopens from the recents list on its persisted grant
 - the adaptive icon renders correctly under a circular launcher mask
+- **New document fetches and verifies**: manifest signature checked, shell
+  sha256 checked, cached as `slides-1.0.18.html` at exactly the signed 689,316
+  bytes, written and opened. A failed fetch removes the empty file that
+  `ACTION_CREATE_DOCUMENT` had already created.
+- **document search works end to end**: a granted folder indexed 2 decks and
+  excluded a decoy `.html` that contains the search word but carries no
+  `#bento-doc` marker; typing `software` — a word in no filename — returns both
+  decks by their own title, `Notes` returns one by file name, and a nonsense
+  query returns none
 
 Not yet verified:
 

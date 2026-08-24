@@ -979,10 +979,34 @@ trade at this level of consequence, and it is already this repo's idiom for
 exactly this problem — the splice contract has a conformance gate in
 `release.mjs`, the save-purpose ids have `scripts/test-savepurpose.ts`.
 
-**Status: not built.** Nothing here has been implemented. The cheap intermediate
-step, if it is wanted before the full library, is a name filter over the existing
-Android recents list — that brings Android level with iOS and touches no
-extraction. Parity table and the standing gap: `tray/README.md` § Android.
+**Status (2026-08-16, later): BUILT ON ANDROID; iOS still to do.** The shape
+above survived contact. `tray/doc-index.mjs` is the reference, `tray/fixtures/`
+is the corpus (11 cases), `scripts/test-doc-index.mjs` and a JVM unit test hold
+the JS and Kotlin implementations to it, and `tray/android` indexes granted
+folders and searches their prose. The iOS session has been handed the same brief.
+
+Two things the corpus caught that reasoning had not:
+
+- **A single string value over 400 characters is not indexed at all.** The value
+  regex is capped at `{1,400}`, so a long speaker note or a wordy text element is
+  invisible to search — in all three hosts, today. Pinned by `longvalue.html` so
+  no port can quietly "fix" it into divergence; changing it has to be a
+  deliberate change everywhere.
+- **JavaScript's `\s` is Unicode-aware and Java's is not** (and Java's
+  `UNICODE_CHARACTER_CLASS` still excludes U+FEFF), so a port spelling it `\s`
+  leaves non-breaking and ideographic spaces in the indexed text and a phrase
+  search across one silently fails. The class is written out in full;
+  `whitespace.html` catches it, verified by mutation.
+
+**Thumbnails are in, and the reasoning that nearly excluded them was wrong.**
+"the preview is HTML, so a native list needs a WebView per row" conflated two
+different things: a WebView per scrolling row (the design this entry rejects) and
+ONE offscreen WebView at index time producing cached bitmaps (which costs nothing
+at launch and leaves the list plain `ImageView`s). The second is the obvious
+design and it was talked past. Details and the three ways an offscreen render
+silently produces the wrong picture: `tray/README.md` § Document search.
+
+Parity table: `tray/README.md` § Android.
 
 ## 2026-08-16 — bento/tray gets an Android host (PR #87, rearchitected)
 

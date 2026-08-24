@@ -15,24 +15,23 @@ val keystoreProps = Properties().apply {
 }
 
 /**
- * Stages everything the app ships that is generated rather than written.
+ * Stages the one generated thing the app ships: `tray/bridge.js`, the File
+ * System Access polyfill SHARED with tray/ios. One copy of semantics whose
+ * comments record a bug that wrote users' documents out as zero bytes; a second
+ * copy would be a second chance to reintroduce it.
  *
- * Two inputs, for two reasons:
+ * NO STARTER DECK. It used to stage one here, mirroring tray/ios — and that was
+ * wrong. Starter decks change often and there are three Bento apps with more
+ * coming, so bundling means picking one arbitrarily or shipping several copies
+ * of Bento inside the app, each stale from the moment it is built. Measured
+ * before it was removed: the single slides seed was 517,161 bytes, 81% of a
+ * 630,851-byte release APK.
  *
- *  - `tray/bridge.js` is the File System Access polyfill, SHARED with tray/ios.
- *    One copy of semantics whose comments record a bug that wrote users'
- *    documents out as zero bytes; a second copy would be a second chance to
- *    reintroduce it.
- *  - the starter shell is COPIED FROM THE CURRENT BUILD, never committed: a
- *    587KB binary in git would churn on every release. It ages harmlessly — a
- *    new deck self-updates through Bento's normal signed channel the first time
- *    it checks.
- *
- * Mirrors the "Stage starter shell" step in tray/ios/project.yml.
+ * A new document now comes from the signed release channel instead — see
+ * `Releases.kt`.
  */
 abstract class StageTrayAssets : DefaultTask() {
     @get:InputFiles abstract val bridge: ConfigurableFileCollection
-    @get:InputFiles abstract val seed: ConfigurableFileCollection
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @TaskAction
@@ -41,25 +40,11 @@ abstract class StageTrayAssets : DefaultTask() {
         out.deleteRecursively()
         out.mkdirs()
         bridge.singleFile.copyTo(out.resolve("bridge.js"), overwrite = true)
-
-        // Resolved at EXECUTION time, not configuration time: the seed is a
-        // build artefact of a different project, so it routinely appears after
-        // this build was last configured.
-        val shell = seed.files.firstOrNull { it.exists() }
-        if (shell != null) {
-            shell.copyTo(out.resolve("starter.bento.html"), overwrite = true)
-        } else {
-            logger.warn(
-                "warning: no starter shell — run 'npm run build:single' in slides/; " +
-                    "New document will be unavailable in this build"
-            )
-        }
     }
 }
 
 val stageAssets = tasks.register<StageTrayAssets>("stageTrayAssets") {
     bridge.from(rootProject.file("../bridge.js"))
-    seed.from(rootProject.file("../../slides/dist-single/Bento_Slides.bento.html"))
     outputDir.set(layout.buildDirectory.dir("staged-assets"))
 }
 
@@ -107,6 +92,11 @@ android {
     }
 
     kotlinOptions { jvmTarget = "17" }
+
+    // Android's own classes are stubs on the JVM rig and throw by default.
+    // Returning defaults instead lets Releases' verification sequence — the part
+    // most worth testing — run without a device.
+    testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 androidComponents {
@@ -130,4 +120,29 @@ dependencies {
     // Both are WebView-side features rather than app-side ones, so the library
     // is a thin façade over what the installed WebView already implements.
     implementation("androidx.webkit:webkit:1.17.0")
+
+    // Material 3, for the documents screen only. Measured cost at the time it
+    // was added: +1.26 MB, taking a 122 KB app past 1.3 MB — dominated by
+    // resources.arsc, because applying an M3 theme references the library's
+    // whole style and attribute graph and resource shrinking cannot prove any
+    // of it unused.
+    //
+    // That ratio was the argument against it while tray was "a thin courier".
+    // It is worth paying for two things a hand-rolled theme cannot do at all:
+    // DYNAMIC COLOUR (the app adopting the user's wallpaper palette, which is
+    // the clearest signal of a modern Android app) and adaptive large-screen
+    // behaviour. Both are what Play's editorial surfaces actually reward.
+    //
+    // EditorActivity deliberately stays off it — a full-screen WebView gains
+    // nothing from Material and would only inherit the inflation requirements.
+    implementation("com.google.android.material:material:1.12.0")
+
+    // Test-only. The indexer is held to the shared corpus in tray/fixtures/ by
+    // a plain JVM test — no emulator, so there is no excuse not to run it.
+    //
+    // Gson rather than org.json: Android's org.json is a STUB in unit tests
+    // whose methods throw, and whether a real one on the test classpath shadows
+    // it is a coin toss. A test that fails for that reason teaches nothing.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("com.google.code.gson:gson:2.11.0")
 }
