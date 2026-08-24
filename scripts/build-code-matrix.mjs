@@ -44,7 +44,7 @@ const CASES = [
   ['1. Swap — distinct lines', 'clean: the two lines trade places',
    `function f() {\n  alpha(one)\n  beta(two)\n  done()\n}`,
    `function f() {\n  beta(two)\n  alpha(one)\n  done()\n}`],
-  ['2. Swap — shared prefix', 'TEARS: both lines start with const, so it cannot tell them apart',
+  ['2. Swap — shared prefix', 'each const travels with its own line — nearest anchor wins',
    `function f() {\n  const a = one()\n  const b = two()\n  done()\n}`,
    `function f() {\n  const b = two()\n  const a = one()\n  done()\n}`],
   ['3. Move a line far', 'first() travels to the bottom, the rest shift up',
@@ -67,7 +67,7 @@ const CASES = [
 const slides = [slide([
   text('Seven ways to change code', 96, 250, 1088, 80, { size: 64, weight: 700 }),
   text('Each pair is one edit. Watch what travels, and what tears.', 96, 350, 900, 50, { size: 22, color: MIST }),
-  text('Scenario 2 is the known-bad case — a swap of two lines sharing a prefix.', 96, 410, 950, 50, { size: 18, color: PEACH }),
+  text('Scenario 2 was the known-tear case — fixed by breadth-first pairing.', 96, 410, 950, 50, { size: 18, color: PEACH }),
 ], { transition: 'fade', name: 'title' })]
 
 for (const [label, expect, A, B] of CASES) {

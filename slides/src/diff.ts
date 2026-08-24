@@ -226,59 +226,53 @@ export class HeckelDiff {
         statesC[anchC.index] = match
       }
     }
-    // Phase 2: We found unique anchors.
-    // Move forward and find the ones that are matching adjacent to the ones that already matched.
-    for (let i = 0; i < statesC.length - 1; i += 1) {
-      const state = statesC[i]
-      const nextState = statesC[i + 1]
-      if (state.kind === 'match' && nextState.kind === 'empty') {
-        const matchState = state as Match
-        const nextToken: Token | undefined = current[i + 1]
-        const nextPreviousToken: Token | undefined = previous[matchState.previousIdx + 1]
-        // The previous side must be unclaimed too. Without this, duplicating a
-        // token beside an anchor (X B Y -> X B B Y) let the backward pass claim
-        // the same previous token a second time: two current-side tokens shared
-        // one morph id, and duplicate flip ids corrupt pairing downstream.
-        if (statesP[matchState.previousIdx + 1]?.kind !== 'empty') continue
-        if (nextToken && nextPreviousToken && nextToken.key() == nextPreviousToken.key()) {
-          const match: Match = {
-            kind: 'match',
-            previousIdx: matchState.previousIdx + 1,
-            previous: nextPreviousToken,
-            current: nextToken,
-            currentIdx: i + 1
-          }
-          // Propagate morph id
-          nextToken.setMorphId(nextPreviousToken.morphId())
-          statesP[match.previousIdx] = match
-          statesC[match.currentIdx] = match
-        }
-      }
+    // Phases 2 & 3 — spread from every anchor, breadth-first. One ring per
+    // round: each match may claim ONE neighbour per direction per round, so a
+    // token is claimed by its NEAREST anchor, not by whichever cascade happens
+    // to run first. The previous greedy sweeps lost the shared-prefix swap:
+    //
+    //   const a = one()          const b = two()
+    //   const b = two()    ->    const a = one()
+    //
+    // The header cascade (function f() { ...) walked forward straight into the
+    // first `const` and paired it top-to-top, three steps from its anchor —
+    // while `b`, only two steps away, was still waiting for the backward
+    // sweep. Its own `const` then found the previous side already claimed and
+    // was minted fresh: it vanished for 40% of the morph and faded back in,
+    // on screen, in a deck. Distance-first, each `const` is claimed by the
+    // anchor on its own line and travels with it. Claims never overwrite
+    // (both sides must be unclaimed), so equal-distance conflicts — the
+    // genuinely ambiguous ones — resolve deterministically to the earlier
+    // token, and everything a cascade could reach is still reached.
+    let frontier: number[] = []
+    for (let i = 0; i < statesC.length; i += 1) {
+      if (statesC[i].kind === 'match') frontier.push(i)
     }
-    // Phase 3: Same as Phase 2 but backwards.
-    for (let i = statesC.length - 1; i >= 1; i -= 1) {
-      const state = statesC[i]
-      const priorState = statesC[i - 1]
-      if (state.kind === 'match' && priorState.kind === 'empty') {
-        const matchState = state as Match
-        const priorToken = current[i - 1]
-        const priorPreviousToken = previous[matchState.previousIdx - 1]
-        // Same previous-side guard as Phase 2, mirrored.
-        if (statesP[matchState.previousIdx - 1]?.kind !== 'empty') continue
-        if (priorToken && priorPreviousToken && priorToken.key() == priorPreviousToken.key()) {
+    while (frontier.length > 0) {
+      const next: number[] = []
+      for (const ci of frontier) {
+        const m = statesC[ci] as Match
+        for (const step of [1, -1]) {
+          const nc = ci + step
+          const np = m.previousIdx + step
+          if (nc < 0 || nc >= statesC.length || statesC[nc].kind !== 'empty') continue
+          if (np < 0 || np >= previous.length || statesP[np].kind !== 'empty') continue
+          if (current[nc].key() !== previous[np].key()) continue
           const match: Match = {
             kind: 'match',
-            previousIdx: matchState.previousIdx - 1,
-            previous: priorPreviousToken,
-            current: priorToken,
-            currentIdx: i - 1
+            previousIdx: np,
+            previous: previous[np],
+            currentIdx: nc,
+            current: current[nc]
           }
           // Propagate morph id
-          priorToken.setMorphId(priorPreviousToken.morphId())
-          statesP[match.previousIdx] = match
-          statesC[match.currentIdx] = match
+          current[nc].setMorphId(previous[np].morphId())
+          statesP[np] = match
+          statesC[nc] = match
+          next.push(nc)
         }
       }
+      frontier = next
     }
     // Phase 4: Final pass.
     // Anything that did not match in:

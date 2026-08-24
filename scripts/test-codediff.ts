@@ -124,5 +124,29 @@ const toksOf = (states: State[] | undefined) =>
     JSON.stringify([...two.entries()].map(([k, v]) => [k, idsOf(v)])))
 }
 
+// 8. SHARED-PREFIX SWAP — the case greedy spreading lost. Two lines starting
+//    with `const` trade places; each const must travel WITH ITS LINE, claimed
+//    by the anchor two steps away (b / a), not by the header cascade three
+//    steps above. Regression for the breadth-first spread: before it, one
+//    const paired top-to-top and the other was minted fresh — it vanished for
+//    40% of the morph and faded back in, on screen.
+{
+  const A = `function f() {\n  const a = one()\n  const b = two()\n  done()\n}`
+  const B = `function f() {\n  const b = two()\n  const a = one()\n  done()\n}`
+  const states = new HeckelDiff(codeDoc([A, B])).computeDiffs('g')
+  const consts = (i: number) => toksOf(states.get(i))
+    .filter((t: any) => t.content === 'const')
+    .sort((a: any, b: any) => a.lineNumber - b.lineNumber)
+  const [p1, p2] = consts(0)
+  const [c1, c2] = consts(1)
+  check('shared-prefix swap: both consts pair', !!c1?.morphId() && !!c2?.morphId())
+  check('shared-prefix swap: each const travels with its line',
+    c1.morphId() === p2.morphId() && c2.morphId() === p1.morphId())
+  const inserts = (states.get(1) ?? []).filter((s: any) => s.kind === 'insert')
+    .map((s: any) => s.token.content)
+  check('shared-prefix swap: no ink token is minted fresh',
+    inserts.every((v: string) => !/\S/.test(v)))
+}
+
 console.log(FAILS.length ? `\n${FAILS.length} FAILED` : '\nall passed')
 process.exit(FAILS.length ? 1 : 0)
