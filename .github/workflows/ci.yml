@@ -237,6 +237,13 @@ jobs:
         # Tampered pack, tampered index, unsigned index — each must be refused.
         run: node scripts/test-packs.ts
 
+      - name: Tokenizer contract
+        # The kernel's built-in highlighting tier. Renderers rebuild text from
+        # the token stream, so losslessness is corruption-or-not; and multiline
+        # tokens are declared, because a blockified token carrying \n collapses
+        # a code block to one line with no error anywhere.
+        run: node scripts/test-tokenize.ts
+
       - name: First-page preview rig
         # Every save writes a static render of page one for file-manager
         # thumbnails. Two decisions in that path fail silently: an encrypted
