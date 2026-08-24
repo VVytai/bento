@@ -57,6 +57,13 @@ jobs:
         working-directory: slides
         run: npm ci
 
+      - name: Transforms are not silently ignored
+        # A CSS transform does nothing to a non-replaced inline element: it is
+        # accepted, style.transform reads back verbatim, and the box never
+        # moves. An animation on one reports perfect health and paints nothing,
+        # which is exactly how it survived eight rounds of debugging once.
+        run: node scripts/test-anim-inline.ts
+
       - name: i18n packed table is current
         # The per-locale catalogs are the source of truth; slides/src/i18n/
         # packed.ts is generated from them and is what actually ships. A stale

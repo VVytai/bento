@@ -651,6 +651,27 @@ names provisional.
 
 ## Testing gotcha
 
+**Reading back a style property you just wrote is not a measurement.** A CSS
+transform does NOTHING to a non-replaced inline element — the browser accepts
+the declaration, `style.transform` (and `getComputedStyle`) return it verbatim,
+and the box moves zero pixels. So a check like "did the tokens get transforms?"
+passes identically whether the element travelled 400px or none. Verify motion
+with `getBoundingClientRect`, or by stepping `anim.setManual(true)` + `tick()`
+and reading rendered geometry. This cost eight rounds of "it does not animate"
+against measurements insisting it did (fixed by giving code tokens
+`display:inline-block`; `kernel/src/anim.ts` now warns when a transform channel
+targets an inline element, guarded by `scripts/test-anim-inline.ts`).
+
+Two more instruments that lie, both hit in the same session:
+- **`requestAnimationFrame` is throttled to zero in a hidden/occluded tab**, so
+  every tween silently does nothing. Check `document.visibilityState` before
+  concluding an animation is broken — a driven browser tab is often hidden.
+- **A live sampler polling the DOM mid-animation** reported zero while tokens
+  were demonstrably moving, and could never distinguish "no tween" from "a
+  tween I cannot see". Instrument the DECISION (did it pair? did onUpdate run?)
+  rather than sampling the result.
+
+
 Synthetic `PointerEvent`s do NOT trigger Moveable/Selecto (Gesto listens for mouse
 events) — dispatch `MouseEvent`s, or use trusted input. After changing selection, wait a
 frame before starting a synthetic drag.
