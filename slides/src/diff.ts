@@ -1,36 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 The Bento authors
 
-// https://shiki.style/guide/best-performance#fine-grained-bundle
-// When importing Shiki dependencies, be _very careful_ to not import things from the bundled namespaces.
-// Otherwise the runtime costs are huge.
-import { ThemedToken, createHighlighterCoreSync, HighlighterCore } from "shiki/core"
-import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
+// Tokens come from the kernel tokenizer — the zero-cost tier. The format still
+// carries the grammar/theme asset seam (CodeElement.grammarAssetId/themeAssetId)
+// for a future signed-extension tier with real TextMate grammars; the diff
+// below never cared where tokens come from, which is what makes both tiers
+// share one engine.
 import { BentoDoc, Slide } from "./model"
-
-// Preamble
-
-const highlighters: Map<string, HighlighterCore> = new Map()
-
-const engine = createJavaScriptRegexEngine()
-
-/** Also used to render the actual code snippets. */
-export function getOrCreateHighlighter(doc: BentoDoc, grammarId: string, themeId: string): HighlighterCore {
-  const key = `${themeId}/${grammarId}`
-  let highlighter = highlighters.get(key)
-  if (!!highlighter) return highlighter
-  const assets = doc.assets ?? {}
-  const grammar = JSON.parse(assets[grammarId])
-  const theme = JSON.parse(assets[themeId])
-  highlighter = createHighlighterCoreSync({
-    langs: [grammar],
-    themes: [theme],
-    engine: engine
-  })
-  // Highlighters are expensive to create. Keep them around and call dispose() when done.
-  highlighters.set(key, highlighter)
-  return highlighter
-}
+import { tokenize, type Tok } from "../../kernel/src/tokenize.ts"
 
 // The stable token that we can diff between slides.
 
@@ -38,13 +15,19 @@ export class Token {
 
   /* The morph id. */
   _id: string | undefined
+  // Explicit fields, not constructor parameter properties: the repo's test
+  // rigs run TypeScript sources under plain node, whose type stripping cannot
+  // execute parameter properties (scripts/test-codediff.ts imports this file).
+  readonly content: string
+  readonly scopes: Array<string>
+  readonly lineNumber: number
+  readonly offset: number
 
-  constructor(
-    public readonly content: string,
-    public readonly scopes: Array<string>,
-    public readonly lineNumber: number,
-    public readonly offset: number,
-  ) {
+  constructor(content: string, scopes: Array<string>, lineNumber: number, offset: number) {
+    this.content = content
+    this.scopes = scopes
+    this.lineNumber = lineNumber
+    this.offset = offset
     this._id = undefined
   }
 
@@ -69,19 +52,30 @@ export class Token {
     return JSON.stringify(json)
   }
 
-  static fromThemed(lineNumber: number, token: ThemedToken): Token {
-    const content = token.content
-    const explanations = token.explanation
-    const offset = token.offset
-    const scopes = new Set<string>()
-    if (explanations) {
-      for (const explanation of explanations) {
-        for (const scope of explanation.scopes) {
-          scopes.add(scope.scopeName)
-        }
-      }
+  /**
+   * Adapt one kernel token, splitting multiline tokens at newlines FIRST.
+   *
+   * The tokenizer's contract allows block comments, triple-quoted strings and
+   * whitespace runs to carry newlines. Rendered tokens with ink must become
+   * atomic inline-level boxes to be animatable (a transform does nothing to a
+   * non-replaced inline element), and a newline inside an atomic box stops
+   * breaking the line under `white-space: pre` — a Python docstring would
+   * collapse its whole block to one rendered line. Splitting HERE, before
+   * identity assignment, keeps one diff token per rendered span; splitting in
+   * the renderer instead would put one morph id on several spans and corrupt
+   * the offset map. Concatenating the split pieces reproduces the original
+   * token exactly, so the tokenizer's lossless guarantee survives.
+   */
+  static fromTok(tok: Tok, lineNumber: number, offset: number): Token[] {
+    const out: Token[] = []
+    let line = lineNumber
+    let off = offset
+    for (const piece of tok.v.split(/(\n)/)) {
+      if (!piece) continue
+      out.push(new Token(piece, [tok.t], line, off))
+      if (piece === '\n') { line += 1; off = 0 } else off += piece.length
     }
-    return new Token(content, [...scopes], lineNumber, offset)
+    return out
   }
 }
 
@@ -127,8 +121,10 @@ export class HeckelDiff {
   /** A counter for morph ids. */
   static count: number = 0
 
-  constructor(private readonly doc: BentoDoc) {
+  private readonly doc: BentoDoc
 
+  constructor(doc: BentoDoc) {
+    this.doc = doc
   }
 
   /**
@@ -148,7 +144,9 @@ export class HeckelDiff {
     // For all the tokens in the first code slide, assign them stable ids.
     const firstIdx = HeckelDiff.zipIndex(0, parsed)
     let tokens: Token[] = []
-    if (firstIdx) {
+    // !== undefined, not truthiness: slide index 0 is falsy, and a morph group
+    // whose first code slide is the deck's first slide got no ids at all.
+    if (firstIdx !== undefined) {
       // Reset counts before recomputing stable ids
       HeckelDiff.count = 0
       tokens = parsed[firstIdx]
@@ -176,32 +174,22 @@ export class HeckelDiff {
     return `m-code-token-${this.count}`
   }
 
-  private static parse(doc: BentoDoc, slide: Slide, mid: string|undefined): Token[] {
+  private static parse(_doc: BentoDoc, slide: Slide, mid: string|undefined): Token[] {
     const tokens: Token[] = []
     for (const el of slide.elements) {
-      if (el.type === 'code' && el.grammarAssetId && el.themeAssetId && el.morphId === mid) {
-        const highlighter = getOrCreateHighlighter(doc, el.grammarAssetId, el.themeAssetId)
-        // We need to be able to parse the tokens in the *exact* same way in which we would when
-        // calling codeToHtml() in the render step. So rather than call `codeToTokens()` or a similar
-        // API here, we instead accumulate tokens using a transformer.
-        let allTokens: ThemedToken[][] = []
-        highlighter.codeToHtml(el.content, {
-          lang: el.grammarName as any,
-          theme: el.themeName as any,
-          includeExplanation: 'scopeName',
-          mergeSameStyleTokens: false,
-          transformers: [
-            {
-              tokens(tokens: ThemedToken[][]) {
-                allTokens = tokens
-              },
-            }
-          ]
-        })
-        for (let i = 0; i < allTokens.length; i += 1) {
-          const lineThemedTokens = allTokens[i]
-          for (const themedToken of lineThemedTokens) {
-            tokens.push(Token.fromThemed(i, themedToken))
+      // The effective morph key is morphId || id, matching render.ts — a lone
+      // code element with no explicit morphId still diffs against its
+      // duplicate-a-slide twins (the duplicate idiom shares ids).
+      if (el.type === 'code' && (el.morphId ?? el.id) === mid) {
+        let line = 0
+        let off = 0
+        for (const tok of tokenize(el.content ?? '', el.grammarName ?? 'js')) {
+          const split = Token.fromTok(tok, line, off)
+          tokens.push(...split)
+          const last = split[split.length - 1]
+          if (last) {
+            if (last.content === '\n') { line = last.lineNumber + 1; off = 0 }
+            else { line = last.lineNumber; off = last.offset + last.content.length }
           }
         }
       }
@@ -244,6 +232,11 @@ export class HeckelDiff {
         const matchState = state as Match
         const nextToken: Token | undefined = current[i + 1]
         const nextPreviousToken: Token | undefined = previous[matchState.previousIdx + 1]
+        // The previous side must be unclaimed too. Without this, duplicating a
+        // token beside an anchor (X B Y -> X B B Y) let the backward pass claim
+        // the same previous token a second time: two current-side tokens shared
+        // one morph id, and duplicate flip ids corrupt pairing downstream.
+        if (statesP[matchState.previousIdx + 1]?.kind !== 'empty') continue
         if (nextToken && nextPreviousToken && nextToken.key() == nextPreviousToken.key()) {
           const match: Match = {
             kind: 'match',
@@ -267,6 +260,8 @@ export class HeckelDiff {
         const matchState = state as Match
         const priorToken = current[i - 1]
         const priorPreviousToken = previous[matchState.previousIdx - 1]
+        // Same previous-side guard as Phase 2, mirrored.
+        if (statesP[matchState.previousIdx - 1]?.kind !== 'empty') continue
         if (priorToken && priorPreviousToken && priorToken.key() == priorPreviousToken.key()) {
           const match: Match = {
             kind: 'match',
@@ -311,30 +306,34 @@ export class HeckelDiff {
     return [statesP, statesC]
   }
 
+  /**
+   * Keys occurring EXACTLY once, with their index. Counted over the full list:
+   * the previous add-then-delete dance re-added a key on its third occurrence,
+   * so any token repeating an odd number of times — a third `)` is enough —
+   * became a false "unique" anchor and Phase 1 paired wrong positions.
+   * Regression: scripts/test-codediff.ts.
+   */
   private static anchors(tokens: Token[]): Map<string, { frequency: number, index: number }> {
-    const map = new Map<string, { frequency: number, index: number }>()
+    const freq = new Map<string, { frequency: number, index: number }>()
     for (let i = 0; i < tokens.length; i += 1) {
-      const token = tokens[i]
-      const key = token.key()
-      const count = map.get(key) ?? 0
-      if (count == 0) {
-        map.set(key, { frequency: count + 1, index: i })
-      } else {
-        map.delete(key)
-      }
+      const key = tokens[i].key()
+      const e = freq.get(key)
+      if (e) e.frequency += 1
+      else freq.set(key, { frequency: 1, index: i })
     }
-    return map
+    for (const [key, e] of freq) if (e.frequency !== 1) freq.delete(key)
+    return freq
   }
 
   private static zip(parsed: Array<Token[]>): Array<number[]> {
     const pairs: Array<number[]> = []
     let index = 0
     let previousIdx = HeckelDiff.zipIndex(index, parsed)
-    if (!previousIdx) return pairs
+    if (previousIdx === undefined) return pairs
     let i = previousIdx + 1
     while (i < parsed.length) {
       let currentIdx = HeckelDiff.zipIndex(i, parsed)
-      if (!currentIdx) break
+      if (currentIdx === undefined) break
       else {
         pairs.push([previousIdx, currentIdx])
         previousIdx = currentIdx

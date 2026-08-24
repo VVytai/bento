@@ -8,7 +8,7 @@ import type { BentoDoc, ShapeElement, Slide, SlideElement, SvgElement, TableElem
 import { morphKey, paginates } from './model'
 import { chartSnapshotSvg } from './charts'
 import temml from 'temml'
-import { renderCode } from './code'
+import { renderCodeInto } from './code'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -1168,10 +1168,11 @@ export function renderElement(el: SlideElement, doc: BentoDoc, opts: RenderOpts 
       inner.style.lineHeight = String(el.lineHeight)
       inner.style.width = '100%'
       inner.style.color = el.color
-      const result = renderCode(el, doc)
-      if (result.html) {
-        inner.innerHTML = result.html
-      } else {
+      inner.classList.add('bento-code')
+      inner.style.whiteSpace = 'pre'
+      inner.style.margin = '0'
+      inner.style.overflow = 'hidden'
+      if (!renderCodeInto(inner, el, doc)) {
         // Fallback to unformatted text
         inner.innerText = el.content
       }

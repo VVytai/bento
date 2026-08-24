@@ -486,8 +486,20 @@ a.ed-btn { text-decoration: none; }  /* the update block's "What's new" link is 
   cursor: default;
 }
 
-.bento-el-code span {
-  display: inline-flex;
+/* Code tokens the morph may MOVE. A CSS transform does nothing to a
+   non-replaced inline element — accepted, readable back on style.transform,
+   and zero pixels of movement — so a token has to be an atomic inline-level
+   box before it can travel. LOAD-BEARING: delete this and code morphs stop
+   animating silently, with no error anywhere.
+
+   Scoped to [data-tok] rather than every span on purpose: the renderer sets
+   the attribute only on tokens with ink. Whitespace and newline tokens must
+   stay inline — a newline inside an atomic box no longer breaks the line
+   under `white-space: pre`, and the block collapses to one rendered line
+   (identically under inline-block and inline-flex; the display value was
+   never the variable that mattered). */
+.bento-el-code [data-tok] {
+  display: inline-block;
 }
 
 /* A hidden slide is still an ordinary, editable slide — it is just out of the

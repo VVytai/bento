@@ -1,117 +1,104 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 The Bento authors
+//
+// Render bridge for code elements: kernel tokens -> HeckelDiff identities ->
+// morphable spans. The diff engine (diff.ts) decides WHICH token on slide N is
+// the same token as on slide N-1; this file only turns that answer into DOM.
+//
+// Tokens are emitted as `data-sym` spans inside the element's own
+// `data-flip-id` host — the same sub-element channel the formula morph uses —
+// NOT as per-token flip ids. The morph engine is model-driven: a flip id with
+// no model entry is skipped by every matched-pair consumer, so per-token flip
+// ids animate insertions (the entering path needs no model) but let matched
+// tokens TELEPORT. data-sym offsets are measured per host on slide entry and
+// tweened on exit (present.ts cacheSlideSymbols/morphMathSymbols), which is
+// what makes a moved line travel.
 
-import { ThemedToken } from 'shiki'
-import { Element } from 'hast'
-import { BentoDoc, CodeElement } from './model';
-import { sanitizeHtml } from './render';
-import { getOrCreateHighlighter, HeckelDiff, Insert, State, Token, Delete, Match } from './diff';
+import { BentoDoc, CodeElement } from './model'
+import { HeckelDiff, type Match, type Insert, type Delete } from './diff'
 
-let diff: HeckelDiff | undefined = undefined
-
-export type RenderCodeResult = {
-  /** The HTML representation when the `CodeElement` has a `grammar` and a `theme` defined. */
-  html?: string,
+/**
+ * Seven colours, not four hundred scopes — the zero-cost tier. When the
+ * signed-extension tier lands, grammarAssetId/themeAssetId select real
+ * TextMate rendering and this map becomes the fallback.
+ */
+const CODE_COLORS: Record<string, string> = {
+  c: '#6b7f8f', // comment
+  s: '#c98a3e', // string
+  n: '#b0688f', // number
+  k: '#5b8def', // keyword
+  f: '#3fa9a0', // call
+  p: '#7c8794', // punctuation
+  a: '#3f9142', // diff: added
+  d: '#c25a43', // diff: removed
+  x: '',        // plain: inherit the element colour
 }
 
 /**
- * This returns the HTML representation of the `CodeElement` when the corresponding `grammar` and `theme` is defined.
- * Otherwise, it returns undefined.
+ * Memoized per (morph group, content). The previous module-level singleton was
+ * cached forever — built from the first document it saw and never invalidated,
+ * so live edits kept diffing yesterday's content. Identity-keyed caching does
+ * not work either: store.commit mutates the doc IN PLACE (verified — commit()
+ * runs mutate() on the live object), so no object identity changes on edit.
+ * The signature is the group's actual inputs, which is the only thing the
+ * diff depends on; unchanged content across present-mode's repeated renders
+ * still hits the cache, and any edit anywhere in the group busts it.
  */
-export function renderCode(el: CodeElement, doc: BentoDoc) {
-  const mid = el.morphId
-  let sanitized: string | undefined = undefined
-  if (el.grammarAssetId && el.themeAssetId && el.grammarName && el.themeName) {
-    const slideIdx = slideIndex(el, doc)
-    const diff = getOrCreateDiff(doc)
-    const map = diff.computeDiffs(mid)
-    const states: State[] = map.get(slideIdx) ?? []
-    const highlighter = getOrCreateHighlighter(doc, el.grammarAssetId, el.themeAssetId)
-    const html = highlighter.codeToHtml(el.content, {
-      // Bad typings here
-      lang: el.grammarName as any,
-      theme: el.themeName as any,
-      includeExplanation: 'scopeName',
-      mergeSameStyleTokens: false,
-      transformers: [
-        {
-          // @ts-expect-error : We don't really need col, and lineElement
-          span(hast: Element, line: number, col: number, lineElement: Element, token: ThemedToken) {
-            // 0-indexed line number
-            const lineNumber = line - 1
-            // There should always be a matching state, but if we do intermediate renders then we
-            // should still gracefully recover.
-            const state = findMatchingState(states, lineNumber, token)
-            if (state) {
-              const id = morphId(state)
-              hast.properties['data-flip-id'] = id
-            } else {
-              console.warn('Inconsistent States:', states, 'Line Number:', lineNumber, 'Token:', token)
-            }
-          },
-        }
-      ]
-    })
-    // sanitizeHtml(...) strips away all the skiki background styles.
-    // That part, is great given the background no longer interferes with rendering.
-    sanitized = sanitizeHtml(html)
-  }
-  return {
-    html: sanitized
-  }
-}
+const diffCache = new Map<string, ReturnType<HeckelDiff['computeDiffs']>>()
 
-function getOrCreateDiff(doc: BentoDoc): HeckelDiff {
-  if (!diff) {
-    diff = new HeckelDiff(doc)
-  }
-  return diff
-}
-
-/** Computes the slide index for the `CodeElement` being rendered. */
-function slideIndex(el: CodeElement, doc: BentoDoc): number {
-  const slides = doc.slides
-  for (let i = 0; i < slides.length; i += 1) {
-    const slide = slides[i]
-    const filtered = slide.elements.filter(element => element === el)
-    if (filtered && filtered.length > 0) return i
-  }
-  // Should never really happen
-  return -1
-}
-
-function findMatchingState(states: State[], lineNumber: number, themedToken: ThemedToken): State | undefined {
-  const token = Token.fromThemed(lineNumber, themedToken)
-  const state = states.find((state) => {
-    const kind = state.kind
-    if (kind === 'empty') {
-      return false
-    } else if (kind === 'insert') {
-      const insert = state as Insert
-      return insert.token.key() === token.key() && insert.token.lineNumber === token.lineNumber && insert.token.offset === token.offset
-    } else if (kind === 'delete') {
-      const del = state as Delete
-      return del.token.key() === token.key() && del.token.lineNumber === token.lineNumber && del.token.offset === token.offset
-    } else if (kind === 'match') {
-      const match = state as Match
-      return match.current.key() === token.key() && match.current.lineNumber === token.lineNumber && match.current.offset === token.offset
+function diffFor(doc: BentoDoc, morphKey: string) {
+  const parts: string[] = [morphKey]
+  doc.slides.forEach((slide, i) => {
+    for (const el of slide.elements) {
+      if (el.type !== 'code') continue
+      const code = el as CodeElement
+      if ((code.morphId ?? code.id) !== morphKey) continue
+      parts.push(`${i}\u001f${code.grammarName ?? ''}\u001f${code.content ?? ''}`)
     }
-    return false
   })
-  return state
+  const sig = parts.join('\u001e')
+  let states = diffCache.get(sig)
+  if (!states) {
+    if (diffCache.size > 32) diffCache.clear() // decks have few groups; stay tiny
+    states = new HeckelDiff(doc).computeDiffs(morphKey)
+    diffCache.set(sig, states)
+  }
+  return states
 }
 
-function morphId(state: State): string {
-  let id = ''
-  if (state.kind === 'insert') {
-    const insert = state as Insert
-    id = insert.token.morphId()
-  } else if (state.kind === 'delete') {
-    const del = state as Delete
-    id = del.token.morphId()
-  } else if (state.kind === 'match') {
-    const match = state as Match
-    id = match.current.morphId()
+/**
+ * Build the element's token spans into `pre`. Returns false when the element
+ * has no content (caller falls back to plain text).
+ */
+export function renderCodeInto(pre: HTMLElement, el: CodeElement, doc: BentoDoc): boolean {
+  const morphKey = el.morphId ?? el.id
+  const slideIdx = doc.slides.findIndex((s) => s.elements.some((e) => e.id === el.id))
+  if (slideIdx < 0) return false
+  const states = diffFor(doc, morphKey)
+  const slideStates = states.get(slideIdx)
+  if (!slideStates) return false
+  for (const state of slideStates) {
+    if (state.kind === 'empty') continue
+    // Empty is typed { kind: string }, so kind checks cannot discriminate the
+    // union — narrow by hand once it is excluded.
+    const st = state as Match | Insert | Delete
+    const token = st.kind === 'match' ? st.current : st.token
+    const span = document.createElement('span')
+    span.dataset.sym = token.morphId()
+    span.textContent = token.content
+    // Marks a token the morph may MOVE — styles.css gives these
+    // display:inline-block, because a transform does NOTHING to a non-replaced
+    // inline element (accepted, read back verbatim, zero pixels of movement).
+    // Newline and whitespace tokens must stay inline: a newline inside an
+    // atomic inline-level box stops breaking the line under white-space:pre.
+    // diff.ts fromTok has already split multiline tokens, so ink never
+    // carries a newline here.
+    if (/\S/.test(token.content)) span.dataset.tok = ''
+    const color = CODE_COLORS[token.scopes[0] ?? 'x']
+    if (color) span.style.color = color
+    const kind = token.scopes[0]
+    if (kind === 'k' || kind === 'f') span.style.fontWeight = '600'
+    pre.appendChild(span)
   }
-  return id
+  return pre.childNodes.length > 0
 }
