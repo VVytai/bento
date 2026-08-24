@@ -251,6 +251,13 @@ jobs:
         # a code block to one line with no error anywhere.
         run: node scripts/test-tokenize.ts
 
+      - name: Code-morph identity engine
+        # HeckelDiff decides which token on slide N is the same token as on
+        # slide N-1; every wrong answer is a token that jumps, tears, or steals
+        # another token's journey on screen. Regressions for the three pairing
+        # bugs found in review ride along.
+        run: node scripts/test-codediff.ts
+
       - name: First-page preview rig
         # Every save writes a static render of page one for file-manager
         # thumbnails. Two decisions in that path fail silently: an encrypted

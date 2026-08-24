@@ -6,7 +6,10 @@
 // for a future signed-extension tier with real TextMate grammars; the diff
 // below never cared where tokens come from, which is what makes both tiers
 // share one engine.
-import { BentoDoc, Slide } from "./model"
+// import type, deliberately: only type names are used, and the erased import
+// is what lets scripts/test-codediff.ts run this file under plain node
+// (extensionless runtime imports do not resolve there).
+import type { BentoDoc, Slide } from "./model"
 import { tokenize, type Tok } from "../../kernel/src/tokenize.ts"
 
 // The stable token that we can diff between slides.
