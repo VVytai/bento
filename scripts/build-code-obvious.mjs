@@ -33,8 +33,9 @@ const text = (html, x, y, w, h, o = {}) => ({
 const code = (content, o = {}) => ({
   id: id('c'), type: 'code', morphId: o.group ?? 'walkthrough',
   x: 96, y: 200, w: 1088, h: 460, rotation: 0, opacity: 1,
-  content, lang: o.lang ?? 'ts', color: '#DCE3EC',
-  fontSize: o.size ?? 34, lineHeight: 1.55,
+  content, grammarName: o.lang ?? 'ts', color: '#DCE3EC',
+  fontSize: o.size ?? 34, lineHeight: 1.55, align: 'left', valign: 'top',
+  fontFamily: "ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas', monospace",
 })
 
 const slide = (elements, o = {}) => ({
