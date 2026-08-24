@@ -105,6 +105,8 @@ export class Editor {
   private sidebar!: HTMLElement
   private statusEl!: HTMLElement
   private overlay: HTMLElement | null = null
+  /** undo whatever the open popover attached to the window */
+  private overlayReflow: (() => void) | null = null
   /** set while the editor is writing the DOM, so input handlers stand down */
   private painting = false
   /** reading view: the document without the machinery for changing it */
@@ -346,6 +348,9 @@ export class Editor {
       { icon: 'print', label: t('Print or save as PDF'), hint: '⌘P', run: () => this.openPrint() },
       { icon: 'info', label: t('About this space'), hint: t('Version, language, password, exports'),
         run: () => this.openAbout() },
+      // A help screen only reachable by pressing the key it documents is a
+      // help screen for people who did not need it.
+      { icon: 'help', label: t('Keyboard shortcuts'), hint: '?', run: () => this.openHelp() },
     ]
 
     const inlineSecondary = barActions.map((a) => {
@@ -1458,7 +1463,7 @@ export class Editor {
     this.overlay = pop
     document.body.append(pop)
     if (this.isDrawer()) pop.classList.add('sp-sheet-in')
-    else place(pop, anchor)
+    else this.placed(pop, anchor)
     const away = (ev: MouseEvent) => {
       if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
     }
@@ -1661,7 +1666,7 @@ export class Editor {
     this.overlay = pop
     document.body.append(pop)
     if (this.isDrawer()) pop.classList.add('sp-sheet-in')
-    else place(pop, anchor)
+    else this.placed(pop, anchor)
     const away = (ev: MouseEvent) => {
       if (!pop.contains(ev.target as Node)) { this.closeOverlay(); document.removeEventListener('mousedown', away) }
     }
@@ -2923,6 +2928,8 @@ export class Editor {
     // takes a keystroke as readily as an input does.
     if (!mod && e.key === '[' && !isTyping()) { e.preventDefault(); this.togglePane(); return }
     if (!mod && e.key === ']' && !isTyping()) { e.preventDefault(); this.toggleInsp(); return }
+    // Same guard as [ and ]: '?' is a character somebody is entitled to type.
+    if (!mod && e.key === '?' && !isTyping()) { e.preventDefault(); this.openHelp(); return }
     if (mod && e.shiftKey && e.key.toLowerCase() === 'i') { e.preventDefault(); this.newIssue(); return }
     if (mod && e.key.toLowerCase() === 'z') {
       e.preventDefault()
@@ -3140,7 +3147,123 @@ export class Editor {
     card.querySelector<HTMLElement>('input,button,[tabindex]')?.focus()
   }
 
+  /**
+   * The shortcut list.
+   *
+   * Every shortcut here was read off the keydown handler rather than off the
+   * documentation, because a help screen that lists a key the app does not
+   * bind is worse than no help screen: it makes the reader doubt the keyboard
+   * rather than the page. The starter space describes the same keys in prose,
+   * but the starter is a document — the first thing many people do is delete
+   * it, and the reference should not go with it.
+   *
+   * Built on .sp-overlay/.sp-card, the About dialog's shell, so it inherits
+   * the dialog's scrim, escape handling and focus return rather than growing a
+   * second set.
+   */
+  openHelp(): void {
+    this.closeOverlay()
+    const returnFocus = document.activeElement as HTMLElement | null
+    const back = el('div', 'sp-overlay')
+    const card = el('div', 'sp-card sp-keys')
+    card.setAttribute('role', 'dialog')
+    card.setAttribute('aria-modal', 'true')
+    card.setAttribute('aria-label', t('Keyboard shortcuts'))
+
+    const close = () => {
+      back.remove()
+      document.removeEventListener('keydown', onKey, true)
+      returnFocus?.focus?.()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); close() }
+    }
+
+    const h = el('h2', 'sp-card-h', t('Keyboard shortcuts'))
+    card.append(h)
+
+    const groups: Array<[string, Array<[string, string]>]> = [
+      [t('Writing'), [
+        ['↵', t('A new block')],
+        ['Tab / ⇧Tab', t('Indent, or move back out')],
+        ['/', t('The block menu, on an empty line')],
+        ['[[', t('Link to another page')],
+        ['⌘Z / ⇧⌘Z', t('Undo, redo')],
+      ]],
+      [t('Formatting'), [
+        ['⌘B', t('Bold')],
+        ['⌘I', t('Italic')],
+        ['⌘U', t('Underline')],
+        ['⇧⌘S', t('Strikethrough')],
+        ['⌘E', t('Code')],
+        ['⇧⌘H', t('Highlight')],
+        ['⌘K', t('Link the selected words')],
+      ]],
+      [t('Getting around'), [
+        ['⌘K', t('Search all pages, with nothing selected')],
+        ['⌘F', t('Find and replace')],
+        ['⌘⌥N', t('New page')],
+        ['⌘⇧J', t("Today's journal")],
+        ['⌘⇧I', t('New issue')],
+      ]],
+      [t('The workspace'), [
+        ['[', t('Show or hide the page list')],
+        [']', t('Show or hide properties')],
+        ['⌘S', t('Save')],
+        ['⌘P', t('Print or save as PDF')],
+        ['?', t('This list')],
+        ['Esc', t('Leave the reading view')],
+      ]],
+    ]
+
+    // Two columns where there is room. In one column the four groups run to
+    // 23 rows and the last three fall off the bottom of the card — a help
+    // screen that hides the help, which is the same defect this pass just took
+    // out of the share panel. The grid collapses to one column on a phone,
+    // where scrolling a list is what you expect anyway.
+    const grid = el('div', 'sp-keys-grid')
+    for (const [title, rows] of groups) {
+      const g = el('section', 'sp-keys-g')
+      g.append(el('h3', 'sp-keys-h', title))
+      const list = el('dl', 'sp-keys-list')
+      for (const [key, what] of rows) {
+        const dt = el('dt', '', '')
+        dt.append(el('kbd', 'sp-kbd', key))
+        list.append(dt, el('dd', '', what))
+      }
+      g.append(list)
+      grid.append(g)
+    }
+    card.append(grid)
+
+    back.append(card)
+    back.addEventListener('click', (e) => { if (e.target === back) close() })
+    document.addEventListener('keydown', onKey, true)
+    document.body.append(back)
+    card.tabIndex = -1
+    card.focus()
+  }
+
+  /**
+   * Place a popover AND keep it placed.
+   *
+   * place() sizes a popover to the room the window has right now, so its answer
+   * stops being true the moment the window changes. Stale in the small-to-large
+   * direction merely misplaces a box; stale the other way CLIPS it, which is
+   * the bug this change exists to remove — the 44vh it replaces at least
+   * tracked the viewport. Both popover call sites go through here so neither
+   * can forget.
+   */
+  private placed(pop: HTMLElement, anchor: HTMLElement): void {
+    place(pop, anchor)
+    const reflow = () => place(pop, anchor)
+    addEventListener('resize', reflow)
+    this.overlayReflow = () => removeEventListener('resize', reflow)
+  }
+
   private closeOverlay(): void {
+    this.overlayReflow?.()
+    this.overlayReflow = null
     this.overlay?.remove()
     this.overlay = null
   }
@@ -5020,17 +5143,36 @@ function caretRect(): DOMRect {
   return new DOMRect(80, 120, 0, 0)
 }
 
-/** Place a popover near an anchor without letting it leave the viewport. */
+/**
+ * Place a popover near an anchor without letting it leave the viewport.
+ *
+ * THE HEIGHT IS THE ROOM IT ACTUALLY HAS, not a fraction of the window. The
+ * CSS capped every popover at 44vh, which on a 900px-tall window is 396px —
+ * and the share panel wants 543. Measured before this: 149px clipped, with
+ * "Start live session" and "Reset access…" both below the fold. The primary
+ * action of the sharing panel was reachable only by noticing that a box with
+ * no visible scrollbar scrolls. A laptop at 800px fares worse.
+ *
+ * So the cap is computed per placement: pick the side with more room, give the
+ * popover that room, and only then measure to position it. The floor is 160px
+ * because a popover squeezed under a control near the bottom edge should flip
+ * rather than become a slot.
+ */
 function place(pop: HTMLElement, anchor: HTMLElement | DOMRect): void {
   const r = anchor instanceof HTMLElement ? anchor.getBoundingClientRect() : anchor
+  const GAP = 6, EDGE = 8
+  const below = innerHeight - r.bottom - GAP - EDGE
+  const above = r.top - GAP - EDGE
+  const useBelow = below >= above || below >= 320
+  pop.style.maxHeight = `${Math.max(160, useBelow ? below : above)}px`
+  // measured AFTER the cap, so a flip decides on the height the popover will
+  // actually have rather than the one CSS would have forced on it
   const w = pop.offsetWidth || 260
   const h = pop.offsetHeight || 260
   let left = r.left
-  let top = r.bottom + 6
-  if (left + w > innerWidth - 8) left = Math.max(8, innerWidth - w - 8)
-  if (top + h > innerHeight - 8) top = Math.max(8, r.top - h - 6)
-  pop.style.left = `${Math.max(8, left)}px`
-  pop.style.top = `${top}px`
+  if (left + w > innerWidth - EDGE) left = Math.max(EDGE, innerWidth - w - EDGE)
+  pop.style.left = `${Math.max(EDGE, left)}px`
+  pop.style.top = `${useBelow ? r.bottom + GAP : Math.max(EDGE, r.top - h - GAP)}px`
 }
 
 /**

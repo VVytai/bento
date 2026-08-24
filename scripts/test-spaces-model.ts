@@ -357,6 +357,76 @@ for (const [label, input, err] of [
   ok(/store\.replaceDoc\(restored\)/.test(about), '…and restores through replaceDoc, so ⌘Z walks it back')
 }
 
+// ---- a popover is as tall as the room it has ------------------------------
+// .sp-pop carried `max-height: 44vh`. On a 900px window that is 396px, and the
+// share panel wants 543 — measured: 149px clipped, with "Start live session"
+// and "Reset access…" both below the fold. The primary action of the sharing
+// panel was reachable only by noticing that a box showing no scrollbar scrolls.
+// A 13" laptop is worse.
+{
+  const fs = await import('node:fs')
+  const ed = fs.readFileSync(new URL('../spaces/src/editor.ts', import.meta.url), 'utf8')
+  const css = fs.readFileSync(new URL('../spaces/src/styles.css', import.meta.url), 'utf8')
+  const props = fs.readFileSync(new URL('../spaces/src/props.ts', import.meta.url), 'utf8')
+
+  ok(!/\.sp-pop \{[^}]*max-height: 44vh/.test(css), 'the popover is not capped at a fraction of the window')
+  ok(/pop\.style\.maxHeight = /.test(ed), '…place() gives it the room the anchor actually leaves')
+  // Both popover builders must route through the helper, or the one that does
+  // not will size itself once and stay that size while the window moves.
+  const viaHelper = (ed.match(/else this\.placed\(pop, anchor\)/g) ?? []).length
+  ok(viaHelper === 2, 'both popover call sites place through the same helper')
+  ok(/addEventListener\('resize', reflow\)/.test(ed), '…which re-places on resize')
+  ok(/removeEventListener\('resize', reflow\)/.test(ed), '…and takes the listener back off when it closes')
+
+  // THE EXTRACTOR SWEEPS LITERALS. A helper that picks a key —
+  // `t(n === 1 ? one : many)` — compiles, runs, and is never translated by
+  // anyone, because no catalog ever learns the strings exist. This cost a round
+  // trip while the plural was being written, and the model rig is where that
+  // lesson is cheap to keep.
+  for (const key of ['{n} block', '{n} blocks', '{n} word', '{n} words',
+                     '{n} link to this page', '{n} links to this page']) {
+    ok(props.includes(`t('${key}'`), `the panel's "${key}" is a literal at its own call site, so it is swept`)
+  }
+  ok(!/\{blocks\} blocks · \{words\} words/.test(props),
+    '…and the old one-string-three-plurals stat is gone (it read "1 blocks · 1 words")')
+}
+
+// ---- the shortcut list documents keys that exist --------------------------
+// A help screen listing a key the app does not bind is worse than no help
+// screen: the reader doubts their keyboard rather than the page, and there is
+// no way for them to tell which of the two is wrong. So every ⌘-letter the
+// overlay prints is checked against the keydown handler that would have to
+// implement it. The prose in the starter space says the same things, but the
+// starter is a DOCUMENT — deleting it is the first thing many people do, and
+// the reference should not go with it.
+{
+  const fs = await import('node:fs')
+  const ed = fs.readFileSync(new URL('../spaces/src/editor.ts', import.meta.url), 'utf8')
+
+  ok(/openHelp\(\): void/.test(ed), 'there is a shortcut list')
+  ok(/e\.key === '\?' && !isTyping\(\)/.test(ed),
+    "…opened by ? , behind the same isTyping guard as [ and ] (it is a character people type)")
+  ok(/label: t\('Keyboard shortcuts'\)/.test(ed),
+    '…and reachable from the menu, not only by the key it documents')
+
+  // Pull the ⌘-letters out of the overlay's own table and demand a binding for
+  // each. Letters only: the modifiers differ per branch and the point is that
+  // the key is handled at all, not how.
+  const from = ed.indexOf('const groups: Array<[string, Array<[string, string]>]>')
+  const table = ed.slice(from, ed.indexOf("const grid = el('div', 'sp-keys-grid')", from))
+  const letters = new Set<string>()
+  for (const m of table.matchAll(/'[⌘⇧⌥]*⌘([A-Z])'/g)) letters.add(m[1].toLowerCase())
+  ok(letters.size >= 8, `the list actually names shortcuts (${letters.size} found)`)
+  for (const c of [...letters].sort()) {
+    // Both spellings the file uses: the long `e.key.toLowerCase() === 'x'` of
+    // the command branches, and the short `k === 'x'` inside markKey(), which
+    // is where ⌘B/I/U/E and ⇧⌘S/H actually live. Matching only the long one
+    // reported ⌘U and ⌘H as unbound when they are bound three lines apart.
+    const bound = new RegExp(`=== '${c}'`).test(ed)
+    ok(bound, `⌘${c.toUpperCase()} in the list is a key something actually binds`)
+  }
+}
+
 // ---- find & replace: the number shown IS the number changed ----------------
 // Replace-all is destructive and lands in one commit, so the count in the
 // readout, the count in the confirmation and the count of things that change
