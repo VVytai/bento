@@ -477,11 +477,31 @@ a.ed-btn { text-decoration: none; }  /* the update block's "What's new" link is 
 .bento-slide { position: relative; overflow: hidden; }
 
 .bento-el { position: absolute; contain: layout style; }
-.bento-el-text .bento-text-inner {
+
+.bento-el-text,
+.bento-el-code
+ .bento-text-inner {
   overflow-wrap: break-word;
   outline: none;
   cursor: default;
 }
+
+/* Code tokens the morph may MOVE. A CSS transform does nothing to a
+   non-replaced inline element — accepted, readable back on style.transform,
+   and zero pixels of movement — so a token has to be an atomic inline-level
+   box before it can travel. LOAD-BEARING: delete this and code morphs stop
+   animating silently, with no error anywhere.
+
+   Scoped to [data-tok] rather than every span on purpose: the renderer sets
+   the attribute only on tokens with ink. Whitespace and newline tokens must
+   stay inline — a newline inside an atomic box no longer breaks the line
+   under `white-space: pre`, and the block collapses to one rendered line
+   (identically under inline-block and inline-flex; the display value was
+   never the variable that mattered). */
+.bento-el-code [data-tok] {
+  display: inline-block;
+}
+
 /* A hidden slide is still an ordinary, editable slide — it is just out of the
    show. Dimmed rather than greyed out, and the number struck through, so the
    sidebar reads as "this one will be skipped" without looking broken. */
@@ -1087,7 +1107,7 @@ a.ed-btn { text-decoration: none; }  /* the update block's "What's new" link is 
 
 /* inline code spans inside text elements — editor, present and print alike */
 .bento-el-text code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: ui-monospace, SFMono-Regular, Berkeley Mono, Menlo, Consolas, monospace;
   font-size: 0.9em;
   background: rgb(127 127 127 / 0.16);
   padding: 0 0.28em;
