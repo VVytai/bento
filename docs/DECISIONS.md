@@ -14,6 +14,81 @@ Decision. Why. Pointers.
 
 ---
 
+## 2026-08-19 — Cross-app embedding: static render + source, never a second renderer
+
+**Decision.** One block/element shape, `bento/embed`, shared by every app in both
+directions (a Dash chart in a Type contract, a Type doc in a Spaces page, either
+in a Slides deck):
+
+```
+{ kind:'embed', app:'bento/dash', doc:{…}|'asset:…', view:'<svg…>', w, h, caption? }
+```
+
+Three tiers, and the ORDER is the design. `view` — a static render — is always
+present, so the embed paints in any app with zero extra code, thumbnails, and
+prints. `doc` — the source — is always present, so it round-trips: open in Dash,
+edit, come back. A live sandboxed iframe is OPT-IN per embed, never the default.
+
+**Why.** Embedding the other app's renderer means shipping every renderer in
+every file to cover the matrix (each is 100KB+) and living with version skew
+between the embedded copy and the real app. The static render is what makes a
+self-contained file self-contained; the source is what stops it being a
+screenshot. A Bento file IS a runnable page, so `srcdoc` genuinely works for a
+live chart — but it is opt-in because most embeds do not need it and every one
+of them would cost the file a full shell.
+
+Constraints this inherits, not new ones: format additivity (PLATFORM §3) means
+an app that does not know `bento/dash` still shows the render plus an "open
+in…" affordance, never a hole; the splice contract (§2) means the payload can
+never carry a bare `</script>`, so it is escaped like `#bento-doc` or stored as
+an asset; and since every document is untrusted input, a live iframe is
+sandboxed with no same-origin. Default to data + render — embedding a 500KB
+shell per chart is how a contract becomes 3MB.
+
+**Status.** The SHAPE is settled here so the apps do not each invent one. The
+shared definition belongs in the kernel and is therefore a serialized kernel
+change of its own (PARALLEL-WORK §1): it has not been made. bento/type
+implements the consumer side in its own app zone against this shape, so the
+kernel lift is a move, not a redesign.
+
+**Pointers.** `type/src/embed.ts`, `docs/PLATFORM.md` §2–§3.
+
+---
+
+## 2026-08-24 — The tree moved to `home/`, and the identifiers moved with it
+
+**Decision.** `tray/` is now `home/`, `applicationId` and
+`PRODUCT_BUNDLE_IDENTIFIER` are `page.bento.home`, and the update channel is
+`https://bento.page/releases/home/manifest.json`. This supersedes the scope
+paragraph and the bundle-identifier bullet in the rename entry above.
+
+**Why the earlier decision was right when it was made, and wrong to keep.** It
+was written while `tray/ios` (#315) and the Android work were both open in
+`tray/`; moving the tree under them would have turned two mergeable branches
+into conflict resolution. That was a real cost and a correct call at the time.
+Both landed, and the reason expired.
+
+The bundle-identifier bullet expired differently. Its argument was explicitly
+conditional — changing the id "creates a different one that cannot update the
+installed copy". There was no installed copy, no App Store Connect record and no
+Play listing. Those three facts are what made it free, and all three stop being
+true at first publish. **This was the last moment the identifiers could move.**
+
+**What did NOT move, and why the line is there.** Rename what the outside world
+sees or what becomes permanent on publish; leave what is internal and guarded:
+
+- **The IndexedDB name stays `bento-tray`** (`home/webext/src/db.js`).
+  `scripts/test-webext-background.ts` asserts it — a deliberate guard against
+  silently orphaning every stored grant. Nobody outside the extension ever sees
+  it, so renaming it would have meant editing a gate to let a cosmetic change
+  through.
+- **`bento-tray://` (iOS) and `.bento-tray.invalid` (Android)** stay. They are
+  per-document origins, settled in their own entries, and invisible.
+
+**The cost, stated.** Every path reference moved: 18 files outside the tree, 35
+inside it, plus the Kotlin package `page.bento.tray` → `page.bento.home` and the
+`tray-icon`/`tray-logo`/`ic_tray_mark` assets. That churn is what the original
+entry warned about, and it was the price of not carrying a dead name forever.
 ## 2026-08-25 — The tray hosts are called `bento/home`
 
 **Decision.** All three hosts are named **`bento/home`** — lowercase, with the
