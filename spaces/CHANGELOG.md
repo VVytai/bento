@@ -14,6 +14,33 @@ Versions follow `0.MINOR.PATCH` while pre-1.0.
 
 ## [Unreleased]
 
+- **Every displayed word reaches the catalogs.** The view layout button read
+  English in all eight languages: it was written `t(LAYOUT_WORD[here])`, and the
+  extractor sweeps LITERALS, so no catalog ever learned the strings existed —
+  while the coverage figure said 100%, because it counts what it swept.
+  "Board", "List" and "Show as a list" were sitting translated in the catalogs
+  and being dropped. The same shape hid five of the six property-type names
+  (Select, Number, Date, Person, Labels), which were in no catalog at all. Both
+  now choose their words at the call site, and a rig check fails on any `t()`
+  that reads a map the extractor cannot see.
+
+- **Page covers, and a gallery to show them off.** A page can carry a picture
+  across the top of it — chosen in the properties panel beside the icon, and
+  the page's own icon rides up over its lower edge. A view has a fourth shape
+  in the layout cycle: **Gallery**, a grid of cards showing each page's cover,
+  its title and the values it carries. That is the shape that makes a reading
+  list or a film log look like one rather than like a backlog.
+
+  **A cover is never a URL.** `asset:` or `data:` only, for the same reason a
+  page icon is one emoji and never an address: opening a document must not
+  touch the network. A file that arrives carrying a remote cover keeps the
+  field and shows no picture, and the validator says so. Covers go through the
+  same pipeline an image block does — downscaled before they travel, stored
+  once however many pages use them, the same question asked above 4MB.
+
+  Additive: absent on every page written before this, and a card with no cover
+  gets a tinted panel of its own carrying the page's icon.
+
 - **A graph view.** ⋯ → *Graph* draws the space as its pages and the links
   between them: every non-archived page is a node, sized by how connected it
   is, joined by an edge for every `[[wikilink]]` and for every parent/child
