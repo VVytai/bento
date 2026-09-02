@@ -2101,6 +2101,11 @@ body.ed-col-resizing { cursor: col-resize; user-select: none; }
    set of buttons and is the least-used half. The list it opens is not lost —
    editor.ts appends it to the bottom of ⋯ while the fold is on. */
 .ed-topbar.ed-bar-fold .ed-split-caret { display: none; }
+.ed-topbar.ed-bar-fold .ed-split > .ed-btn:first-child {
+  border-start-end-radius: 8px;
+  border-end-end-radius: 8px;
+  border-inline-end: 1px solid var(--line);
+}
 /* ⋯ carries the demoted buttons AND that list, so it can outgrow the
    screen in BOTH directions.
    Down: without a bound it runs off the bottom, and a dropdown is absolutely
