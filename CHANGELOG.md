@@ -220,6 +220,15 @@ pre-1.0.
   Touch only, so phones and tablets, and it needed an element under your
   fingers — which on a slide is the ordinary case.
 
+- **Filipino is now offered to people whose browser is set to Filipino.** The
+  pack was filed under `tl`, the ISO 639-1 code for Tagalog, but browsers,
+  Android, iOS and macOS all report Filipino as `fil` / `fil-PH` — so the pack
+  could never be picked up automatically and only appeared if you went looking
+  for it by hand. It is filed as `fil` now, with `tl` kept as an alias so a
+  system that does report the old code still lands on it, and so a file already
+  carrying the pack keeps working. Turkmen (`tk`) was checked at the same time
+  and needed no change: `tk-TM` is what a Turkmen system reports.
+
 ## [1.0.18] — 2026-08-15
 
 - **Security: offline mode did not block everything it promised.** The switch
