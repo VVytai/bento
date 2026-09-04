@@ -4,6 +4,17 @@
 import type { Catalog } from '../i18n'
 
 export const de: Catalog = {
+  "This text box is already bold": "Dieses Textfeld ist bereits fett",
+  "Italic": "Kursiv",
+  "Underline": "Unterstrichen",
+  "Strikethrough": "Durchgestrichen",
+  "Code": "Code",
+  "Title text": "Titeltext",
+  "Heading": "Überschrift",
+  "Body text": "Fließtext",
+  "Bulleted list": "Aufzählung",
+  "Numbered list": "Nummerierte Liste",
+  "Clear formatting": "Formatierung entfernen",
   "Cut": "Ausschneiden",
   "Copy": "Kopieren",
   "Paste": "Einfügen",

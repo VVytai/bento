@@ -4,6 +4,17 @@
 import type { Catalog } from '../i18n'
 
 export const zhHant: Catalog = {
+  "This text box is already bold": "此文字方塊已是粗體",
+  "Italic": "斜體",
+  "Underline": "底線",
+  "Strikethrough": "刪除線",
+  "Code": "程式碼",
+  "Title text": "標題文字",
+  "Heading": "小標題",
+  "Body text": "內文",
+  "Bulleted list": "項目符號清單",
+  "Numbered list": "編號清單",
+  "Clear formatting": "清除格式",
   "Cut": "剪下",
   "Copy": "複製",
   "Paste": "貼上",

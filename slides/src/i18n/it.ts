@@ -4,6 +4,17 @@
 import type { Catalog } from '../i18n'
 
 export const it: Catalog = {
+  "This text box is already bold": "Questa casella di testo è già in grassetto",
+  "Italic": "Corsivo",
+  "Underline": "Sottolineato",
+  "Strikethrough": "Barrato",
+  "Code": "Codice",
+  "Title text": "Testo del titolo",
+  "Heading": "Intestazione",
+  "Body text": "Testo normale",
+  "Bulleted list": "Elenco puntato",
+  "Numbered list": "Elenco numerato",
+  "Clear formatting": "Cancella formattazione",
   "Cut": "Taglia",
   "Copy": "Copia",
   "Paste": "Incolla",

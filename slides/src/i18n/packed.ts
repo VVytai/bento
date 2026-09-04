@@ -15,6 +15,17 @@ export const PACKED_LOCALES = ["ja","zh-Hans","zh-Hant","es","fr","de","it","pt"
 
 /** English source string -> translations, positional by PACKED_LOCALES. */
 export const PACKED: Record<string, ReadonlyArray<string | 0>> = {
+  "This text box is already bold": ["このテキストボックスはすでにボールドです","此文本框已是粗体","此文字方塊已是粗體","Este cuadro de texto ya está en negrita","Cette zone de texte est déjà en gras","Dieses Textfeld ist bereits fett","Questa casella di testo è già in grassetto","Esta caixa de texto já está em negrito"],
+  "Italic": ["斜体","斜体","斜體","Cursiva","Italique","Kursiv","Corsivo","Itálico"],
+  "Underline": ["下線","下划线","底線","Subrayado","Souligné","Unterstrichen","Sottolineato","Sublinhado"],
+  "Strikethrough": ["取り消し線","删除线","刪除線","Tachado","Barré","Durchgestrichen","Barrato","Tachado"],
+  "Code": ["コード","代码","程式碼","Código","Code","Code","Codice","Código"],
+  "Title text": ["タイトル文字","标题文字","標題文字","Texto de título","Texte de titre","Titeltext","Testo del titolo","Texto de título"],
+  "Heading": ["見出し","小标题","小標題","Encabezado","Titre","Überschrift","Intestazione","Cabeçalho"],
+  "Body text": ["本文","正文","內文","Texto normal","Corps de texte","Fließtext","Testo normale","Texto normal"],
+  "Bulleted list": ["箇条書き","项目符号列表","項目符號清單","Lista con viñetas","Liste à puces","Aufzählung","Elenco puntato","Lista com marcadores"],
+  "Numbered list": ["番号付きリスト","编号列表","編號清單","Lista numerada","Liste numérotée","Nummerierte Liste","Elenco numerato","Lista numerada"],
+  "Clear formatting": ["書式をクリア","清除格式","清除格式","Borrar formato","Effacer la mise en forme","Formatierung entfernen","Cancella formattazione","Limpar formatação"],
   "Cut": ["切り取り","剪切","剪下","Cortar","Couper","Ausschneiden","Taglia","Recortar"],
   "Copy": ["コピー","复制","複製","Copiar","Copier","Kopieren","Copia","Copiar"],
   "Paste": ["貼り付け","粘贴","貼上","Pegar","Coller","Einfügen","Incolla","Colar"],
