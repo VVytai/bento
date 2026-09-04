@@ -334,6 +334,11 @@ export class Editor {
     insertD.append(
       btn(ICONS.plus, t('Insert'), () => insertD.classList.toggle('open'), t('Insert — text, shapes, images, media, tables, charts')),
       insertMenu)
+    // These two were the only dropdowns in the bar without an outside-press
+    // dismissal, and they are the two that exist ONLY on a phone — so the menus
+    // hardest to escape were the ones a thumb could not escape at all. Picking
+    // an item closes them; anything else left them standing over the canvas.
+    this.closeOnOutsidePress(insertD)
     const moreMenu = div('ed-menu')
     const moreD = div('ed-dropdown ed-phone-only')
     moreD.append(
@@ -344,6 +349,7 @@ export class Editor {
         moreD.classList.toggle('open')
       }, t('More actions')),
       moreMenu)
+    this.closeOnOutsidePress(moreD)
     const slidesB = btn(ICONS.panelLeft, t('Slides'), () => this.togglePanel('left'), t('Slides — show or hide the slide list'))
     slidesB.classList.add('ed-phone-only')
     const formatB = btn(ICONS.panelRight, t('Format'), () => this.togglePanel('right'), t('Format — show or hide the properties panel'))
@@ -475,6 +481,7 @@ export class Editor {
     window.addEventListener('resize', publishBarBottom)
     publishBarBottom()
 
+    this.wireDrawerDismiss()
     this.restorePanelWidths()
     this.canvas = new SlideCanvas(canvasWrap, this.store)
     this.canvas.onCommentModeChange = (on) => commentB.classList.toggle('ed-btn-armed', on)
@@ -760,6 +767,36 @@ export class Editor {
     if (el.classList.contains('ed-collapsed')) return
     el.classList.add('ed-collapsed')
     this.updatePanelChevrons()
+  }
+
+  /** Dismiss an open dropdown when a press lands outside it — the behaviour the
+   *  bar's other menus already wire up one by one. */
+  private closeOnOutsidePress(wrap: HTMLElement) {
+    document.addEventListener('pointerdown', (ev) => {
+      if (!wrap.contains(ev.target as Node)) wrap.classList.remove('open')
+    })
+  }
+
+  /**
+   * Tapping away from a drawer dismisses it — the gesture every sheet on a
+   * phone answers to, and the only one available when the drawer covers the
+   * control that opened it.
+   *
+   * Two conditions keep it honest. It only runs while the panels ARE drawers:
+   * on a wide screen they are columns beside the canvas, where a click on the
+   * canvas is just a click on the canvas. And a press inside the topbar is
+   * exempt, because ☰ and Format must keep working as TOGGLES — closing on
+   * their pointerdown would let the click that follows reopen what it just
+   * closed, and the buttons would never shut anything.
+   */
+  private wireDrawerDismiss() {
+    document.addEventListener('pointerdown', (ev) => {
+      if (!this.panelsAreDrawers) return
+      const target = ev.target as Node
+      if (target instanceof Element && target.closest('.ed-topbar')) return
+      if (!this.sidebar.contains(target)) this.closePanel('left')
+      if (!this.props.contains(target)) this.closePanel('right')
+    }, true)
   }
 
   // --- Save dropdown: copy / new deck / template -----------------------------
